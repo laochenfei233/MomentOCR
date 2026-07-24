@@ -28,21 +28,23 @@ impl ScreenshotManager {
         }
         
         // 多个屏幕：逐个截图，最后拼接
-        let mut images: Vec<Vec<u8>> = Vec::new();
+        let mut images: Vec<(Vec<u8>, u32, u32)> = Vec::new();
         let mut total_width: u32 = 0;
         let mut max_height: u32 = 0;
         
         for screen in &screens {
             let img = screen.capture()?;
             let info = &screen.display_info;
-            total_width += info.width;
-            if info.height > max_height {
-                max_height = info.height;
+            let w = info.width;
+            let h = info.height;
+            total_width += w;
+            if h > max_height {
+                max_height = h;
             }
             
             let mut buf = Cursor::new(Vec::new());
             img.write_to(&mut buf, screenshots::image::ImageOutputFormat::Png)?;
-            images.push(buf.into_inner());
+            images.push((buf.into_inner(), w, h));
         }
         
         // 使用 image crate 拼接
@@ -52,16 +54,15 @@ impl ScreenshotManager {
         let mut canvas = screenshots::image::ImageBuffer::new(total_width, max_height);
         let mut x_offset: u32 = 0;
         
-        for img_data in &images {
+        for (img_data, w, h) in &images {
             let img = Reader::new(Cursor::new(img_data))
                 .with_guessed_format()?
                 .decode()?;
             
             let dynamic = img.to_rgba8();
-            let (w, h) = dynamic.dimensions();
             
-            for y in 0..h {
-                for x in 0..w {
+            for y in 0..*h {
+                for x in 0..*w {
                     let pixel = dynamic.get_pixel(x, y);
                     canvas.put_pixel(x + x_offset, y, *pixel);
                 }

@@ -2,22 +2,25 @@ mod api;
 mod screenshot;
 
 use screenshot::ScreenshotManager;
-use tauri::Emitter;
+use tauri::{Manager, WebviewUrl, WebviewWindowBuilder, Emitter};
 
-/// 截图并返回 base64
+/// 启动截图流程
 #[tauri::command]
-fn capture_screen() -> Result<String, String> {
+async fn start_screenshot(app: tauri::AppHandle) -> Result<String, String> {
+    // 1. 全屏截图
     let data = ScreenshotManager::capture_full_screen()
         .map_err(|e| e.to_string())?;
     
+    // 2. 保存到临时文件
     let path = ScreenshotManager::generate_temp_path("screenshot");
     ScreenshotManager::save_to_file(&data, &path)
         .map_err(|e| e.to_string())?;
     
-    ScreenshotManager::set_last_screenshot(path.to_string_lossy().to_string());
+    let path_str = path.to_string_lossy().to_string();
+    ScreenshotManager::set_last_screenshot(path_str.clone());
     
-    use base64::Engine;
-    Ok(base64::engine::general_purpose::STANDARD.encode(&data))
+    // 3. 返回文件路径（不是base64）
+    Ok(path_str)
 }
 
 /// 裁剪选区
@@ -37,6 +40,13 @@ fn crop_screenshot(x: u32, y: u32, width: u32, height: u32) -> Result<String, St
         .map_err(|e| e.to_string())?;
     
     Ok(crop_path.to_string_lossy().to_string())
+}
+
+/// 获取截图文件路径
+#[tauri::command]
+fn get_screenshot_path() -> Result<String, String> {
+    ScreenshotManager::get_last_screenshot()
+        .ok_or_else(|| "No screenshot available".to_string())
 }
 
 #[tauri::command]
@@ -78,8 +88,9 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
-            capture_screen,
+            start_screenshot,
             crop_screenshot,
+            get_screenshot_path,
             ocr_openai,
             ocr_ollama,
             translate_google,

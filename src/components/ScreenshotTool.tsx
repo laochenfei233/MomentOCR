@@ -11,8 +11,8 @@ function ScreenshotTool() {
     setCapturing(true);
     setError(null);
     try {
-      // 1. 截图并获取 base64
-      const base64 = await invoke<string>('capture_screen');
+      // 1. 截图并获取文件路径
+      await invoke<string>('start_screenshot');
       
       // 2. 隐藏主窗口
       const { getCurrentWindow } = await import('@tauri-apps/api/window');
@@ -34,14 +34,10 @@ function ScreenshotTool() {
         visible: true,
       });
 
-      // 5. 等待窗口完全加载
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      // 5. 等待窗口加载
+      await new Promise(resolve => setTimeout(resolve, 1500));
       
-      // 6. 发送截图数据
-      const { emit } = await import('@tauri-apps/api/event');
-      await emit('screenshot-data', { base64 });
-
-      // 7. 监听截图完成事件
+      // 6. 监听截图完成事件
       const { listen } = await import('@tauri-apps/api/event');
       const unlistenDone = await listen<{ path: string }>('screenshot-done', async (event) => {
         setScreenshotPath(event.payload.path);
