@@ -2,8 +2,9 @@ import { useState } from 'react';
 import ScreenshotTool from './components/ScreenshotTool';
 import FileUploader from './components/FileUploader';
 import OcrResult from './components/OcrResult';
+import Settings from './components/Settings';
 
-type Tab = 'screenshot' | 'file';
+type Tab = 'screenshot' | 'file' | 'settings';
 
 function App() {
   const [tab, setTab] = useState<Tab>('screenshot');
@@ -14,7 +15,7 @@ function App() {
         <h1 className="text-4xl font-bold text-gray-800">须臾OCR</h1>
         <p className="mt-2 text-lg text-gray-500">Moments captured, text revealed</p>
 
-        <div className="mt-8 flex justify-center gap-1 rounded-lg bg-gray-200 p-1 mx-auto max-w-xs">
+        <div className="mt-8 flex justify-center gap-1 rounded-lg bg-gray-200 p-1 mx-auto max-w-sm">
           <button
             onClick={() => setTab('screenshot')}
             className={`flex-1 rounded-md px-4 py-2 text-sm font-medium transition-colors ${
@@ -31,12 +32,22 @@ function App() {
           >
             文件识别
           </button>
+          <button
+            onClick={() => setTab('settings')}
+            className={`flex-1 rounded-md px-4 py-2 text-sm font-medium transition-colors ${
+              tab === 'settings' ? 'bg-white text-gray-900 shadow' : 'text-gray-600 hover:text-gray-900'
+            }`}
+          >
+            设置
+          </button>
         </div>
 
         <div className="mt-8">
-          {tab === 'screenshot' ? <ScreenshotTool /> : <FileUploader />}
+          {tab === 'screenshot' && <ScreenshotTool />}
+          {tab === 'file' && <FileUploader />}
+          {tab === 'settings' && <Settings />}
         </div>
-        <OcrResult />
+        {tab !== 'settings' && <OcrResult />}
       </div>
     </div>
   );
