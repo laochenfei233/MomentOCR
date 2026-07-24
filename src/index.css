@@ -2,11 +2,186 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Apple Design: System font with optical sizing */
+:root {
+  --spring-default: cubic-bezier(0.25, 0.1, 0.25, 1);
+  --spring-bounce: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --material-bg: rgba(255, 255, 255, 0.72);
+  --material-bg-dark: rgba(30, 30, 30, 0.72);
+  --material-border: rgba(255, 255, 255, 0.5);
+  --material-border-dark: rgba(255, 255, 255, 0.1);
+}
+
+* {
+  box-sizing: border-box;
+}
+
 body {
   margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto",
-    "Oxygen", "Ubuntu", "Cantarell", "Fira Sans", "Droid Sans",
-    "Helvetica Neue", sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text",
+    "Helvetica Neue", "Segoe UI", system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  font-optical-sizing: auto;
+  background: transparent;
+  overflow: hidden;
+}
+
+/* Apple Design: Typography optical sizing */
+.text-display {
+  font-size: 1.5rem;
+  line-height: 1.1;
+  letter-spacing: -0.025em;
+  font-weight: 700;
+}
+
+.text-title {
+  font-size: 1.125rem;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+  font-weight: 600;
+}
+
+.text-body {
+  font-size: 0.875rem;
+  line-height: 1.5;
+  letter-spacing: 0;
+  font-weight: 400;
+}
+
+.text-caption {
+  font-size: 0.75rem;
+  line-height: 1.4;
+  letter-spacing: 0.01em;
+  font-weight: 400;
+}
+
+/* Apple Design: Material / Glass effect */
+.material {
+  background: var(--material-bg);
+  backdrop-filter: blur(40px) saturate(180%);
+  -webkit-backdrop-filter: blur(40px) saturate(180%);
+  border: 1px solid var(--material-border);
+}
+
+.material-dark {
+  background: var(--material-bg-dark);
+  backdrop-filter: blur(40px) saturate(180%);
+  -webkit-backdrop-filter: blur(40px) saturate(180%);
+  border: 1px solid var(--material-border-dark);
+}
+
+/* Apple Design: Fluid button press */
+.btn-fluid {
+  transition: transform 150ms var(--spring-default),
+              background-color 150ms ease,
+              box-shadow 150ms ease;
+  will-change: transform;
+}
+
+.btn-fluid:hover {
+  transform: scale(1.02);
+}
+
+.btn-fluid:active {
+  transform: scale(0.97);
+  transition: transform 80ms ease-out;
+}
+
+/* Apple Design: Subtle shadow hierarchy */
+.shadow-material {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08),
+              0 8px 32px rgba(0, 0, 0, 0.12);
+}
+
+.shadow-material-lg {
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1),
+              0 16px 64px rgba(0, 0, 0, 0.16);
+}
+
+/* Apple Design: Spring animation for modals/sheets */
+@keyframes slideUp {
+  from {
+    transform: translateY(20px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.animate-slide-up {
+  animation: slideUp 0.4s var(--spring-default) forwards;
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.3s ease-out forwards;
+}
+
+/* Apple Design: Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  .btn-fluid {
+    transition: background-color 150ms ease, box-shadow 150ms ease;
+  }
+  .btn-fluid:hover,
+  .btn-fluid:active {
+    transform: none;
+  }
+  .animate-slide-up,
+  .animate-fade-in {
+    animation: none;
+    opacity: 1;
+  }
+}
+
+/* Apple Design: Reduced transparency */
+@media (prefers-reduced-transparency: reduce) {
+  .material {
+    background: rgba(255, 255, 255, 0.95);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+  .material-dark {
+    background: rgba(30, 30, 30, 0.95);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}
+
+/* Dark mode support */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --material-bg: rgba(30, 30, 30, 0.72);
+    --material-border: rgba(255, 255, 255, 0.1);
+  }
+}
+
+/* Custom scrollbar - Apple style */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.3);
+}
+
+/* Selection color */
+::selection {
+  background: rgba(0, 122, 255, 0.2);
 }

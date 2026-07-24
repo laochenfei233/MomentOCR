@@ -9,7 +9,13 @@ function RegionSelector({ onSelect, onCancel }: RegionSelectorProps) {
   const [isDragging, setIsDragging] = useState(false);
   const [start, setStart] = useState<{ x: number; y: number } | null>(null);
   const [current, setCurrent] = useState<{ x: number; y: number } | null>(null);
+  const [isVisible, setIsVisible] = useState(false);
   const overlayRef = useRef<HTMLDivElement>(null);
+
+  // Apple Design: Entrance animation
+  useEffect(() => {
+    requestAnimationFrame(() => setIsVisible(true));
+  }, []);
 
   const getRect = useCallback(() => {
     if (!start || !current) return null;
@@ -36,7 +42,7 @@ function RegionSelector({ onSelect, onCancel }: RegionSelectorProps) {
     if (!isDragging) return;
     setIsDragging(false);
     const rect = getRect();
-    if (rect && rect.width > 5 && rect.height > 5) {
+    if (rect && rect.width > 10 && rect.height > 10) {
       onSelect(rect);
     }
   }, [isDragging, getRect, onSelect]);
@@ -54,41 +60,65 @@ function RegionSelector({ onSelect, onCancel }: RegionSelectorProps) {
   return (
     <div
       ref={overlayRef}
-      className="fixed inset-0 z-50 cursor-crosshair"
-      style={{ background: 'rgba(0, 0, 0, 0.3)' }}
+      className={`fixed inset-0 z-50 cursor-crosshair transition-opacity duration-300 ${
+        isVisible ? 'opacity-100' : 'opacity-0'
+      }`}
+      style={{ background: 'rgba(0, 0, 0, 0.4)' }}
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
     >
       {rect && rect.width > 0 && rect.height > 0 && (
         <>
-          {/* Cutout hole in the overlay */}
+          {/* Apple Design: Selection highlight with subtle shadow */}
           <div
-            className="absolute border-2 border-white shadow-lg"
+            className="absolute border border-white/80"
             style={{
               left: rect.x,
               top: rect.y,
               width: rect.width,
               height: rect.height,
-              boxShadow: '0 0 0 9999px rgba(0, 0, 0, 0.3)',
+              boxShadow: '0 0 0 9999px rgba(0, 0, 0, 0.4), 0 4px 24px rgba(0, 0, 0, 0.2)',
               background: 'transparent',
+              transition: isDragging ? 'none' : 'box-shadow 0.2s ease',
             }}
           />
-          {/* Selection dimensions label */}
+
+          {/* Corner handles - Apple style */}
+          {rect.width > 20 && rect.height > 20 && (
+            <>
+              <div className="absolute w-2 h-2 bg-white rounded-full shadow-lg" style={{ left: rect.x - 4, top: rect.y - 4 }} />
+              <div className="absolute w-2 h-2 bg-white rounded-full shadow-lg" style={{ left: rect.x + rect.width - 4, top: rect.y - 4 }} />
+              <div className="absolute w-2 h-2 bg-white rounded-full shadow-lg" style={{ left: rect.x - 4, top: rect.y + rect.height - 4 }} />
+              <div className="absolute w-2 h-2 bg-white rounded-full shadow-lg" style={{ left: rect.x + rect.width - 4, top: rect.y + rect.height - 4 }} />
+            </>
+          )}
+
+          {/* Dimension label - Apple style */}
           <div
-            className="absolute bg-black/70 text-white text-xs px-2 py-1 rounded pointer-events-none"
+            className="absolute px-2 py-0.5 rounded-md text-[10px] font-medium text-white pointer-events-none"
             style={{
-              left: rect.x,
-              top: rect.y - 28,
+              left: rect.x + rect.width / 2,
+              top: rect.y - 24,
+              transform: 'translateX(-50%)',
+              background: 'rgba(0, 0, 0, 0.6)',
+              backdropFilter: 'blur(8px)',
             }}
           >
-            {rect.width} x {rect.height}
+            {Math.round(rect.width)} × {Math.round(rect.height)}
           </div>
         </>
       )}
-      {/* Instructions */}
-      <div className="absolute top-6 left-1/2 -translate-x-1/2 bg-black/70 text-white text-sm px-4 py-2 rounded-lg pointer-events-none">
-        拖拽选择区域，按 ESC 取消
+
+      {/* Instructions - Apple style floating hint */}
+      <div
+        className="absolute top-8 left-1/2 -translate-x-1/2 px-4 py-2 rounded-xl text-xs font-medium text-white pointer-events-none"
+        style={{
+          background: 'rgba(0, 0, 0, 0.5)',
+          backdropFilter: 'blur(12px)',
+        }}
+      >
+        拖拽选择区域 · ESC 取消
       </div>
     </div>
   );

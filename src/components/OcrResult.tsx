@@ -13,77 +13,98 @@ function OcrResult() {
   };
 
   return (
-    <div className="w-full max-w-2xl mx-auto mt-6 space-y-4">
+    <div className="w-full px-4 py-3">
+      {/* Processing state - Apple style spinner */}
       {isProcessing && (
-        <div className="flex items-center justify-center gap-3 rounded-lg border border-blue-200 bg-blue-50 px-6 py-8">
-          <svg className="h-5 w-5 animate-spin text-blue-600" viewBox="0 0 24 24" fill="none">
-            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+        <div className="flex items-center justify-center gap-2 py-4 animate-fade-in">
+          <svg className="h-4 w-4 animate-spin text-blue-500" viewBox="0 0 24 24" fill="none">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
             <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
           </svg>
-          <span className="text-blue-700 font-medium">识别中...</span>
+          <span className="text-xs text-gray-500">识别中...</span>
         </div>
       )}
 
+      {/* Result display - Compact card */}
       {!isProcessing && result && (
-        <div className="rounded-lg border border-gray-200 bg-white shadow-sm overflow-hidden">
-          <div className="flex items-center justify-between border-b border-gray-100 bg-gray-50 px-4 py-2">
-            <div className="flex items-center gap-3">
-              <span className="text-sm font-semibold text-gray-700">识别结果</span>
+        <div className="animate-slide-up">
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-medium text-gray-700">识别结果</span>
               {result.language && (
-                <span className="rounded bg-gray-200 px-2 py-0.5 text-xs text-gray-600">
+                <span className="px-1.5 py-0.5 text-[10px] font-medium bg-gray-100 text-gray-500 rounded">
                   {result.language}
                 </span>
               )}
-              {result.confidence !== undefined && (
-                <span className="text-xs text-gray-500">
-                  置信度 {(result.confidence * 100).toFixed(1)}%
+            </div>
+            <div className="flex items-center gap-2">
+              {result.confidence !== undefined && result.confidence > 0 && (
+                <span className="text-[10px] text-gray-400">
+                  {Math.round(result.confidence * 100)}%
                 </span>
               )}
+              <button
+                onClick={handleCopy}
+                className="btn-fluid px-2 py-1 text-[10px] font-medium text-blue-500 hover:bg-blue-50 rounded transition-colors"
+              >
+                {copied ? '✓ 已复制' : '复制'}
+              </button>
             </div>
-            <button
-              onClick={handleCopy}
-              className="rounded bg-gray-200 px-3 py-1 text-xs font-medium text-gray-700 hover:bg-gray-300 transition-colors"
-            >
-              {copied ? '已复制' : '复制'}
-            </button>
           </div>
-          <pre className="whitespace-pre-wrap p-4 text-sm text-gray-800 font-mono max-h-60 overflow-y-auto">
-            {result.data}
-          </pre>
+
+          <div className="rounded-lg bg-gray-50 border border-gray-100 p-3">
+            <pre className="whitespace-pre-wrap text-xs text-gray-700 font-mono leading-relaxed max-h-32 overflow-y-auto">
+              {result.data}
+            </pre>
+          </div>
+
+          {/* Error display */}
           {!result.success && result.error && (
-            <div className="border-t border-red-100 bg-red-50 px-4 py-2 text-xs text-red-600">
-              {result.error}
+            <div className="mt-2 flex items-center gap-1.5 text-[10px] text-red-500">
+              <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <span>{result.error}</span>
             </div>
           )}
         </div>
       )}
 
+      {/* Empty state */}
       {!isProcessing && !result && (
-        <div className="rounded-lg border border-dashed border-gray-300 bg-gray-50 px-6 py-12 text-center">
-          <p className="text-sm text-gray-400">截图后将在此显示识别结果</p>
+        <div className="py-6 text-center">
+          <div className="inline-flex items-center justify-center w-10 h-10 rounded-full bg-gray-100 mb-2">
+            <svg className="h-5 w-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
+            </svg>
+          </div>
+          <p className="text-xs text-gray-400">截图后显示识别结果</p>
         </div>
       )}
 
+      {/* History - Compact list */}
       {history.length > 0 && (
-        <div className="rounded-lg border border-gray-200 bg-white shadow-sm overflow-hidden">
-          <div className="border-b border-gray-100 bg-gray-50 px-4 py-2">
-            <span className="text-sm font-semibold text-gray-700">历史记录</span>
+        <div className="mt-3">
+          <div className="flex items-center justify-between mb-1.5">
+            <span className="text-[10px] font-medium text-gray-400 uppercase tracking-wider">历史</span>
+            <span className="text-[10px] text-gray-300">{history.length}</span>
           </div>
-          <div className="max-h-48 overflow-y-auto divide-y divide-gray-100">
-            {history.map((entry) => (
-              <div key={entry.timestamp} className="px-4 py-3 hover:bg-gray-50 transition-colors">
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-xs text-gray-400">
-                    {new Date(entry.timestamp).toLocaleString()}
+          <div className="space-y-1 max-h-24 overflow-y-auto">
+            {history.slice(0, 5).map((entry) => (
+              <button
+                key={entry.timestamp}
+                onClick={() => navigator.clipboard.writeText(entry.result.data)}
+                className="btn-fluid w-full text-left px-2 py-1.5 rounded-md hover:bg-gray-50 transition-colors group"
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] text-gray-400">
+                    {new Date(entry.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                   </span>
-                  {entry.result.confidence !== undefined && (
-                    <span className="text-xs text-gray-400">
-                      {(entry.result.confidence * 100).toFixed(1)}%
-                    </span>
-                  )}
+                  <span className="text-[10px] text-gray-300 opacity-0 group-hover:opacity-100 transition-opacity">复制</span>
                 </div>
-                <p className="text-sm text-gray-700 line-clamp-2">{entry.result.data}</p>
-              </div>
+                <p className="text-xs text-gray-600 truncate mt-0.5">{entry.result.data}</p>
+              </button>
             ))}
           </div>
         </div>
