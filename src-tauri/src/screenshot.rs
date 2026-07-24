@@ -6,25 +6,76 @@ use chrono::Local;
 use std::sync::Mutex;
 use once_cell::sync::Lazy;
 
-// 全局存储最近一次截图路径
 static LAST_SCREENSHOT: Lazy<Mutex<Option<String>>> = Lazy::new(|| Mutex::new(None));
 
 pub struct ScreenshotManager;
 
 impl ScreenshotManager {
-    /// 全屏截图 - 高质量PNG
+    /// 多屏幕全屏截图 - 拼接所有屏幕
     pub fn capture_full_screen() -> Result<Vec<u8>> {
         let screens = Screen::all()?;
-        let screen = screens.first()
-            .ok_or_else(|| anyhow::anyhow!("No screen found"))?;
-        let image = screen.capture()?;
+        
+        if screens.is_empty() {
+            return Err(anyhow::anyhow!("No screen found"));
+        }
+        
+        // 如果只有一个屏幕，直接截图
+        if screens.len() == 1 {
+            let img = screens[0].capture()?;
+            let mut buf = Cursor::new(Vec::new());
+            img.write_to(&mut buf, screenshots::image::ImageOutputFormat::Png)?;
+            return Ok(buf.into_inner());
+        }
+        
+        // 多个屏幕：逐个截图，最后拼接
+        let mut images: Vec<Vec<u8>> = Vec::new();
+        let mut total_width: u32 = 0;
+        let mut max_height: u32 = 0;
+        
+        for screen in &screens {
+            let img = screen.capture()?;
+            let info = &screen.display_info;
+            total_width += info.width;
+            if info.height > max_height {
+                max_height = info.height;
+            }
+            
+            let mut buf = Cursor::new(Vec::new());
+            img.write_to(&mut buf, screenshots::image::ImageOutputFormat::Png)?;
+            images.push(buf.into_inner());
+        }
+        
+        // 使用 image crate 拼接
+        use screenshots::image::io::Reader;
+        use std::io::Cursor;
+        
+        let mut canvas = screenshots::image::ImageBuffer::new(total_width, max_height);
+        let mut x_offset: u32 = 0;
+        
+        for img_data in &images {
+            let img = Reader::new(Cursor::new(img_data))
+                .with_guessed_format()?
+                .decode()?;
+            
+            let dynamic = img.to_rgba8();
+            let (w, h) = dynamic.dimensions();
+            
+            for y in 0..h {
+                for x in 0..w {
+                    let pixel = dynamic.get_pixel(x, y);
+                    canvas.put_pixel(x + x_offset, y, *pixel);
+                }
+            }
+            
+            x_offset += w;
+        }
+        
         let mut buf = Cursor::new(Vec::new());
-        // PNG格式，无损压缩
-        image.write_to(&mut buf, screenshots::image::ImageOutputFormat::Png)?;
+        canvas.write_to(&mut buf, screenshots::image::ImageOutputFormat::Png)?;
         Ok(buf.into_inner())
     }
 
-    /// 从全屏截图中裁剪区域 - 无损
+    /// 从全屏截图中裁剪区域
     pub fn crop_region(
         full_screen_data: &[u8],
         x: u32, y: u32,
@@ -58,7 +109,7 @@ impl ScreenshotManager {
         std::env::temp_dir().join(filename)
     }
 
-    /// 保存截图路径供覆盖窗口使用
+    /// 保存截图路径
     pub fn set_last_screenshot(path: String) {
         *LAST_SCREENSHOT.lock().unwrap() = Some(path);
     }
