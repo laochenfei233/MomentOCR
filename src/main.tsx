@@ -1,25 +1,24 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import App from "./App";
 import ScreenshotOverlay from "./screens/ScreenshotOverlay";
 import "./index.css";
 
 // 根据窗口标签决定渲染哪个组件
-function getAppComponent() {
-  // 检查 URL 参数来判断窗口类型
-  const params = new URLSearchParams(window.location.search);
-  const windowType = params.get('window');
+async function bootstrap() {
+  const windowLabel = getCurrentWindow().label;
   
-  if (windowType === 'screenshot-overlay') {
-    return ScreenshotOverlay;
+  let AppComponent = App;
+  if (windowLabel === "screenshot-overlay") {
+    AppComponent = ScreenshotOverlay;
   }
-  return App;
+
+  ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
+    <React.StrictMode>
+      <AppComponent />
+    </React.StrictMode>
+  );
 }
 
-const AppComponent = getAppComponent();
-
-ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
-  <React.StrictMode>
-    <AppComponent />
-  </React.StrictMode>
-);
+bootstrap();
