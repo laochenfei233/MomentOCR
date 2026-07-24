@@ -15,16 +15,8 @@ function ScreenshotTool() {
     setCapturing(true);
     setError(null);
     try {
-      // 截图
       const base64 = await invoke<string>('capture_screen');
       setImageBase64(base64);
-      
-      // 让窗口全屏显示截图
-      const { getCurrentWindow } = await import('@tauri-apps/api/window');
-      const win = getCurrentWindow();
-      await win.setFullscreen(true);
-      await win.setAlwaysOnTop(true);
-      
       setShowOverlay(true);
     } catch (err) {
       setError(String(err));
@@ -50,18 +42,8 @@ function ScreenshotTool() {
     const y = Math.min(selection.y, selection.y2);
     const width = Math.abs(selection.x2 - selection.x);
     const height = Math.abs(selection.y2 - selection.y);
-    
-    // 恢复窗口
-    try {
-      const { getCurrentWindow } = await import('@tauri-apps/api/window');
-      const win = getCurrentWindow();
-      await win.setFullscreen(false);
-      await win.setAlwaysOnTop(false);
-    } catch {}
-    
     setShowOverlay(false);
     setSelection(null);
-    
     if (width < 10 || height < 10) return;
     try {
       const path = await invoke<string>('crop_screenshot', { x, y, width, height });
@@ -73,13 +55,7 @@ function ScreenshotTool() {
     }
   }, [isDragging, selection, setScreenshotPath]);
 
-  const handleCancel = useCallback(async () => {
-    try {
-      const { getCurrentWindow } = await import('@tauri-apps/api/window');
-      const win = getCurrentWindow();
-      await win.setFullscreen(false);
-      await win.setAlwaysOnTop(false);
-    } catch {}
+  const handleCancel = useCallback(() => {
     setShowOverlay(false);
     setSelection(null);
   }, []);
