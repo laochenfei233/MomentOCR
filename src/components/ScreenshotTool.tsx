@@ -12,43 +12,26 @@ function ScreenshotTool() {
     setCapturing(true);
     setError(null);
     try {
-      await invoke<string>('start_screenshot_overlay');
+      const path = await invoke<string>('start_screenshot_overlay');
+      // Python窗口关闭后，path是裁剪结果
+      setScreenshotPath(path);
+      setCaptureSuccess(true);
+      setTimeout(() => setCaptureSuccess(false), 1500);
     } catch (err) {
       if (err !== 'Cancelled') {
         setError(String(err));
-        setCapturing(false);
       }
+    } finally {
+      setCapturing(false);
     }
-  }, [setCapturing]);
+  }, [setCapturing, setScreenshotPath]);
 
   useEffect(() => {
-    const unlisten1 = listen<string>('screenshot-cropped', (event) => {
-      setScreenshotPath(event.payload);
-      setCaptureSuccess(true);
-      setCapturing(false);
-      setTimeout(() => setCaptureSuccess(false), 1500);
-    });
-
-    const unlisten2 = listen('screenshot-cancel', () => {
-      setCapturing(false);
-    });
-
-    const unlisten3 = listen<string>('screenshot-error', (event) => {
-      setError(event.payload);
-      setCapturing(false);
-    });
-
-    const unlisten4 = listen('screenshot-triggered', () => {
+    const unlisten = listen('screenshot-triggered', () => {
       handleScreenshot();
     });
-
-    return () => {
-      unlisten1.then(fn => fn());
-      unlisten2.then(fn => fn());
-      unlisten3.then(fn => fn());
-      unlisten4.then(fn => fn());
-    };
-  }, [handleScreenshot, setCapturing, setScreenshotPath]);
+    return () => { unlisten.then((fn: () => void) => fn()); };
+  }, [handleScreenshot]);
 
   return (
     <div className="p-3">
