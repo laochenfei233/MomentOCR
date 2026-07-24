@@ -50,7 +50,7 @@ class ScreenshotOverlay(QWidget):
             self.screenshot_pixmap = QPixmap(image_path)
         else:
             # 截取全屏
-            with mss.mss() as sct:
+            with mss.MSS() as sct:
                 monitor = sct.monitors[1]  # 主屏幕
                 screenshot = sct.grab(monitor)
                 
