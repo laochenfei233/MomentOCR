@@ -16,9 +16,11 @@ function ScreenshotTool() {
     setError(null);
     try {
       const base64 = await invoke<string>('capture_screen');
+      console.log('Screenshot captured, base64 length:', base64.length);
       setImageBase64(base64);
       setShowOverlay(true);
     } catch (err) {
+      console.error('Screenshot error:', err);
       setError(String(err));
     } finally {
       setCapturing(false);
@@ -82,17 +84,29 @@ function ScreenshotTool() {
     } : null;
 
     return (
-      <div className="screenshot-overlay" onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp}>
-        <img src={`data:image/png;base64,${imageBase64}`} className="screenshot-image" draggable={false} />
+      <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', background: '#000', zIndex: 99999, cursor: 'crosshair' }}
+        onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp}>
+        
+        <img src={`data:image/png;base64,${imageBase64}`} 
+          style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', objectFit: 'contain' }}
+          draggable={false} />
+        
         {rect && rect.width > 0 && rect.height > 0 && (
           <>
-            <div className="screenshot-selection" style={rect} />
-            <div className="screenshot-size" style={{ left: rect.left + rect.width / 2, top: rect.top - 24 }}>
+            <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.3)', pointerEvents: 'none',
+              clipPath: `polygon(0 0, 100% 0, 100% 100%, 0 100%, 0 0, ${rect.left}px ${rect.top}px, ${rect.left}px ${rect.top + rect.height}px, ${rect.left + rect.width}px ${rect.top + rect.height}px, ${rect.left + rect.width}px ${rect.top}px, ${rect.left}px ${rect.top}px)` }} />
+            <div style={{ position: 'absolute', left: rect.left, top: rect.top, width: rect.width, height: rect.height, border: '2px solid #007AFF', pointerEvents: 'none' }} />
+            <div style={{ position: 'absolute', left: rect.left + rect.width / 2, top: rect.top - 24, transform: 'translateX(-50%)', padding: '2px 8px', background: 'rgba(0,0,0,0.75)', color: 'white', fontSize: 11, borderRadius: 3, pointerEvents: 'none', whiteSpace: 'nowrap' }}>
               {Math.round(rect.width)} × {Math.round(rect.height)}
             </div>
           </>
         )}
-        {!isDragging && <div className="screenshot-hint">拖拽选择要识别的区域 · ESC 取消</div>}
+
+        {!isDragging && (
+          <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', padding: '8px 16px', background: 'rgba(0,0,0,0.6)', color: 'white', fontSize: 13, borderRadius: 6, pointerEvents: 'none' }}>
+            拖拽选择要识别的区域 · ESC 取消
+          </div>
+        )}
       </div>
     );
   }
