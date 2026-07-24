@@ -16,11 +16,9 @@ function ScreenshotTool() {
     setError(null);
     try {
       const base64 = await invoke<string>('capture_screen');
-      console.log('Screenshot captured, base64 length:', base64.length);
       setImageBase64(base64);
       setShowOverlay(true);
     } catch (err) {
-      console.error('Screenshot error:', err);
       setError(String(err));
     } finally {
       setCapturing(false);

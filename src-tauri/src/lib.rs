@@ -2,6 +2,7 @@ mod api;
 mod screenshot;
 
 use screenshot::ScreenshotManager;
+use tauri::Emitter;
 
 /// 截图并返回 base64
 #[tauri::command]
