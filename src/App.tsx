@@ -28,8 +28,7 @@ function App() {
     <div className="app-container">
       {/* 标题栏 */}
       <header className="title-bar">
-        <span className="text-xs text-gray-400">耗时：</span>
-        <span className="text-xs text-gray-600 ml-2">须臾OCR</span>
+        <span className="text-sm font-medium text-gray-700">须臾OCR</span>
         <div className="flex-1"></div>
         <div className="flex items-center gap-0.5">
           <button className="win-btn" title="置顶">📌</button>
@@ -73,7 +72,6 @@ function App() {
 
       {/* 主内容 */}
       <main className="main-content">
-        {/* 左侧功能 */}
         <div className="side-panel">
           <div className="tab-bar">
             <button
@@ -101,21 +99,16 @@ function App() {
           </div>
         </div>
 
-        {/* 右侧结果 */}
         <div className="result-panel">
           <OcrResult />
         </div>
       </main>
 
-      {/* 状态栏 */}
       <footer className="status-bar">
         <span className="text-xs text-gray-400">字数：0</span>
         <div className="flex items-center gap-1">
           <button className="status-icon">中英</button>
-          <button className="status-icon">+</button>
-          <button className="status-icon">🗑</button>
           <button className="status-icon" onClick={() => setShowSettings(true)}>⚙</button>
-          <button className="status-icon">📋</button>
         </div>
       </footer>
     </div>

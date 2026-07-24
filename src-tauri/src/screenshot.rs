@@ -7,11 +7,13 @@ use chrono::Local;
 pub struct ScreenshotManager;
 
 impl ScreenshotManager {
+    /// 全屏截图 - 高质量PNG
     pub fn capture_full_screen() -> Result<Vec<u8>> {
         let screens = Screen::all()?;
         let screen = screens.first().ok_or_else(|| anyhow::anyhow!("No screen found"))?;
         let image = screen.capture()?;
         let mut buf = Cursor::new(Vec::new());
+        // 使用PNG格式，无损压缩，保持最高画质
         image.write_to(&mut buf, screenshots::image::ImageOutputFormat::Png)?;
         Ok(buf.into_inner())
     }
@@ -27,10 +29,12 @@ impl ScreenshotManager {
         
         let cropped = img.crop_imm(x as u32, y as u32, width, height);
         let mut buf = Cursor::new(Vec::new());
+        // PNG格式，无损
         cropped.write_to(&mut buf, screenshots::image::ImageOutputFormat::Png)?;
         Ok(buf.into_inner())
     }
 
+    /// 保存到文件
     pub fn save_to_file(data: &[u8], path: &PathBuf) -> Result<()> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -39,6 +43,7 @@ impl ScreenshotManager {
         Ok(())
     }
 
+    /// 生成临时文件路径
     pub fn generate_temp_path(prefix: &str) -> PathBuf {
         let timestamp = Local::now().format("%Y%m%d_%H%M%S");
         let filename = format!("{}_{}.png", prefix, timestamp);
