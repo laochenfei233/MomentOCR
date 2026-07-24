@@ -1,4 +1,5 @@
 import { Plugin, PluginConfig, PluginInput, PluginOutput, PluginMetadata } from '../types/plugin';
+import { invoke } from '@tauri-apps/api/core';
 
 export class LocalLlmPlugin implements Plugin {
   metadata: PluginMetadata = {
@@ -27,16 +28,27 @@ export class LocalLlmPlugin implements Plugin {
       return { success: false, data: '', error: 'Local LLM only accepts image input' };
     }
 
-    const endpoint = (this.config.endpoint as string) || 'http://localhost:11434';
-    const model = (this.config.model as string) || 'llava';
+    try {
+      const result = await invoke<string>('ocr_ollama', {
+        endpoint: this.config.endpoint || 'http://localhost:11434',
+        model: this.config.model || 'llava',
+        imagePath: input.data
+      });
 
-    // TODO: call Ollama API at `${endpoint}/api/generate` with model and image
-    return {
-      success: true,
-      data: `[Local LLM placeholder] OCR result via ${model} at ${endpoint} — will be populated via Ollama API call`,
-      confidence: 0.0,
-      language: input.language ?? 'ch',
-    };
+      return {
+        success: true,
+        data: result,
+        confidence: 0.9,
+        language: input.language ?? 'ch',
+      };
+    } catch (error) {
+      return {
+        success: false,
+        data: '',
+        error: `Ollama OCR error: ${error}`,
+        language: input.language ?? 'ch',
+      };
+    }
   }
 
   getConfigSchema(): Record<string, { type: string; required?: boolean; default?: unknown }> {

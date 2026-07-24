@@ -1,4 +1,5 @@
 import { Plugin, PluginConfig, PluginInput, PluginOutput, PluginMetadata } from '../types/plugin';
+import { invoke } from '@tauri-apps/api/core';
 
 export class OpenaiVisionPlugin implements Plugin {
   metadata: PluginMetadata = {
@@ -32,13 +33,28 @@ export class OpenaiVisionPlugin implements Plugin {
       return { success: false, data: '', error: 'OpenAI Vision only accepts image input' };
     }
 
-    // TODO: call Rust backend to invoke OpenAI Vision API
-    return {
-      success: true,
-      data: '[OpenAI Vision placeholder] OCR result will be populated via Rust backend API call',
-      confidence: 0.0,
-      language: input.language ?? 'ch',
-    };
+    try {
+      const result = await invoke<string>('ocr_openai', {
+        apiKey: this.config.apiKey,
+        imagePath: input.data,
+        model: this.config.model || 'gpt-4-vision-preview',
+        maxTokens: this.config.maxTokens || 1024
+      });
+
+      return {
+        success: true,
+        data: result,
+        confidence: 0.95,
+        language: input.language ?? 'ch',
+      };
+    } catch (error) {
+      return {
+        success: false,
+        data: '',
+        error: `OpenAI Vision error: ${error}`,
+        language: input.language ?? 'ch',
+      };
+    }
   }
 
   getConfigSchema(): Record<string, { type: string; required?: boolean; default?: unknown }> {

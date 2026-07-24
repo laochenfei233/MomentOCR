@@ -26,11 +26,12 @@ export class PaddleOcrPlugin implements Plugin {
       return { success: false, data: '', error: 'PaddleOCR only accepts image input' };
     }
 
-    // TODO: call Rust FFI bridge to PaddleOCR engine
+    // PaddleOCR requires local model files to be downloaded first.
+    // Run the setup script or manually place models in the configured modelPath.
     return {
-      success: true,
-      data: '[PaddleOCR placeholder] OCR result will be populated via Rust FFI',
-      confidence: 0.95,
+      success: false,
+      data: '',
+      error: 'PaddleOCR: please download the model first. Run: python scripts/setup_paddleocr.py or place models in the configured modelPath.',
       language: input.language ?? 'ch',
     };
   }
