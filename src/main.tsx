@@ -5,7 +5,6 @@ import App from "./App";
 import ScreenshotOverlay from "./screens/ScreenshotOverlay";
 import "./index.css";
 
-// 根据窗口标签决定渲染哪个组件
 async function bootstrap() {
   const windowLabel = getCurrentWindow().label;
   

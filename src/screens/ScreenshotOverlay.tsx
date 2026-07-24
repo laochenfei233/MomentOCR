@@ -1,5 +1,7 @@
 import { useState, useCallback, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { getCurrentWindow } from '@tauri-apps/api/window';
+import { listen } from '@tauri-apps/api/event';
 
 export default function ScreenshotOverlay() {
   const [imageBase64, setImageBase64] = useState<string>('');
@@ -10,17 +12,12 @@ export default function ScreenshotOverlay() {
   const [isDragging, setIsDragging] = useState(false);
   const [showToolbar, setShowToolbar] = useState(false);
 
+  // 监听截图数据
   useEffect(() => {
-    // 从 Rust 获取截图数据
-    const loadScreenshot = async () => {
-      try {
-        const base64 = await invoke<string>('get_screenshot_base64');
-        setImageBase64(base64);
-      } catch (err) {
-        console.error('Failed to load screenshot:', err);
-      }
-    };
-    loadScreenshot();
+    const unlisten = listen<{ base64: string }>('screenshot-data', (event) => {
+      setImageBase64(event.payload.base64);
+    });
+    return () => { unlisten.then(fn => fn()); };
   }, []);
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
@@ -60,21 +57,25 @@ export default function ScreenshotOverlay() {
     const height = Math.abs(selection.endY - selection.startY);
     
     try {
-      const cropPath = await invoke<string>('crop_screenshot_base64', { x, y, width, height });
-      // 发送路径给主窗口
+      const cropPath = await invoke<string>('crop_screenshot', { x, y, width, height });
+      // 发送完成事件
       const { emit } = await import('@tauri-apps/api/event');
-      await emit('screenshot-cropped', { path: cropPath });
+      await emit('screenshot-done', { path: cropPath });
       // 关闭覆盖窗口
-      await invoke('finish_screenshot');
+      await getCurrentWindow().close();
     } catch (err) {
       console.error('Crop failed:', err);
-      await invoke('finish_screenshot');
+      const { emit } = await import('@tauri-apps/api/event');
+      await emit('screenshot-cancel');
+      await getCurrentWindow().close();
     }
   }, [selection]);
 
   const handleCancel = useCallback(async () => {
     try {
-      await invoke('finish_screenshot');
+      const { emit } = await import('@tauri-apps/api/event');
+      await emit('screenshot-cancel');
+      await getCurrentWindow().close();
     } catch (err) {
       console.error('Cancel failed:', err);
     }
@@ -97,12 +98,11 @@ export default function ScreenshotOverlay() {
 
   return (
     <div
-      style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', background: '#000', zIndex: 99999, cursor: 'crosshair' }}
+      style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', background: '#000', cursor: 'crosshair' }}
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
     >
-      {/* 截图图片 */}
       {imageBase64 && (
         <img
           src={`data:image/png;base64,${imageBase64}`}
@@ -111,7 +111,6 @@ export default function ScreenshotOverlay() {
         />
       )}
 
-      {/* 选区遮罩 */}
       {rect && (
         <div
           style={{
@@ -121,7 +120,6 @@ export default function ScreenshotOverlay() {
         />
       )}
 
-      {/* 选区边框 */}
       {rect && rect.width > 0 && rect.height > 0 && (
         <>
           <div style={{ position: 'absolute', left: rect.left, top: rect.top, width: rect.width, height: rect.height, border: '2px solid #007AFF', pointerEvents: 'none' }} />
@@ -131,14 +129,12 @@ export default function ScreenshotOverlay() {
         </>
       )}
 
-      {/* 提示文字 */}
       {!isDragging && !showToolbar && !selection && (
         <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', padding: '8px 16px', background: 'rgba(0,0,0,0.6)', color: 'white', fontSize: 13, borderRadius: 6, pointerEvents: 'none' }}>
           拖拽选择要识别的区域 · ESC 取消
         </div>
       )}
 
-      {/* 工具栏 */}
       {showToolbar && rect && (
         <div style={{ position: 'absolute', left: rect.left + rect.width / 2, top: rect.top + rect.height + 8, transform: 'translateX(-50%)', display: 'flex', gap: 4, padding: 4, background: 'white', borderRadius: 6, boxShadow: '0 2px 12px rgba(0,0,0,0.2)' }}>
           <button onClick={handleConfirm} style={{ padding: '6px 16px', background: '#007AFF', color: 'white', border: 'none', borderRadius: 4, fontSize: 12, cursor: 'pointer' }}>识别</button>

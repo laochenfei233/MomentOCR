@@ -10,20 +10,6 @@ function App() {
   const [tab, setTab] = useState<Tab>('screenshot');
   const [showSettings, setShowSettings] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
-  const [isScreenshotMode, setIsScreenshotMode] = useState(false);
-
-  // 监听截图模式变化
-  useEffect(() => {
-    const checkScreenshotMode = () => {
-      const overlay = document.querySelector('.screenshot-overlay');
-      setIsScreenshotMode(!!overlay);
-    };
-    
-    const observer = new MutationObserver(checkScreenshotMode);
-    observer.observe(document.body, { childList: true, subtree: true });
-    
-    return () => observer.disconnect();
-  }, []);
 
   useEffect(() => {
     const handleClick = () => setShowMenu(false);
@@ -37,11 +23,6 @@ function App() {
     setTab(newTab);
     setShowSettings(false);
   };
-
-  // 截图模式下隐藏所有UI
-  if (isScreenshotMode) {
-    return <ScreenshotTool />;
-  }
 
   return (
     <div className="app-container">

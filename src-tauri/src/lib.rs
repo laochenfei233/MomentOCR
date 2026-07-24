@@ -2,31 +2,27 @@ mod api;
 mod screenshot;
 
 use screenshot::ScreenshotManager;
-use tauri::{Manager, Emitter};
+use tauri::Emitter;
 
-/// 启动截图 - 截图并返回 base64，主窗口全屏显示
+/// 截图并返回 base64
 #[tauri::command]
-async fn start_screenshot(app: tauri::AppHandle) -> Result<String, String> {
-    // 1. 全屏截图
+fn capture_screen() -> Result<String, String> {
     let data = ScreenshotManager::capture_full_screen()
         .map_err(|e| e.to_string())?;
     
-    // 2. 保存到临时文件
     let path = ScreenshotManager::generate_temp_path("screenshot");
     ScreenshotManager::save_to_file(&data, &path)
         .map_err(|e| e.to_string())?;
     
-    let path_str = path.to_string_lossy().to_string();
-    ScreenshotManager::set_last_screenshot(path_str);
+    ScreenshotManager::set_last_screenshot(path.to_string_lossy().to_string());
     
-    // 3. 返回 base64
     use base64::Engine;
     Ok(base64::engine::general_purpose::STANDARD.encode(&data))
 }
 
 /// 裁剪选区
 #[tauri::command]
-fn crop_screenshot_base64(x: u32, y: u32, width: u32, height: u32) -> Result<String, String> {
+fn crop_screenshot(x: u32, y: u32, width: u32, height: u32) -> Result<String, String> {
     let screenshot_path = ScreenshotManager::get_last_screenshot()
         .ok_or("No screenshot available")?;
     
@@ -82,8 +78,8 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
-            start_screenshot,
-            crop_screenshot_base64,
+            capture_screen,
+            crop_screenshot,
             ocr_openai,
             ocr_ollama,
             translate_google,
