@@ -11,28 +11,39 @@ function ScreenshotTool() {
   const handleScreenshot = useCallback(async () => {
     setCapturing(true);
     setError(null);
-    
     try {
-      // 直接截图并保存，不显示预览
-      const path = await invoke<string>('take_screenshot');
-      setScreenshotPath(path);
-      setCaptureSuccess(true);
-      setTimeout(() => setCaptureSuccess(false), 1500);
+      await invoke('start_screenshot');
     } catch (err) {
       setError(String(err));
-    } finally {
       setCapturing(false);
     }
-  }, [setCapturing, setScreenshotPath]);
+  }, [setCapturing]);
 
   useEffect(() => {
-    const unlisten = listen('screenshot-triggered', () => handleScreenshot());
-    return () => { unlisten.then(fn => fn()); };
-  }, [handleScreenshot]);
+    const unlisten = listen<{ path: string }>('screenshot-cropped', (event) => {
+      setScreenshotPath(event.payload.path);
+      setCaptureSuccess(true);
+      setCapturing(false);
+      setTimeout(() => setCaptureSuccess(false), 1500);
+    });
+
+    const unlistenShortcut = listen('screenshot-triggered', () => {
+      handleScreenshot();
+    });
+
+    return () => {
+      unlisten.then(fn => fn());
+      unlistenShortcut.then(fn => fn());
+    };
+  }, [handleScreenshot, setCapturing, setScreenshotPath]);
 
   return (
     <div className="p-3">
-      <button onClick={handleScreenshot} disabled={isCapturing} className="screenshot-btn">
+      <button
+        onClick={handleScreenshot}
+        disabled={isCapturing}
+        className="screenshot-btn"
+      >
         {isCapturing ? '截图中...' : captureSuccess ? '✓ 完成' : '截图'}
       </button>
       {error && (

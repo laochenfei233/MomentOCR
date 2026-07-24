@@ -2175,6 +2175,7 @@ dependencies = [
  "anyhow",
  "base64 0.22.1",
  "chrono",
+ "once_cell",
  "reqwest 0.12.28",
  "screenshots",
  "serde",

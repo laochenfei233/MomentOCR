@@ -2,33 +2,93 @@ mod api;
 mod screenshot;
 
 use screenshot::ScreenshotManager;
-use tauri::Emitter;
+use tauri::{Manager, WebviewUrl, WebviewWindowBuilder, Emitter};
 
+/// 启动截图流程
 #[tauri::command]
-fn take_screenshot() -> Result<String, String> {
-    let data = ScreenshotManager::capture_full_screen().map_err(|e| e.to_string())?;
-    let path = ScreenshotManager::generate_temp_path("screenshot");
-    ScreenshotManager::save_to_file(&data, &path).map_err(|e| e.to_string())?;
-    Ok(path.to_string_lossy().to_string())
-}
-
-#[tauri::command]
-fn take_screenshot_base64() -> Result<String, String> {
-    let data = ScreenshotManager::capture_full_screen().map_err(|e| e.to_string())?;
-    use base64::Engine;
-    Ok(base64::engine::general_purpose::STANDARD.encode(&data))
-}
-
-#[tauri::command]
-fn crop_screenshot(full_screen_base64: String, x: i32, y: i32, width: u32, height: u32) -> Result<String, String> {
-    use base64::Engine;
-    let data = base64::engine::general_purpose::STANDARD.decode(&full_screen_base64)
+async fn start_screenshot(app: tauri::AppHandle) -> Result<(), String> {
+    // 1. 全屏截图
+    let data = ScreenshotManager::capture_full_screen()
         .map_err(|e| e.to_string())?;
+    
+    // 2. 保存到临时文件
+    let path = ScreenshotManager::generate_temp_path("screenshot");
+    ScreenshotManager::save_to_file(&data, &path)
+        .map_err(|e| e.to_string())?;
+    
+    let path_str = path.to_string_lossy().to_string();
+    ScreenshotManager::set_last_screenshot(path_str);
+    
+    // 3. 隐藏主窗口
+    if let Some(main_window) = app.get_webview_window("main") {
+        main_window.hide().map_err(|e| e.to_string())?;
+    }
+    
+    // 4. 创建覆盖窗口
+    let _overlay = WebviewWindowBuilder::new(
+        &app,
+        "screenshot-overlay",
+        WebviewUrl::App("/screenshot-overlay".into())
+    )
+    .title("截图")
+    .fullscreen(true)
+    .always_on_top(true)
+    .decorations(false)
+    .skip_taskbar(true)
+    .build()
+    .map_err(|e| e.to_string())?;
+    
+    Ok(())
+}
+
+/// 裁剪选区并返回路径
+#[tauri::command]
+fn crop_screenshot(
+    x: u32, y: u32,
+    width: u32, height: u32
+) -> Result<String, String> {
+    // 1. 获取截图路径
+    let screenshot_path = ScreenshotManager::get_last_screenshot()
+        .ok_or("No screenshot available")?;
+    
+    // 2. 读取原始截图
+    let data = std::fs::read(&screenshot_path)
+        .map_err(|e| e.to_string())?;
+    
+    // 3. 裁剪选区
     let cropped = ScreenshotManager::crop_region(&data, x, y, width, height)
         .map_err(|e| e.to_string())?;
-    let path = ScreenshotManager::generate_temp_path("crop");
-    ScreenshotManager::save_to_file(&cropped, &path).map_err(|e| e.to_string())?;
-    Ok(path.to_string_lossy().to_string())
+    
+    // 4. 保存裁剪结果
+    let crop_path = ScreenshotManager::generate_temp_path("crop");
+    ScreenshotManager::save_to_file(&cropped, &crop_path)
+        .map_err(|e| e.to_string())?;
+    
+    Ok(crop_path.to_string_lossy().to_string())
+}
+
+/// 关闭覆盖窗口，恢复主窗口
+#[tauri::command]
+async fn finish_screenshot(app: tauri::AppHandle) -> Result<(), String> {
+    // 关闭覆盖窗口
+    if let Some(overlay) = app.get_webview_window("screenshot-overlay") {
+        overlay.close().map_err(|e| e.to_string())?;
+    }
+    
+    // 显示主窗口
+    if let Some(main_window) = app.get_webview_window("main") {
+        main_window.show().map_err(|e| e.to_string())?;
+        main_window.set_focus().map_err(|e| e.to_string())?;
+    }
+    
+    Ok(())
+}
+
+/// 获取截图路径（供覆盖窗口使用）
+#[tauri::command]
+fn get_screenshot_path() -> Result<String, String> {
+    ScreenshotManager::get_last_screenshot()
+        .ok_or_else(|| "No screenshot available".to_string())
 }
 
 #[tauri::command]
@@ -65,15 +125,15 @@ async fn translate_ai(api_key: String, text: String, target_lang: String, model:
     Ok(result)
 }
 
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
-            take_screenshot,
-            take_screenshot_base64,
+            start_screenshot,
             crop_screenshot,
+            finish_screenshot,
+            get_screenshot_path,
             ocr_openai,
             ocr_ollama,
             translate_google,
@@ -81,16 +141,19 @@ pub fn run() {
         ])
         .setup(|app| {
             use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut};
-
-            let shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyQ);
+            let shortcut = Shortcut::new(
+                Some(Modifiers::CONTROL | Modifiers::SHIFT),
+                Code::KeyQ
+            );
             let app_handle = app.handle().clone();
-
-            app.global_shortcut().on_shortcut(shortcut, move |_app, _shortcut, event| {
-                if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
-                    let _ = app_handle.emit("screenshot-triggered", ());
+            let _ = app.global_shortcut().on_shortcut(
+                shortcut,
+                move |_app, _shortcut, event| {
+                    if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                        let _ = app_handle.emit("screenshot-triggered", ());
+                    }
                 }
-            });
-
+            );
             Ok(())
         })
         .run(tauri::generate_context!())
