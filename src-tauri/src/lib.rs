@@ -1,7 +1,10 @@
 mod api;
 mod screenshot;
+mod overlay;
 
 use screenshot::ScreenshotManager;
+use overlay::{OverlayManager, OverlayResult};
+use tauri::Emitter;
 
 /// 截图并返回 base64
 #[tauri::command]
@@ -16,6 +19,39 @@ fn capture_screen() -> Result<String, String> {
     
     use base64::Engine;
     Ok(base64::engine::general_purpose::STANDARD.encode(&data))
+}
+
+/// 启动截图覆盖窗口
+#[tauri::command]
+fn start_screenshot_overlay() -> Result<String, String> {
+    let manager = OverlayManager::new();
+    
+    // 截图
+    let data = ScreenshotManager::capture_full_screen()
+        .map_err(|e| e.to_string())?;
+    let path = ScreenshotManager::generate_temp_path("screenshot");
+    ScreenshotManager::save_to_file(&data, &path)
+        .map_err(|e| e.to_string())?;
+    ScreenshotManager::set_last_screenshot(path.to_string_lossy().to_string());
+    
+    // 启动覆盖窗口
+    match manager.start_overlay(Some(path.to_string_lossy().as_ref())) {
+        Ok(OverlayResult::Ocr { path: _, x, y, width, height }) => {
+            // 裁剪选区
+            let screenshot_path = ScreenshotManager::get_last_screenshot()
+                .ok_or("No screenshot available")?;
+            let data = std::fs::read(&screenshot_path).map_err(|e| e.to_string())?;
+            let cropped = ScreenshotManager::crop_region(&data, x as u32, y as u32, width, height)
+                .map_err(|e| e.to_string())?;
+            let crop_path = ScreenshotManager::generate_temp_path("crop");
+            ScreenshotManager::save_to_file(&cropped, &crop_path).map_err(|e| e.to_string())?;
+            Ok(crop_path.to_string_lossy().to_string())
+        }
+        Ok(OverlayResult::Cancel) => {
+            Err("Cancelled".to_string())
+        }
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 /// 裁剪选区并返回路径
@@ -58,7 +94,7 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
-            capture_screen, crop_screenshot,
+            capture_screen, start_screenshot_overlay, crop_screenshot,
             ocr_openai, ocr_ollama, translate_google, translate_ai
         ])
         .setup(|app| {
