@@ -10,9 +10,10 @@
     "frontendDist": "../dist"
   },
   "app": {
-    "withGlobalTauri": false,
+    "withGlobalTauri": true,
     "windows": [
       {
+        "label": "main",
         "title": "须臾OCR",
         "width": 670,
         "height": 550,
@@ -21,7 +22,8 @@
         "decorations": true,
         "transparent": false,
         "alwaysOnTop": false,
-        "skipTaskbar": false
+        "skipTaskbar": false,
+        "visible": true
       }
     ],
     "security": {

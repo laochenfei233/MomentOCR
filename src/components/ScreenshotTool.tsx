@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useScreenshotStore } from '../stores/screenshotStore';
 
 function ScreenshotTool() {
@@ -12,21 +13,43 @@ function ScreenshotTool() {
   const [selection, setSelection] = useState<{ x: number; y: number; x2: number; y2: number } | null>(null);
   const [isDragging, setIsDragging] = useState(false);
 
+  const enterScreenshotMode = useCallback(async () => {
+    const win = getCurrentWindow();
+    // 保存当前状态
+    await win.setFullscreen(true);
+    await win.setAlwaysOnTop(true);
+    await win.setFocus();
+  }, []);
+
+  const exitScreenshotMode = useCallback(async () => {
+    const win = getCurrentWindow();
+    await win.setFullscreen(false);
+    await win.setAlwaysOnTop(false);
+  }, []);
+
   const handleScreenshot = useCallback(async () => {
     setCapturing(true);
     setError(null);
     setShowOverlay(false);
     
     try {
+      // 1. 进入截图模式（全屏）
+      await enterScreenshotMode();
+      
+      // 2. 等待窗口稳定
+      await new Promise(resolve => setTimeout(resolve, 300));
+      
+      // 3. 全屏截图
       const base64 = await invoke<string>('take_screenshot_base64');
       setFullScreenBase64(base64);
       setShowOverlay(true);
     } catch (err) {
+      console.error('Screenshot error:', err);
       setError(String(err));
-    } finally {
       setCapturing(false);
+      await exitScreenshotMode();
     }
-  }, [setCapturing]);
+  }, [setCapturing, enterScreenshotMode, exitScreenshotMode]);
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     setIsDragging(true);
@@ -47,8 +70,13 @@ function ScreenshotTool() {
     const width = Math.abs(selection.x2 - selection.x);
     const height = Math.abs(selection.y2 - selection.y);
 
+    // 退出截图模式
+    await exitScreenshotMode();
+    setShowOverlay(false);
+
     if (width < 10 || height < 10) {
       setSelection(null);
+      setCapturing(false);
       return;
     }
 
@@ -63,9 +91,16 @@ function ScreenshotTool() {
       setError(String(err));
     }
 
+    setSelection(null);
+    setCapturing(false);
+  }, [isDragging, selection, fullScreenBase64, setCapturing, setScreenshotPath, exitScreenshotMode]);
+
+  const handleCancel = useCallback(async () => {
+    await exitScreenshotMode();
     setShowOverlay(false);
     setSelection(null);
-  }, [isDragging, selection, fullScreenBase64, setScreenshotPath]);
+    setCapturing(false);
+  }, [setCapturing, exitScreenshotMode]);
 
   useEffect(() => {
     const unlisten = listen('screenshot-triggered', () => handleScreenshot());
@@ -75,15 +110,14 @@ function ScreenshotTool() {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && showOverlay) {
-        setShowOverlay(false);
-        setSelection(null);
+        handleCancel();
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [showOverlay]);
+  }, [showOverlay, handleCancel]);
 
-  // 截图覆盖层
+  // 截图覆盖层 - Snipaste 风格
   if (showOverlay && fullScreenBase64) {
     const rect = selection ? {
       left: Math.min(selection.x, selection.x2),
