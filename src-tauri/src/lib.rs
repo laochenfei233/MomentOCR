@@ -2,6 +2,7 @@ mod api;
 mod screenshot;
 
 use screenshot::ScreenshotManager;
+use tauri::Emitter;
 
 #[tauri::command]
 fn take_screenshot() -> Result<String, String> {
@@ -72,15 +73,11 @@ pub fn run() {
             let shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyQ);
             let app_handle = app.handle().clone();
 
-            app.global_shortcut().register(
-                shortcut,
-                move |_app, _shortcut, event| {
-                    if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
-                        // Trigger screenshot
-                        let _ = app_handle.emit("screenshot-triggered", ());
-                    }
-                },
-            )?;
+            app.global_shortcut().on_shortcut(shortcut, move |_app, _shortcut, event| {
+                if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                    let _ = app_handle.emit("screenshot-triggered", ());
+                }
+            });
 
             Ok(())
         })
