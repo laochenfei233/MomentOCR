@@ -1,9 +1,8 @@
 import { useState, useCallback, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { convertFileSrc } from '@tauri-apps/api/core';
 
 export default function ScreenshotOverlay() {
-  const [imageSrc, setImageSrc] = useState<string>('');
+  const [imageBase64, setImageBase64] = useState<string>('');
   const [selection, setSelection] = useState<{
     startX: number; startY: number;
     endX: number; endY: number;
@@ -14,8 +13,8 @@ export default function ScreenshotOverlay() {
   useEffect(() => {
     const loadScreenshot = async () => {
       try {
-        const path = await invoke<string>('get_screenshot_path');
-        setImageSrc(convertFileSrc(path));
+        const base64 = await invoke<string>('get_screenshot_base64');
+        setImageBase64(base64);
       } catch (err) {
         console.error('Failed to load screenshot:', err);
       }
@@ -60,7 +59,7 @@ export default function ScreenshotOverlay() {
     const height = Math.abs(selection.endY - selection.startY);
     
     try {
-      const cropPath = await invoke<string>('crop_screenshot', { x, y, width, height });
+      const cropPath = await invoke<string>('crop_screenshot_base64', { x, y, width, height });
       const { emit } = await import('@tauri-apps/api/event');
       await emit('screenshot-cropped', { path: cropPath });
       await invoke('finish_screenshot');
@@ -100,9 +99,9 @@ export default function ScreenshotOverlay() {
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
     >
-      {imageSrc && (
+      {imageBase64 && (
         <img
-          src={imageSrc}
+          src={`data:image/png;base64,${imageBase64}`}
           className="absolute inset-0 w-full h-full object-cover pointer-events-none"
           draggable={false}
         />

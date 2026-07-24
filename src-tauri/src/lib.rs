@@ -41,25 +41,35 @@ async fn start_screenshot(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// 裁剪选区并返回路径
+/// 获取截图的 base64 数据
 #[tauri::command]
-fn crop_screenshot(
+fn get_screenshot_base64() -> Result<String, String> {
+    let path = ScreenshotManager::get_last_screenshot()
+        .ok_or_else(|| "No screenshot available".to_string())?;
+    
+    let data = std::fs::read(&path)
+        .map_err(|e| e.to_string())?;
+    
+    use base64::Engine;
+    Ok(base64::engine::general_purpose::STANDARD.encode(&data))
+}
+
+/// 裁剪选区并返回 base64
+#[tauri::command]
+fn crop_screenshot_base64(
     x: u32, y: u32,
     width: u32, height: u32
 ) -> Result<String, String> {
-    // 1. 获取截图路径
     let screenshot_path = ScreenshotManager::get_last_screenshot()
         .ok_or("No screenshot available")?;
     
-    // 2. 读取原始截图
     let data = std::fs::read(&screenshot_path)
         .map_err(|e| e.to_string())?;
     
-    // 3. 裁剪选区
     let cropped = ScreenshotManager::crop_region(&data, x, y, width, height)
         .map_err(|e| e.to_string())?;
     
-    // 4. 保存裁剪结果
+    // 保存裁剪结果
     let crop_path = ScreenshotManager::generate_temp_path("crop");
     ScreenshotManager::save_to_file(&cropped, &crop_path)
         .map_err(|e| e.to_string())?;
@@ -70,25 +80,16 @@ fn crop_screenshot(
 /// 关闭覆盖窗口，恢复主窗口
 #[tauri::command]
 async fn finish_screenshot(app: tauri::AppHandle) -> Result<(), String> {
-    // 关闭覆盖窗口
     if let Some(overlay) = app.get_webview_window("screenshot-overlay") {
         overlay.close().map_err(|e| e.to_string())?;
     }
     
-    // 显示主窗口
     if let Some(main_window) = app.get_webview_window("main") {
         main_window.show().map_err(|e| e.to_string())?;
         main_window.set_focus().map_err(|e| e.to_string())?;
     }
     
     Ok(())
-}
-
-/// 获取截图路径（供覆盖窗口使用）
-#[tauri::command]
-fn get_screenshot_path() -> Result<String, String> {
-    ScreenshotManager::get_last_screenshot()
-        .ok_or_else(|| "No screenshot available".to_string())
 }
 
 #[tauri::command]
@@ -131,9 +132,9 @@ pub fn run() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             start_screenshot,
-            crop_screenshot,
+            get_screenshot_base64,
+            crop_screenshot_base64,
             finish_screenshot,
-            get_screenshot_path,
             ocr_openai,
             ocr_ollama,
             translate_google,
