@@ -14,9 +14,9 @@
     "windows": [
       {
         "title": "须臾OCR",
-        "width": 1000,
-        "height": 700,
-        "minWidth": 600,
+        "width": 670,
+        "height": 550,
+        "minWidth": 500,
         "minHeight": 400
       }
     ],

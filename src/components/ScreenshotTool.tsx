@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useScreenshotStore } from '../stores/screenshotStore';
 import { convertFileSrc } from '@tauri-apps/api/core';
 
@@ -17,13 +18,25 @@ function ScreenshotTool() {
     setCapturing(true);
     setError(null);
     try {
-      // 先全屏截图
+      // 先隐藏窗口
+      const appWindow = getCurrentWindow();
+      await appWindow.hide();
+      
+      // 等待窗口隐藏
+      await new Promise(resolve => setTimeout(resolve, 300));
+      
+      // 全屏截图
       const path = await invoke<string>('take_screenshot');
       setFullScreenImage(convertFileSrc(path));
       setShowOverlay(true);
     } catch (err) {
       setError(String(err));
       setCapturing(false);
+      // 出错时显示窗口
+      try {
+        const appWindow = getCurrentWindow();
+        await appWindow.show();
+      } catch {}
     }
   }, [setCapturing]);
 
@@ -46,10 +59,16 @@ function ScreenshotTool() {
     const width = Math.abs(selection.x2 - selection.x);
     const height = Math.abs(selection.y2 - selection.y);
 
+    setShowOverlay(false);
+    setSelection(null);
+
     if (width < 10 || height < 10) {
-      setShowOverlay(false);
-      setSelection(null);
       setCapturing(false);
+      // 显示窗口
+      try {
+        const appWindow = getCurrentWindow();
+        await appWindow.show();
+      } catch {}
       return;
     }
 
@@ -63,16 +82,24 @@ function ScreenshotTool() {
     } catch (err) {
       setError(String(err));
     } finally {
-      setShowOverlay(false);
-      setSelection(null);
       setCapturing(false);
+      // 显示窗口
+      try {
+        const appWindow = getCurrentWindow();
+        await appWindow.show();
+      } catch {}
     }
   }, [selection, isDragging, setCapturing, setScreenshotPath]);
 
-  const handleCancel = useCallback(() => {
+  const handleCancel = useCallback(async () => {
     setShowOverlay(false);
     setSelection(null);
     setCapturing(false);
+    // 显示窗口
+    try {
+      const appWindow = getCurrentWindow();
+      await appWindow.show();
+    } catch {}
   }, [setCapturing]);
 
   useEffect(() => {
