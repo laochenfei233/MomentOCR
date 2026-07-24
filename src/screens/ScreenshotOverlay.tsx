@@ -9,14 +9,19 @@ export default function ScreenshotOverlay() {
   } | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [showToolbar, setShowToolbar] = useState(false);
+  const [debug, setDebug] = useState<string>('loading...');
 
   useEffect(() => {
     const loadScreenshot = async () => {
       try {
+        console.log('Loading screenshot...');
         const base64 = await invoke<string>('get_screenshot_base64');
+        console.log('Base64 length:', base64.length);
         setImageBase64(base64);
+        setDebug(`loaded: ${base64.length} chars`);
       } catch (err) {
         console.error('Failed to load screenshot:', err);
+        setDebug(`error: ${err}`);
       }
     };
     loadScreenshot();
@@ -94,53 +99,57 @@ export default function ScreenshotOverlay() {
 
   return (
     <div
-      className="fixed inset-0 cursor-crosshair bg-black"
+      style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', cursor: 'crosshair', background: '#000', zIndex: 99999 }}
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
     >
+      {/* 调试信息 */}
+      <div style={{ position: 'absolute', top: 10, left: 10, color: 'white', fontSize: 12, background: 'rgba(0,0,0,0.5)', padding: '4px 8px', borderRadius: 4 }}>
+        {debug}
+      </div>
+
+      {/* 截图图片 */}
       {imageBase64 && (
         <img
           src={`data:image/png;base64,${imageBase64}`}
-          className="absolute inset-0 w-full h-full object-cover pointer-events-none"
+          style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', objectFit: 'contain' }}
           draggable={false}
         />
       )}
 
+      {/* 选区遮罩 */}
       {rect && (
         <div
-          className="absolute inset-0 bg-black/30 pointer-events-none"
           style={{
+            position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.3)', pointerEvents: 'none',
             clipPath: `polygon(0 0, 100% 0, 100% 100%, 0 100%, 0 0, ${rect.left}px ${rect.top}px, ${rect.left}px ${rect.top + rect.height}px, ${rect.left + rect.width}px ${rect.top + rect.height}px, ${rect.left + rect.width}px ${rect.top}px, ${rect.left}px ${rect.top}px)`
           }}
         />
       )}
 
+      {/* 选区边框 */}
       {rect && rect.width > 0 && rect.height > 0 && (
         <>
-          <div className="absolute border-2 border-blue-500 pointer-events-none" style={rect} />
-          <div
-            className="absolute bg-black/80 text-white text-xs px-2 py-0.5 rounded pointer-events-none whitespace-nowrap"
-            style={{ left: rect.left + rect.width / 2, top: rect.top - 24, transform: 'translateX(-50%)' }}
-          >
+          <div style={{ position: 'absolute', left: rect.left, top: rect.top, width: rect.width, height: rect.height, border: '2px solid #007AFF', pointerEvents: 'none' }} />
+          <div style={{ position: 'absolute', left: rect.left + rect.width / 2, top: rect.top - 24, transform: 'translateX(-50%)', padding: '2px 8px', background: 'rgba(0,0,0,0.75)', color: 'white', fontSize: 11, borderRadius: 3, pointerEvents: 'none', whiteSpace: 'nowrap' }}>
             {Math.round(rect.width)} × {Math.round(rect.height)}
           </div>
         </>
       )}
 
+      {/* 提示文字 */}
       {!isDragging && !showToolbar && !selection && (
-        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-white text-sm bg-black/60 px-4 py-2 rounded pointer-events-none">
+        <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', padding: '8px 16px', background: 'rgba(0,0,0,0.6)', color: 'white', fontSize: 13, borderRadius: 6, pointerEvents: 'none' }}>
           拖拽选择要识别的区域 · ESC 取消
         </div>
       )}
 
+      {/* 工具栏 */}
       {showToolbar && rect && (
-        <div
-          className="absolute flex gap-1 bg-white rounded shadow-lg p-1"
-          style={{ left: rect.left + rect.width / 2, top: rect.top + rect.height + 8, transform: 'translateX(-50%)' }}
-        >
-          <button onClick={handleConfirm} className="px-3 py-1 bg-blue-500 text-white text-xs rounded hover:bg-blue-600">识别</button>
-          <button onClick={handleCancel} className="px-3 py-1 bg-gray-200 text-gray-700 text-xs rounded hover:bg-gray-300">取消</button>
+        <div style={{ position: 'absolute', left: rect.left + rect.width / 2, top: rect.top + rect.height + 8, transform: 'translateX(-50%)', display: 'flex', gap: 4, padding: 4, background: 'white', borderRadius: 6, boxShadow: '0 2px 12px rgba(0,0,0,0.2)' }}>
+          <button onClick={handleConfirm} style={{ padding: '6px 16px', background: '#007AFF', color: 'white', border: 'none', borderRadius: 4, fontSize: 12, cursor: 'pointer' }}>识别</button>
+          <button onClick={handleCancel} style={{ padding: '6px 16px', background: '#f0f0f0', color: '#333', border: 'none', borderRadius: 4, fontSize: 12, cursor: 'pointer' }}>取消</button>
         </div>
       )}
     </div>
