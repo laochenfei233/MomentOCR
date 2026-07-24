@@ -2,9 +2,9 @@ mod api;
 mod screenshot;
 
 use screenshot::ScreenshotManager;
-use tauri::{Manager, WebviewUrl, WebviewWindowBuilder, Emitter};
+use tauri::{Manager, Emitter};
 
-/// 启动截图流程
+/// 启动截图 - 截图并返回 base64，主窗口全屏显示
 #[tauri::command]
 async fn start_screenshot(app: tauri::AppHandle) -> Result<String, String> {
     // 1. 全屏截图
@@ -21,36 +21,12 @@ async fn start_screenshot(app: tauri::AppHandle) -> Result<String, String> {
     
     // 3. 返回 base64
     use base64::Engine;
-    let base64 = base64::engine::general_purpose::STANDARD.encode(&data);
-    
-    // 4. 创建覆盖窗口
-    let overlay = WebviewWindowBuilder::new(
-        &app,
-        "screenshot-overlay",
-        WebviewUrl::App("/?window=screenshot-overlay".into())
-    )
-    .title("截图")
-    .fullscreen(true)
-    .always_on_top(true)
-    .decorations(false)
-    .skip_taskbar(true)
-    .build()
-    .map_err(|e| e.to_string())?;
-    
-    // 5. 隐藏主窗口
-    if let Some(main_window) = app.get_webview_window("main") {
-        main_window.hide().map_err(|e| e.to_string())?;
-    }
-    
-    Ok(base64)
+    Ok(base64::engine::general_purpose::STANDARD.encode(&data))
 }
 
-/// 裁剪选区并返回路径
+/// 裁剪选区
 #[tauri::command]
-fn crop_screenshot_base64(
-    x: u32, y: u32,
-    width: u32, height: u32
-) -> Result<String, String> {
+fn crop_screenshot_base64(x: u32, y: u32, width: u32, height: u32) -> Result<String, String> {
     let screenshot_path = ScreenshotManager::get_last_screenshot()
         .ok_or("No screenshot available")?;
     
@@ -65,36 +41,6 @@ fn crop_screenshot_base64(
         .map_err(|e| e.to_string())?;
     
     Ok(crop_path.to_string_lossy().to_string())
-}
-
-/// 获取截图 base64（供覆盖窗口使用）
-#[tauri::command]
-fn get_screenshot_base64() -> Result<String, String> {
-    let path = ScreenshotManager::get_last_screenshot()
-        .ok_or_else(|| "No screenshot available".to_string())?;
-    
-    let data = std::fs::read(&path)
-        .map_err(|e| e.to_string())?;
-    
-    use base64::Engine;
-    Ok(base64::engine::general_purpose::STANDARD.encode(&data))
-}
-
-/// 关闭覆盖窗口，恢复主窗口
-#[tauri::command]
-async fn finish_screenshot(app: tauri::AppHandle) -> Result<(), String> {
-    // 关闭覆盖窗口
-    if let Some(overlay) = app.get_webview_window("screenshot-overlay") {
-        overlay.close().map_err(|e| e.to_string())?;
-    }
-    
-    // 显示主窗口
-    if let Some(main_window) = app.get_webview_window("main") {
-        main_window.show().map_err(|e| e.to_string())?;
-        main_window.set_focus().map_err(|e| e.to_string())?;
-    }
-    
-    Ok(())
 }
 
 #[tauri::command]
@@ -137,9 +83,7 @@ pub fn run() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             start_screenshot,
-            get_screenshot_base64,
             crop_screenshot_base64,
-            finish_screenshot,
             ocr_openai,
             ocr_ollama,
             translate_google,

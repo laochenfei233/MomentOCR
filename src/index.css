@@ -366,6 +366,11 @@ body {
   pointer-events: none;
 }
 
+/* 截图模式下隐藏其他UI */
+.app-container:has(.screenshot-overlay) > *:not(.screenshot-overlay) {
+  display: none;
+}
+
 .spinner-sm {
   display: inline-block;
   width: 12px;

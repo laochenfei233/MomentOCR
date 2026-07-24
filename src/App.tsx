@@ -10,6 +10,20 @@ function App() {
   const [tab, setTab] = useState<Tab>('screenshot');
   const [showSettings, setShowSettings] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
+  const [isScreenshotMode, setIsScreenshotMode] = useState(false);
+
+  // 监听截图模式变化
+  useEffect(() => {
+    const checkScreenshotMode = () => {
+      const overlay = document.querySelector('.screenshot-overlay');
+      setIsScreenshotMode(!!overlay);
+    };
+    
+    const observer = new MutationObserver(checkScreenshotMode);
+    observer.observe(document.body, { childList: true, subtree: true });
+    
+    return () => observer.disconnect();
+  }, []);
 
   useEffect(() => {
     const handleClick = () => setShowMenu(false);
@@ -24,16 +38,19 @@ function App() {
     setShowSettings(false);
   };
 
+  // 截图模式下隐藏所有UI
+  if (isScreenshotMode) {
+    return <ScreenshotTool />;
+  }
+
   return (
     <div className="app-container">
-      {/* 标题栏 */}
       <header className="title-bar">
         <span className="text-sm font-medium text-gray-700">须臾OCR</span>
         <div className="flex-1"></div>
         <div className="flex items-center gap-0.5">
           <button className="win-btn" title="置顶">📌</button>
           <button className="win-btn" onClick={(e) => { e.stopPropagation(); setShowMenu(!showMenu); }}>☰</button>
-          
           {showMenu && (
             <div className="menu-dropdown" onClick={(e) => e.stopPropagation()}>
               <button className="menu-item" onClick={() => { setShowSettings(true); setShowMenu(false); }}>软件设置</button>
@@ -44,14 +61,12 @@ function App() {
               <button className="menu-item text-red-500">退出程序</button>
             </div>
           )}
-          
           <button className="win-btn">─</button>
           <button className="win-btn">□</button>
           <button className="win-btn hover:bg-red-500 hover:text-white">✕</button>
         </div>
       </header>
 
-      {/* 工具栏 */}
       <div className="toolbar">
         <button className="tool-icon" title="文本">T</button>
         <button className="tool-icon" title="表格">⊞</button>
@@ -70,35 +85,16 @@ function App() {
         <button className="tool-icon">译</button>
       </div>
 
-      {/* 主内容 */}
       <main className="main-content">
         <div className="side-panel">
           <div className="tab-bar">
-            <button
-              onClick={() => handleTabChange('screenshot')}
-              className={`tab-btn ${tab === 'screenshot' && !showSettings ? 'active' : ''}`}
-            >
-              截图识别
-            </button>
-            <button
-              onClick={() => handleTabChange('file')}
-              className={`tab-btn ${tab === 'file' && !showSettings ? 'active' : ''}`}
-            >
-              文件识别
-            </button>
+            <button onClick={() => handleTabChange('screenshot')} className={`tab-btn ${tab === 'screenshot' && !showSettings ? 'active' : ''}`}>截图识别</button>
+            <button onClick={() => handleTabChange('file')} className={`tab-btn ${tab === 'file' && !showSettings ? 'active' : ''}`}>文件识别</button>
           </div>
-          
           <div className="side-content">
-            {showSettings ? (
-              <Settings />
-            ) : tab === 'screenshot' ? (
-              <ScreenshotTool />
-            ) : (
-              <FileUploader />
-            )}
+            {showSettings ? <Settings /> : tab === 'screenshot' ? <ScreenshotTool /> : <FileUploader />}
           </div>
         </div>
-
         <div className="result-panel">
           <OcrResult />
         </div>
