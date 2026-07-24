@@ -16,13 +16,15 @@ function ScreenshotTool() {
     setCapturing(true);
     setError(null);
     try {
-      const base64 = await invoke<string>('get_screenshot_base64');
+      // 调用 Rust 截图，返回 base64
+      const base64 = await invoke<string>('start_screenshot');
       setImageBase64(base64);
       setShowOverlay(true);
     } catch (err) {
       setError(String(err));
-    } finally {
       setCapturing(false);
+      // 出错时恢复窗口
+      try { await invoke('finish_screenshot'); } catch {}
     }
   }, [setCapturing]);
 
@@ -48,7 +50,11 @@ function ScreenshotTool() {
     setShowOverlay(false);
     setSelection(null);
 
-    if (width < 10 || height < 10) return;
+    if (width < 10 || height < 10) {
+      setCapturing(false);
+      await invoke('finish_screenshot');
+      return;
+    }
 
     try {
       const path = await invoke<string>('crop_screenshot_base64', { x, y, width, height });
@@ -58,7 +64,17 @@ function ScreenshotTool() {
     } catch (err) {
       setError(String(err));
     }
-  }, [isDragging, selection, setScreenshotPath]);
+
+    setCapturing(false);
+    await invoke('finish_screenshot');
+  }, [isDragging, selection, setCapturing, setScreenshotPath]);
+
+  const handleCancel = useCallback(async () => {
+    setShowOverlay(false);
+    setSelection(null);
+    setCapturing(false);
+    await invoke('finish_screenshot');
+  }, [setCapturing]);
 
   useEffect(() => {
     const unlisten = listen('screenshot-triggered', () => handleScreenshot());
@@ -67,16 +83,13 @@ function ScreenshotTool() {
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && showOverlay) {
-        setShowOverlay(false);
-        setSelection(null);
-      }
+      if (e.key === 'Escape' && showOverlay) handleCancel();
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [showOverlay]);
+  }, [showOverlay, handleCancel]);
 
-  // 截图覆盖层
+  // 截图覆盖层 - 全屏黑色背景 + 截图
   if (showOverlay && imageBase64) {
     const rect = selection ? {
       left: Math.min(selection.x, selection.x2),
@@ -86,18 +99,28 @@ function ScreenshotTool() {
     } : null;
 
     return (
-      <div className="screenshot-overlay" onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp}>
-        <img src={`data:image/png;base64,${imageBase64}`} className="screenshot-image" draggable={false} />
+      <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', background: '#000', zIndex: 99999, cursor: 'crosshair' }}
+        onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp}>
+        
+        <img src={`data:image/png;base64,${imageBase64}`} 
+          style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', objectFit: 'contain' }}
+          draggable={false} />
+        
         {rect && rect.width > 0 && rect.height > 0 && (
           <>
-            <div className="screenshot-selection" style={rect} />
-            <div className="screenshot-size" style={{ left: rect.left + rect.width / 2, top: rect.top - 24 }}>
+            <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.3)', pointerEvents: 'none',
+              clipPath: `polygon(0 0, 100% 0, 100% 100%, 0 100%, 0 0, ${rect.left}px ${rect.top}px, ${rect.left}px ${rect.top + rect.height}px, ${rect.left + rect.width}px ${rect.top + rect.height}px, ${rect.left + rect.width}px ${rect.top}px, ${rect.left}px ${rect.top}px)` }} />
+            <div style={{ position: 'absolute', left: rect.left, top: rect.top, width: rect.width, height: rect.height, border: '2px solid #007AFF', pointerEvents: 'none' }} />
+            <div style={{ position: 'absolute', left: rect.left + rect.width / 2, top: rect.top - 24, transform: 'translateX(-50%)', padding: '2px 8px', background: 'rgba(0,0,0,0.75)', color: 'white', fontSize: 11, borderRadius: 3, pointerEvents: 'none', whiteSpace: 'nowrap' }}>
               {Math.round(rect.width)} × {Math.round(rect.height)}
             </div>
           </>
         )}
+
         {!isDragging && (
-          <div className="screenshot-hint">拖拽选择要识别的区域 · ESC 取消</div>
+          <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', padding: '8px 16px', background: 'rgba(0,0,0,0.6)', color: 'white', fontSize: 13, borderRadius: 6, pointerEvents: 'none' }}>
+            拖拽选择要识别的区域 · ESC 取消
+          </div>
         )}
       </div>
     );

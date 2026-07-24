@@ -9,19 +9,15 @@ export default function ScreenshotOverlay() {
   } | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [showToolbar, setShowToolbar] = useState(false);
-  const [debug, setDebug] = useState<string>('loading...');
 
   useEffect(() => {
+    // 从 Rust 获取截图数据
     const loadScreenshot = async () => {
       try {
-        console.log('Loading screenshot...');
         const base64 = await invoke<string>('get_screenshot_base64');
-        console.log('Base64 length:', base64.length);
         setImageBase64(base64);
-        setDebug(`loaded: ${base64.length} chars`);
       } catch (err) {
         console.error('Failed to load screenshot:', err);
-        setDebug(`error: ${err}`);
       }
     };
     loadScreenshot();
@@ -65,8 +61,10 @@ export default function ScreenshotOverlay() {
     
     try {
       const cropPath = await invoke<string>('crop_screenshot_base64', { x, y, width, height });
+      // 发送路径给主窗口
       const { emit } = await import('@tauri-apps/api/event');
       await emit('screenshot-cropped', { path: cropPath });
+      // 关闭覆盖窗口
       await invoke('finish_screenshot');
     } catch (err) {
       console.error('Crop failed:', err);
@@ -99,16 +97,11 @@ export default function ScreenshotOverlay() {
 
   return (
     <div
-      style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', cursor: 'crosshair', background: '#000', zIndex: 99999 }}
+      style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', background: '#000', zIndex: 99999, cursor: 'crosshair' }}
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
     >
-      {/* 调试信息 */}
-      <div style={{ position: 'absolute', top: 10, left: 10, color: 'white', fontSize: 12, background: 'rgba(0,0,0,0.5)', padding: '4px 8px', borderRadius: 4 }}>
-        {debug}
-      </div>
-
       {/* 截图图片 */}
       {imageBase64 && (
         <img

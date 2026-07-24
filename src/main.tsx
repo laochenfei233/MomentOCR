@@ -1,17 +1,25 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
 import App from "./App";
 import ScreenshotOverlay from "./screens/ScreenshotOverlay";
 import "./index.css";
 
+// 根据窗口标签决定渲染哪个组件
+function getAppComponent() {
+  // 检查 URL 参数来判断窗口类型
+  const params = new URLSearchParams(window.location.search);
+  const windowType = params.get('window');
+  
+  if (windowType === 'screenshot-overlay') {
+    return ScreenshotOverlay;
+  }
+  return App;
+}
+
+const AppComponent = getAppComponent();
+
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
-    <BrowserRouter>
-      <Routes>
-        <Route path="/" element={<App />} />
-        <Route path="/screenshot-overlay" element={<ScreenshotOverlay />} />
-      </Routes>
-    </BrowserRouter>
+    <AppComponent />
   </React.StrictMode>
 );
