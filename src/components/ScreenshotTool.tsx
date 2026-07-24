@@ -1,5 +1,6 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { useScreenshotStore } from '../stores/screenshotStore';
 import RegionSelector from './RegionSelector';
 
@@ -8,7 +9,7 @@ function ScreenshotTool() {
   const [error, setError] = useState<string | null>(null);
   const [showRegionSelector, setShowRegionSelector] = useState(false);
 
-  const handleFullScreen = async () => {
+  const handleFullScreen = useCallback(async () => {
     setCapturing(true);
     setError(null);
     try {
@@ -19,7 +20,16 @@ function ScreenshotTool() {
     } finally {
       setCapturing(false);
     }
-  };
+  }, [setCapturing, setScreenshotPath]);
+
+  useEffect(() => {
+    const unlisten = listen('screenshot-triggered', () => {
+      handleFullScreen();
+    });
+    return () => {
+      unlisten.then(fn => fn());
+    };
+  }, [handleFullScreen]);
 
   const handleRegionSelect = useCallback(async (region: { x: number; y: number; width: number; height: number }) => {
     setShowRegionSelector(false);

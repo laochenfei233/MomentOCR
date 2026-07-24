@@ -57,6 +57,7 @@ async fn translate_ai(api_key: String, text: String, target_lang: String, model:
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             take_screenshot,
             take_screenshot_region,
@@ -65,6 +66,24 @@ pub fn run() {
             translate_google,
             translate_ai
         ])
+        .setup(|app| {
+            use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut};
+
+            let shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyQ);
+            let app_handle = app.handle().clone();
+
+            app.global_shortcut().register(
+                shortcut,
+                move |_app, _shortcut, event| {
+                    if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                        // Trigger screenshot
+                        let _ = app_handle.emit("screenshot-triggered", ());
+                    }
+                },
+            )?;
+
+            Ok(())
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
