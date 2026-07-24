@@ -18,12 +18,15 @@ pub enum OverlayResult {
 impl OverlayManager {
     /// 创建新的覆盖窗口管理器
     pub fn new() -> Self {
-        let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")
-            .unwrap_or_else(|_| ".".to_string());
-        
-        let python_script = std::path::Path::new(&manifest_dir)
-            .join("scripts")
-            .join("screenshot_overlay.py")
+        // 使用硬编码路径，确保运行时能找到脚本
+        let python_script = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|p| p.to_path_buf().join("scripts").join("screenshot_overlay.py")))
+            .unwrap_or_else(|| {
+                // 回退到源代码目录
+                let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
+                std::path::Path::new(&manifest_dir).join("scripts").join("screenshot_overlay.py")
+            })
             .to_string_lossy()
             .to_string();
         
@@ -39,8 +42,9 @@ impl OverlayManager {
             cmd.arg(path);
         }
         
+        // 不要管道stderr，让它输出到控制台以便调试
         cmd.stdout(Stdio::piped());
-        cmd.stderr(Stdio::piped());
+        cmd.stderr(Stdio::inherit());
         
         let mut child = cmd.spawn()?;
         
