@@ -1,109 +1,110 @@
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import { useOcrStore } from '../stores/ocrStore';
 
 function OcrResult() {
   const { isProcessing, result, history } = useOcrStore();
   const [copied, setCopied] = useState(false);
+  const [copyError, setCopyError] = useState(false);
 
-  const handleCopy = async () => {
+  const handleCopy = useCallback(async () => {
     if (!result?.data) return;
-    await navigator.clipboard.writeText(result.data);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
-  };
+    try {
+      await navigator.clipboard.writeText(result.data);
+      setCopied(true);
+      setCopyError(false);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      setCopyError(true);
+      setTimeout(() => setCopyError(false), 2000);
+    }
+  }, [result?.data]);
 
   return (
-    <div className="w-full px-4 py-3">
-      {/* Processing state - Apple style spinner */}
+    <div className="flex flex-col h-full" role="region" aria-label="OCR识别结果">
+      {/* 处理中状态 */}
       {isProcessing && (
-        <div className="flex items-center justify-center gap-2 py-4 animate-fade-in">
-          <svg className="h-4 w-4 animate-spin text-blue-500" viewBox="0 0 24 24" fill="none">
-            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
-            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-          </svg>
-          <span className="text-xs text-gray-500">识别中...</span>
+        <div className="flex items-center justify-center gap-2 py-8">
+          <span className="spinner"></span>
+          <span className="ios-text-body text-gray-500">识别中...</span>
         </div>
       )}
 
-      {/* Result display - Compact card */}
+      {/* 结果显示 */}
       {!isProcessing && result && (
-        <div className="animate-slide-up">
-          <div className="flex items-center justify-between mb-2">
+        <div className="flex flex-col h-full">
+          {/* 结果头部 */}
+          <div className="flex items-center justify-between px-4 py-2 border-b border-gray-100">
             <div className="flex items-center gap-2">
-              <span className="text-xs font-medium text-gray-700">识别结果</span>
+              <span className="ios-text-headline">识别结果</span>
               {result.language && (
-                <span className="px-1.5 py-0.5 text-[10px] font-medium bg-gray-100 text-gray-500 rounded">
+                <span className="ios-badge" aria-label={`语言: ${result.language}`}>
                   {result.language}
                 </span>
               )}
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-3">
               {result.confidence !== undefined && result.confidence > 0 && (
-                <span className="text-[10px] text-gray-400">
+                <span className="ios-text-caption" aria-label={`置信度: ${Math.round(result.confidence * 100)}%`}>
                   {Math.round(result.confidence * 100)}%
                 </span>
               )}
               <button
                 onClick={handleCopy}
-                className="btn-fluid px-2 py-1 text-[10px] font-medium text-blue-500 hover:bg-blue-50 rounded transition-colors"
+                disabled={!result.data}
+                aria-label={copied ? '已复制到剪贴板' : '复制识别结果'}
+                className="ios-btn-text text-sm"
               >
-                {copied ? '✓ 已复制' : '复制'}
+                {copied ? '✓ 已复制' : copyError ? '复制失败' : '复制'}
               </button>
             </div>
           </div>
 
-          <div className="rounded-lg bg-gray-50 border border-gray-100 p-3">
-            <pre className="whitespace-pre-wrap text-xs text-gray-700 font-mono leading-relaxed max-h-32 overflow-y-auto">
+          {/* 结果内容 */}
+          <div className="flex-1 overflow-auto p-4">
+            <pre className="ios-text-body whitespace-pre-wrap font-mono leading-relaxed" aria-label="识别文本内容">
               {result.data}
             </pre>
           </div>
 
-          {/* Error display */}
+          {/* 错误显示 */}
           {!result.success && result.error && (
-            <div className="mt-2 flex items-center gap-1.5 text-[10px] text-red-500">
-              <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-              <span>{result.error}</span>
+            <div className="px-4 py-2 bg-red-50 border-t border-red-100">
+              <p className="ios-text-caption text-red-600">{result.error}</p>
             </div>
           )}
         </div>
       )}
 
-      {/* Empty state */}
+      {/* 空状态 */}
       {!isProcessing && !result && (
-        <div className="py-6 text-center">
-          <div className="inline-flex items-center justify-center w-10 h-10 rounded-full bg-gray-100 mb-2">
-            <svg className="h-5 w-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
-            </svg>
-          </div>
-          <p className="text-xs text-gray-400">截图后显示识别结果</p>
+        <div className="flex flex-col items-center justify-center h-full py-12">
+          <div className="text-4xl mb-3">📋</div>
+          <p className="ios-text-body text-gray-400">截图后显示识别结果</p>
         </div>
       )}
 
-      {/* History - Compact list */}
+      {/* 历史记录 */}
       {history.length > 0 && (
-        <div className="mt-3">
-          <div className="flex items-center justify-between mb-1.5">
-            <span className="text-[10px] font-medium text-gray-400 uppercase tracking-wider">历史</span>
-            <span className="text-[10px] text-gray-300">{history.length}</span>
+        <div className="border-t border-gray-100">
+          <div className="flex items-center justify-between px-4 py-2">
+            <span className="ios-text-caption uppercase tracking-wider">历史</span>
+            <span className="ios-text-caption">{history.length}</span>
           </div>
-          <div className="space-y-1 max-h-24 overflow-y-auto">
+          <div className="max-h-32 overflow-y-auto">
             {history.slice(0, 5).map((entry) => (
               <button
                 key={entry.timestamp}
                 onClick={() => navigator.clipboard.writeText(entry.result.data)}
-                className="btn-fluid w-full text-left px-2 py-1.5 rounded-md hover:bg-gray-50 transition-colors group"
+                className="w-full text-left px-4 py-2 hover:bg-gray-50 transition-colors"
+                aria-label={`${new Date(entry.timestamp).toLocaleTimeString()} - 点击复制`}
               >
                 <div className="flex items-center justify-between">
-                  <span className="text-[10px] text-gray-400">
+                  <span className="ios-text-caption">
                     {new Date(entry.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                   </span>
-                  <span className="text-[10px] text-gray-300 opacity-0 group-hover:opacity-100 transition-opacity">复制</span>
+                  <span className="ios-text-caption text-gray-300">复制</span>
                 </div>
-                <p className="text-xs text-gray-600 truncate mt-0.5">{entry.result.data}</p>
+                <p className="ios-text-caption text-gray-600 truncate mt-1">{entry.result.data}</p>
               </button>
             ))}
           </div>

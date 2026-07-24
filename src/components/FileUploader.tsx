@@ -2,26 +2,53 @@ import { useCallback, useRef, useState } from 'react';
 import { useFileStore } from '../stores/fileStore';
 
 const STATUS_CONFIG = {
-  pending: { label: '待处理', color: 'text-yellow-500', bg: 'bg-yellow-50' },
-  processing: { label: '处理中', color: 'text-blue-500', bg: 'bg-blue-50' },
-  done: { label: '完成', color: 'text-green-500', bg: 'bg-green-50' },
-  error: { label: '失败', color: 'text-red-500', bg: 'bg-red-50' },
+  pending: { label: '待处理', color: 'text-gray-500' },
+  processing: { label: '处理中', color: 'text-blue-500' },
+  done: { label: '完成', color: 'text-green-500' },
+  error: { label: '失败', color: 'text-red-500' },
 };
+
+const ALLOWED_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/bmp'];
+const MAX_FILE_SIZE = 10 * 1024 * 1024;
 
 function FileUploader() {
   const { files, addFiles, removeFile, clearFiles } = useFileStore();
   const inputRef = useRef<HTMLInputElement>(null);
   const [isDragging, setIsDragging] = useState(false);
+  const [validationError, setValidationError] = useState<string | null>(null);
+
+  const validateFiles = useCallback((fileList: FileList | null): File[] => {
+    if (!fileList) return [];
+    const validFiles: File[] = [];
+    const errors: string[] = [];
+
+    Array.from(fileList).forEach((file) => {
+      if (!ALLOWED_TYPES.includes(file.type)) {
+        errors.push(`"${file.name}" 格式不支持`);
+      } else if (file.size > MAX_FILE_SIZE) {
+        errors.push(`"${file.name}" 超过10MB限制`);
+      } else {
+        validFiles.push(file);
+      }
+    });
+
+    if (errors.length > 0) {
+      setValidationError(errors.join(', '));
+      setTimeout(() => setValidationError(null), 3000);
+    }
+
+    return validFiles;
+  }, []);
 
   const handleFiles = useCallback(
     (fileList: FileList | null) => {
-      if (!fileList) return;
-      const newFiles = Array.from(fileList)
-        .filter((f) => f.type.startsWith('image/'))
-        .map((f) => ({ name: f.name, path: f.name }));
-      if (newFiles.length > 0) addFiles(newFiles);
+      const validFiles = validateFiles(fileList);
+      if (validFiles.length > 0) {
+        const newFiles = validFiles.map((f) => ({ name: f.name, path: f.name }));
+        addFiles(newFiles);
+      }
     },
-    [addFiles]
+    [addFiles, validateFiles]
   );
 
   const handleDrop = useCallback(
@@ -43,28 +70,32 @@ function FileUploader() {
   }, []);
 
   return (
-    <div className="w-full max-w-xs animate-slide-up">
-      {/* Drop zone - Apple style */}
+    <div className="flex flex-col gap-3 p-4" role="region" aria-label="文件上传">
+      {/* 拖拽区域 */}
       <div
         onDrop={handleDrop}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onClick={() => inputRef.current?.click()}
-        className={`btn-fluid relative rounded-xl border-2 border-dashed p-6 text-center cursor-pointer
-          transition-all duration-200 ${
-            isDragging
-              ? 'border-blue-400 bg-blue-50/80 scale-[1.02]'
-              : 'border-gray-200 bg-white/50 hover:border-gray-300 hover:bg-gray-50/50'
-          }`}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            inputRef.current?.click();
+          }
+        }}
+        role="button"
+        tabIndex={0}
+        aria-label="点击或拖拽图片文件到此处"
+        className={`ios-dropzone ${isDragging ? 'ios-dropzone-active' : ''}`}
       >
-        <div className={`transition-colors ${isDragging ? 'text-blue-500' : 'text-gray-400'}`}>
-          <svg className="mx-auto h-8 w-8 mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 16V4m0 0L8 8m4-4l4 4" />
-          </svg>
-          <p className="text-xs font-medium text-gray-600">
+        <div className="text-center">
+          <div className="text-3xl mb-2">📁</div>
+          <p className="ios-text-body text-gray-600">
             {isDragging ? '释放以添加文件' : '拖拽图片或点击选择'}
           </p>
-          <p className="text-[10px] text-gray-400 mt-1">支持 JPG, PNG, GIF 等格式</p>
+          <p className="ios-text-caption text-gray-400 mt-1">
+            支持 JPG, PNG, GIF, WebP, BMP (最大10MB)
+          </p>
         </div>
         <input
           ref={inputRef}
@@ -73,44 +104,54 @@ function FileUploader() {
           accept="image/*"
           className="hidden"
           onChange={(e) => handleFiles(e.target.files)}
+          aria-hidden="true"
         />
       </div>
 
-      {/* File list - Compact */}
+      {/* 验证错误 */}
+      {validationError && (
+        <div className="ios-alert ios-alert-warning">
+          <span className="ios-alert-icon">⚠️</span>
+          <p className="ios-text-body">{validationError}</p>
+        </div>
+      )}
+
+      {/* 文件列表 */}
       {files.length > 0 && (
-        <div className="mt-3">
-          <div className="flex items-center justify-between mb-1.5">
-            <span className="text-[10px] font-medium text-gray-400 uppercase tracking-wider">
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <span className="ios-text-caption uppercase tracking-wider text-gray-500">
               文件 ({files.length})
             </span>
             <button
               onClick={clearFiles}
-              className="btn-fluid text-[10px] text-red-400 hover:text-red-500 transition-colors"
+              aria-label="清空所有文件"
+              className="ios-btn-text text-red-500 text-sm"
             >
               清空
             </button>
           </div>
-          <div className="space-y-1 max-h-32 overflow-y-auto">
+          <div className="space-y-1 max-h-40 overflow-y-auto" role="list" aria-label="已添加的文件">
             {files.map((f) => (
               <div
                 key={f.id}
-                className="btn-fluid flex items-center justify-between px-2 py-1.5 rounded-lg bg-white/60 border border-gray-100 group"
+                className="ios-list-item group"
+                role="listitem"
               >
-                <span className="text-xs text-gray-600 truncate flex-1 mr-2" title={f.name}>
+                <span className="ios-text-body text-gray-700 truncate flex-1 mr-2" title={f.name}>
                   {f.name}
                 </span>
-                <div className="flex items-center gap-1.5">
-                  <span className={`text-[10px] ${STATUS_CONFIG[f.status].color}`}>
+                <div className="flex items-center gap-2">
+                  <span className={`ios-text-caption ${STATUS_CONFIG[f.status].color}`}>
                     {STATUS_CONFIG[f.status].label}
                   </span>
                   {f.status === 'pending' && (
                     <button
                       onClick={() => removeFile(f.id)}
-                      className="text-gray-300 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all"
+                      aria-label={`删除 ${f.name}`}
+                      className="ios-btn-icon text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"
                     >
-                      <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                      </svg>
+                      ✕
                     </button>
                   )}
                 </div>

@@ -1,170 +1,206 @@
-import { builtinPlugins } from '../plugins';
+import { useState } from 'react';
 import { useSettingsStore } from '../stores/settingsStore';
-import type { Plugin } from '../types/plugin';
+import { builtinPlugins } from '../plugins';
 
-function PluginConfigForm({ plugin }: { plugin: Plugin }) {
-  const { pluginSettings, setPluginSetting } = useSettingsStore();
-  const schema = plugin.getConfigSchema();
-  const saved = pluginSettings[plugin.metadata.id] ?? {};
+type SettingsTab = 'general' | 'advanced' | 'config' | 'screenshot' | 'extra' | 'hotkey' | 'api' | 'update' | 'about';
 
-  const fields = Object.entries(schema);
-  if (fields.length === 0) return null;
-
-  return (
-    <div className="space-y-2 mt-2">
-      {fields.map(([key, spec]) => {
-        const current = saved[key] ?? spec.default ?? '';
-        const isRequired = !!spec.required;
-
-        if (spec.type === 'boolean') {
-          return (
-            <label key={key} className="flex items-center justify-between py-1">
-              <span className="text-xs text-gray-600">{key}</span>
-              <input
-                type="checkbox"
-                checked={!!current}
-                onChange={(e) => setPluginSetting(plugin.metadata.id, key, e.target.checked)}
-                className="h-4 w-4 rounded border-gray-300 text-blue-500 focus:ring-blue-500"
-              />
-            </label>
-          );
-        }
-
-        return (
-          <div key={key}>
-            <label className="flex items-center gap-1 mb-1">
-              <span className="text-[10px] text-gray-500 uppercase tracking-wider">{key}</span>
-              {isRequired && <span className="text-red-400">*</span>}
-            </label>
-            <input
-              type={spec.type === 'number' ? 'number' : 'text'}
-              value={String(current)}
-              onChange={(e) =>
-                setPluginSetting(
-                  plugin.metadata.id,
-                  key,
-                  spec.type === 'number' ? Number(e.target.value) : e.target.value,
-                )
-              }
-              className="w-full rounded-lg border border-gray-200 bg-white/80 px-2.5 py-1.5 text-xs
-                focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400
-                placeholder:text-gray-300 transition-colors"
-              placeholder={`输入${key}`}
-            />
-          </div>
-        );
-      })}
-    </div>
-  );
-}
+const SETTINGS_TABS: { key: SettingsTab; label: string }[] = [
+  { key: 'general', label: '常规' },
+  { key: 'advanced', label: '高级' },
+  { key: 'config', label: '配置' },
+  { key: 'screenshot', label: '截图' },
+  { key: 'extra', label: '附加' },
+  { key: 'hotkey', label: '热键' },
+  { key: 'api', label: '接口' },
+  { key: 'update', label: '更新' },
+  { key: 'about', label: '关于' },
+];
 
 function Settings() {
+  const [activeTab, setActiveTab] = useState<SettingsTab>('general');
   const {
     activeOcrPlugin,
     activeTranslationPlugin,
-    theme,
     hotkey,
     setActiveOcrPlugin,
     setActiveTranslationPlugin,
-    setTheme,
     setHotkey,
   } = useSettingsStore();
 
   const ocrPlugins = builtinPlugins.filter((p) => p.metadata.type === 'ocr');
   const translationPlugins = builtinPlugins.filter((p) => p.metadata.type === 'translation');
 
-  const selectedOcr = ocrPlugins.find((p) => p.metadata.id === activeOcrPlugin);
-  const selectedTranslation = translationPlugins.find((p) => p.metadata.id === activeTranslationPlugin);
-
   return (
-    <div className="w-full space-y-3 animate-slide-up">
-      {/* OCR Engine Section */}
-      <div className="rounded-xl bg-white/80 border border-gray-100 p-3">
-        <div className="flex items-center justify-between mb-2">
-          <span className="text-xs font-medium text-gray-700">OCR 引擎</span>
-        </div>
-        <select
-          value={activeOcrPlugin}
-          onChange={(e) => setActiveOcrPlugin(e.target.value)}
-          className="w-full rounded-lg border border-gray-200 bg-gray-50/50 px-2.5 py-1.5 text-xs
-            focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400 transition-colors"
-        >
-          {ocrPlugins.map((p) => (
-            <option key={p.metadata.id} value={p.metadata.id}>
-              {p.metadata.name}
-            </option>
-          ))}
-        </select>
-        {selectedOcr && (
-          <>
-            <p className="text-[10px] text-gray-400 mt-1.5">{selectedOcr.metadata.description}</p>
-            <PluginConfigForm plugin={selectedOcr} />
-          </>
-        )}
-      </div>
-
-      {/* Translation Service Section */}
-      <div className="rounded-xl bg-white/80 border border-gray-100 p-3">
-        <div className="flex items-center justify-between mb-2">
-          <span className="text-xs font-medium text-gray-700">翻译服务</span>
-        </div>
-        <select
-          value={activeTranslationPlugin}
-          onChange={(e) => setActiveTranslationPlugin(e.target.value)}
-          className="w-full rounded-lg border border-gray-200 bg-gray-50/50 px-2.5 py-1.5 text-xs
-            focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400 transition-colors"
-        >
-          {translationPlugins.map((p) => (
-            <option key={p.metadata.id} value={p.metadata.id}>
-              {p.metadata.name}
-            </option>
-          ))}
-        </select>
-        {selectedTranslation && (
-          <>
-            <p className="text-[10px] text-gray-400 mt-1.5">{selectedTranslation.metadata.description}</p>
-            <PluginConfigForm plugin={selectedTranslation} />
-          </>
-        )}
-      </div>
-
-      {/* Appearance Section */}
-      <div className="rounded-xl bg-white/80 border border-gray-100 p-3">
-        <div className="flex items-center justify-between mb-2">
-          <span className="text-xs font-medium text-gray-700">外观</span>
-        </div>
-        <div className="flex gap-1 p-0.5 rounded-lg bg-gray-100/80">
-          {(['light', 'dark'] as const).map((t) => (
+    <div className="flex h-full">
+      {/* 左侧导航 */}
+      <div className="w-24 border-r border-gray-200 bg-gray-50">
+        <nav className="py-2">
+          {SETTINGS_TABS.map(({ key, label }) => (
             <button
-              key={t}
-              onClick={() => setTheme(t)}
-              className={`btn-fluid flex-1 rounded-md px-3 py-1.5 text-xs font-medium transition-all ${
-                theme === t
-                  ? 'bg-white text-gray-900 shadow-sm'
-                  : 'text-gray-500 hover:text-gray-700'
+              key={key}
+              onClick={() => setActiveTab(key)}
+              className={`w-full px-3 py-2 text-left text-sm transition-colors ${
+                activeTab === key
+                  ? 'bg-blue-50 text-blue-600 font-medium'
+                  : 'text-gray-700 hover:bg-gray-100'
               }`}
             >
-              {t === 'light' ? '浅色' : '深色'}
+              {label}
             </button>
           ))}
-        </div>
+        </nav>
       </div>
 
-      {/* Hotkey Section */}
-      <div className="rounded-xl bg-white/80 border border-gray-100 p-3">
-        <div className="flex items-center justify-between mb-2">
-          <span className="text-xs font-medium text-gray-700">快捷键</span>
-        </div>
-        <input
-          type="text"
-          value={hotkey}
-          onChange={(e) => setHotkey(e.target.value)}
-          className="w-full rounded-lg border border-gray-200 bg-gray-50/50 px-2.5 py-1.5 text-xs
-            focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400 transition-colors"
-          placeholder="Ctrl+Shift+Q"
-        />
+      {/* 右侧内容 */}
+      <div className="flex-1 overflow-y-auto p-6">
+        {/* 常规设置 */}
+        {activeTab === 'general' && (
+          <div className="space-y-6">
+            <SettingsSection title="启动时">
+              <CheckboxItem label="开机时自动启动" defaultChecked={false} />
+              <CheckboxItem label="以管理员身份运行" defaultChecked={false} />
+              <CheckboxItem label="启动时显示窗口" defaultChecked={true} />
+              <CheckboxItem label="启动时显示工具栏" defaultChecked={true} />
+            </SettingsSection>
+
+            <SettingsSection title="截图时">
+              <CheckboxItem label="截图时启用十字线" defaultChecked={true} />
+              <CheckboxItem label="复制图片和文件" defaultChecked={true} />
+              <CheckboxItem label="截图时启用放大镜" defaultChecked={false} />
+            </SettingsSection>
+
+            <SettingsSection title="识别时">
+              <CheckboxItem label="识别时启用十字线" defaultChecked={false} />
+              <CheckboxItem label="识别时启用放大镜" defaultChecked={true} />
+            </SettingsSection>
+
+            <SettingsSection title="识别后">
+              <CheckboxItem label="识别后文本叠加" defaultChecked={false} />
+              <CheckboxItem label="识别后播放音效" defaultChecked={false} />
+            </SettingsSection>
+          </div>
+        )}
+
+        {/* 热键设置 */}
+        {activeTab === 'hotkey' && (
+          <div className="space-y-6">
+            <SettingsSection title="截图热键">
+              <div className="flex items-center gap-3">
+                <label className="ios-text-body text-gray-700">截图快捷键:</label>
+                <input
+                  type="text"
+                  value={hotkey}
+                  onChange={(e) => setHotkey(e.target.value)}
+                  className="ios-input w-48"
+                  placeholder="Ctrl+Shift+Q"
+                />
+              </div>
+            </SettingsSection>
+          </div>
+        )}
+
+        {/* 接口设置 */}
+        {activeTab === 'api' && (
+          <div className="space-y-6">
+            <SettingsSection title="OCR 引擎">
+              <div className="flex items-center gap-3">
+                <label className="ios-text-body text-gray-700">选择引擎:</label>
+                <select
+                  value={activeOcrPlugin}
+                  onChange={(e) => setActiveOcrPlugin(e.target.value)}
+                  className="ios-select"
+                >
+                  {ocrPlugins.map((p) => (
+                    <option key={p.metadata.id} value={p.metadata.id}>
+                      {p.metadata.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <p className="ios-text-caption text-gray-500 mt-2">
+                {ocrPlugins.find((p) => p.metadata.id === activeOcrPlugin)?.metadata.description}
+              </p>
+            </SettingsSection>
+
+            <SettingsSection title="翻译服务">
+              <div className="flex items-center gap-3">
+                <label className="ios-text-body text-gray-700">选择翻译:</label>
+                <select
+                  value={activeTranslationPlugin}
+                  onChange={(e) => setActiveTranslationPlugin(e.target.value)}
+                  className="ios-select"
+                >
+                  {translationPlugins.map((p) => (
+                    <option key={p.metadata.id} value={p.metadata.id}>
+                      {p.metadata.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <p className="ios-text-caption text-gray-500 mt-2">
+                {translationPlugins.find((p) => p.metadata.id === activeTranslationPlugin)?.metadata.description}
+              </p>
+            </SettingsSection>
+          </div>
+        )}
+
+        {/* 关于 */}
+        {activeTab === 'about' && (
+          <div className="space-y-6">
+            <SettingsSection title="关于须臾OCR">
+              <div className="space-y-2">
+                <p className="ios-text-body text-gray-700">版本: 0.1.0</p>
+                <p className="ios-text-body text-gray-700">构建: 2024.07.24</p>
+                <p className="ios-text-caption text-gray-500 mt-4">
+                  须臾OCR - 智能OCR软件
+                </p>
+                <p className="ios-text-caption text-gray-500">
+                  支持本地OCR引擎、AI大模型、截图识别
+                </p>
+              </div>
+            </SettingsSection>
+          </div>
+        )}
+
+        {/* 其他标签页占位 */}
+        {['advanced', 'config', 'screenshot', 'extra', 'update'].includes(activeTab) && (
+          <div className="flex items-center justify-center h-64">
+            <p className="ios-text-body text-gray-400">设置开发中...</p>
+          </div>
+        )}
       </div>
     </div>
+  );
+}
+
+// 设置区块组件
+function SettingsSection({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <h3 className="ios-text-headline text-gray-900 mb-3">{title}</h3>
+      <div className="ios-card">
+        <div className="space-y-3">
+          {children}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// 复选框项组件
+function CheckboxItem({ label, defaultChecked = false }: { label: string; defaultChecked?: boolean }) {
+  const [checked, setChecked] = useState(defaultChecked);
+  
+  return (
+    <label className="flex items-center gap-3 cursor-pointer">
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(e) => setChecked(e.target.checked)}
+        className="ios-checkbox"
+      />
+      <span className="ios-text-body text-gray-700">{label}</span>
+    </label>
   );
 }
 
