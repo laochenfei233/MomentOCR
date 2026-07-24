@@ -6,68 +6,59 @@ function ScreenshotTool() {
   const { isCapturing, setCapturing, setScreenshotPath } = useScreenshotStore();
   const [error, setError] = useState<string | null>(null);
   const [captureSuccess, setCaptureSuccess] = useState(false);
+  const [showOverlay, setShowOverlay] = useState(false);
+  const [imageBase64, setImageBase64] = useState('');
+  const [selection, setSelection] = useState<{ x: number; y: number; x2: number; y2: number } | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
 
   const handleScreenshot = useCallback(async () => {
     setCapturing(true);
     setError(null);
     try {
-      // 1. 截图并获取文件路径
-      await invoke<string>('start_screenshot');
-      
-      // 2. 隐藏主窗口
-      const { getCurrentWindow } = await import('@tauri-apps/api/window');
-      const mainWindow = getCurrentWindow();
-      await mainWindow.hide();
-      
-      // 3. 等待窗口隐藏
-      await new Promise(resolve => setTimeout(resolve, 300));
-      
-      // 4. 创建全屏覆盖窗口
-      const { WebviewWindow } = await import('@tauri-apps/api/webviewWindow');
-      new WebviewWindow('screenshot-overlay', {
-        url: '/screenshot-overlay',
-        title: '截图',
-        fullscreen: true,
-        alwaysOnTop: true,
-        decorations: false,
-        skipTaskbar: true,
-        visible: true,
-      });
-
-      // 5. 等待窗口加载
-      await new Promise(resolve => setTimeout(resolve, 1500));
-      
-      // 6. 监听截图完成事件
-      const { listen } = await import('@tauri-apps/api/event');
-      const unlistenDone = await listen<{ path: string }>('screenshot-done', async (event) => {
-        setScreenshotPath(event.payload.path);
-        setCaptureSuccess(true);
-        setTimeout(() => setCaptureSuccess(false), 1500);
-        setCapturing(false);
-        await mainWindow.show();
-        await mainWindow.setFocus();
-        unlistenDone();
-        unlistenCancel();
-      });
-
-      const unlistenCancel = await listen('screenshot-cancel', async () => {
-        setCapturing(false);
-        await mainWindow.show();
-        await mainWindow.setFocus();
-        unlistenDone();
-        unlistenCancel();
-      });
-
+      const base64 = await invoke<string>('capture_screen');
+      setImageBase64(base64);
+      setShowOverlay(true);
     } catch (err) {
-      console.error('Screenshot error:', err);
       setError(String(err));
+    } finally {
       setCapturing(false);
-      try {
-        const { getCurrentWindow } = await import('@tauri-apps/api/window');
-        await getCurrentWindow().show();
-      } catch {}
     }
-  }, [setCapturing, setScreenshotPath]);
+  }, [setCapturing]);
+
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    setIsDragging(true);
+    setSelection({ x: e.clientX, y: e.clientY, x2: e.clientX, y2: e.clientY });
+  }, []);
+
+  const handleMouseMove = useCallback((e: React.MouseEvent) => {
+    if (!isDragging) return;
+    setSelection(prev => prev ? { ...prev, x2: e.clientX, y2: e.clientY } : null);
+  }, [isDragging]);
+
+  const handleMouseUp = useCallback(async () => {
+    if (!isDragging || !selection) return;
+    setIsDragging(false);
+    const x = Math.min(selection.x, selection.x2);
+    const y = Math.min(selection.y, selection.y2);
+    const width = Math.abs(selection.x2 - selection.x);
+    const height = Math.abs(selection.y2 - selection.y);
+    setShowOverlay(false);
+    setSelection(null);
+    if (width < 10 || height < 10) return;
+    try {
+      const path = await invoke<string>('crop_screenshot', { x, y, width, height });
+      setScreenshotPath(path);
+      setCaptureSuccess(true);
+      setTimeout(() => setCaptureSuccess(false), 1500);
+    } catch (err) {
+      setError(String(err));
+    }
+  }, [isDragging, selection, setScreenshotPath]);
+
+  const handleCancel = useCallback(() => {
+    setShowOverlay(false);
+    setSelection(null);
+  }, []);
 
   useEffect(() => {
     import('@tauri-apps/api/event').then(({ listen }) => {
@@ -75,6 +66,36 @@ function ScreenshotTool() {
       return () => { unlisten.then((fn: () => void) => fn()); };
     });
   }, [handleScreenshot]);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && showOverlay) handleCancel();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [showOverlay, handleCancel]);
+
+  if (showOverlay && imageBase64) {
+    const rect = selection ? {
+      left: Math.min(selection.x, selection.x2), top: Math.min(selection.y, selection.y2),
+      width: Math.abs(selection.x2 - selection.x), height: Math.abs(selection.y2 - selection.y),
+    } : null;
+
+    return (
+      <div className="screenshot-overlay" onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp}>
+        <img src={`data:image/png;base64,${imageBase64}`} className="screenshot-image" draggable={false} />
+        {rect && rect.width > 0 && rect.height > 0 && (
+          <>
+            <div className="screenshot-selection" style={rect} />
+            <div className="screenshot-size" style={{ left: rect.left + rect.width / 2, top: rect.top - 24 }}>
+              {Math.round(rect.width)} × {Math.round(rect.height)}
+            </div>
+          </>
+        )}
+        {!isDragging && <div className="screenshot-hint">拖拽选择要识别的区域 · ESC 取消</div>}
+      </div>
+    );
+  }
 
   return (
     <div className="p-3">
