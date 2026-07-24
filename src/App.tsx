@@ -1,4 +1,5 @@
 import ScreenshotTool from './components/ScreenshotTool';
+import OcrResult from './components/OcrResult';
 
 function App() {
   return (
@@ -9,6 +10,7 @@ function App() {
         <div className="mt-8">
           <ScreenshotTool />
         </div>
+        <OcrResult />
       </div>
     </div>
   );
