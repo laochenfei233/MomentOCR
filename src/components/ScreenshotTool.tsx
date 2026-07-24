@@ -1,7 +1,6 @@
 import { useState, useCallback, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useScreenshotStore } from '../stores/screenshotStore';
 import { convertFileSrc } from '@tauri-apps/api/core';
 
@@ -18,13 +17,6 @@ function ScreenshotTool() {
     setCapturing(true);
     setError(null);
     try {
-      // 先隐藏窗口
-      const appWindow = getCurrentWindow();
-      await appWindow.hide();
-      
-      // 等待窗口隐藏
-      await new Promise(resolve => setTimeout(resolve, 300));
-      
       // 全屏截图
       const path = await invoke<string>('take_screenshot');
       setFullScreenImage(convertFileSrc(path));
@@ -32,11 +24,6 @@ function ScreenshotTool() {
     } catch (err) {
       setError(String(err));
       setCapturing(false);
-      // 出错时显示窗口
-      try {
-        const appWindow = getCurrentWindow();
-        await appWindow.show();
-      } catch {}
     }
   }, [setCapturing]);
 
@@ -64,11 +51,6 @@ function ScreenshotTool() {
 
     if (width < 10 || height < 10) {
       setCapturing(false);
-      // 显示窗口
-      try {
-        const appWindow = getCurrentWindow();
-        await appWindow.show();
-      } catch {}
       return;
     }
 
@@ -83,23 +65,13 @@ function ScreenshotTool() {
       setError(String(err));
     } finally {
       setCapturing(false);
-      // 显示窗口
-      try {
-        const appWindow = getCurrentWindow();
-        await appWindow.show();
-      } catch {}
     }
   }, [selection, isDragging, setCapturing, setScreenshotPath]);
 
-  const handleCancel = useCallback(async () => {
+  const handleCancel = useCallback(() => {
     setShowOverlay(false);
     setSelection(null);
     setCapturing(false);
-    // 显示窗口
-    try {
-      const appWindow = getCurrentWindow();
-      await appWindow.show();
-    } catch {}
   }, [setCapturing]);
 
   useEffect(() => {
