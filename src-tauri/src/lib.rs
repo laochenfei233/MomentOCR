@@ -38,10 +38,9 @@ async fn start_screenshot_overlay(app: tauri::AppHandle) -> Result<String, Strin
     let app_handle = app.clone();
     let screenshot_path = path.to_string_lossy().to_string();
     
-    tokio::spawn(async move {
+    std::thread::spawn(move || {
         match manager.start_overlay(Some(&screenshot_path)) {
             Ok(OverlayResult::Ocr { path: _, x, y, width, height }) => {
-                // 裁剪选区
                 if let Some(screenshot_path) = ScreenshotManager::get_last_screenshot() {
                     if let Ok(data) = std::fs::read(&screenshot_path) {
                         if let Ok(cropped) = ScreenshotManager::crop_region(&data, x as u32, y as u32, width, height) {
