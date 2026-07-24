@@ -13,10 +13,21 @@ fn take_screenshot() -> Result<String, String> {
 }
 
 #[tauri::command]
-fn take_screenshot_region(x: i32, y: i32, width: u32, height: u32) -> Result<String, String> {
-    let data = ScreenshotManager::capture_region(x, y, width, height).map_err(|e| e.to_string())?;
-    let path = ScreenshotManager::generate_temp_path("screenshot_region");
-    ScreenshotManager::save_to_file(&data, &path).map_err(|e| e.to_string())?;
+fn take_screenshot_base64() -> Result<String, String> {
+    let data = ScreenshotManager::capture_full_screen().map_err(|e| e.to_string())?;
+    use base64::Engine;
+    Ok(base64::engine::general_purpose::STANDARD.encode(&data))
+}
+
+#[tauri::command]
+fn crop_screenshot(full_screen_base64: String, x: i32, y: i32, width: u32, height: u32) -> Result<String, String> {
+    use base64::Engine;
+    let data = base64::engine::general_purpose::STANDARD.decode(&full_screen_base64)
+        .map_err(|e| e.to_string())?;
+    let cropped = ScreenshotManager::crop_region(&data, x, y, width, height)
+        .map_err(|e| e.to_string())?;
+    let path = ScreenshotManager::generate_temp_path("crop");
+    ScreenshotManager::save_to_file(&cropped, &path).map_err(|e| e.to_string())?;
     Ok(path.to_string_lossy().to_string())
 }
 
@@ -61,7 +72,8 @@ pub fn run() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             take_screenshot,
-            take_screenshot_region,
+            take_screenshot_base64,
+            crop_screenshot,
             ocr_openai,
             ocr_ollama,
             translate_google,

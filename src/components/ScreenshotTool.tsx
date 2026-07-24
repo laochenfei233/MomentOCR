@@ -1,42 +1,32 @@
 import { useState, useCallback, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useScreenshotStore } from '../stores/screenshotStore';
-import { convertFileSrc } from '@tauri-apps/api/core';
 
 function ScreenshotTool() {
   const { isCapturing, setCapturing, setScreenshotPath } = useScreenshotStore();
   const [error, setError] = useState<string | null>(null);
   const [captureSuccess, setCaptureSuccess] = useState(false);
   const [showOverlay, setShowOverlay] = useState(false);
-  const [fullScreenImage, setFullScreenImage] = useState<string | null>(null);
+  const [fullScreenBase64, setFullScreenBase64] = useState<string | null>(null);
   const [selection, setSelection] = useState<{ x: number; y: number; x2: number; y2: number } | null>(null);
   const [isDragging, setIsDragging] = useState(false);
 
   const handleScreenshot = useCallback(async () => {
     setCapturing(true);
     setError(null);
+    setShowOverlay(false);
+    
     try {
-      // 1. 隐藏应用窗口
-      const appWindow = getCurrentWindow();
-      await appWindow.hide();
-      
-      // 2. 等待窗口完全隐藏
-      await new Promise(resolve => setTimeout(resolve, 500));
-      
-      // 3. 全屏截图（此时屏幕上是其他应用/桌面）
-      const path = await invoke<string>('take_screenshot');
-      setFullScreenImage(convertFileSrc(path));
+      // 全屏截图，返回 base64
+      const base64 = await invoke<string>('take_screenshot_base64');
+      console.log('Screenshot taken, base64 length:', base64.length);
+      setFullScreenBase64(base64);
       setShowOverlay(true);
     } catch (err) {
       console.error('Screenshot error:', err);
       setError(String(err));
       setCapturing(false);
-      // 出错时恢复窗口
-      try {
-        await getCurrentWindow().show();
-      } catch {}
     }
   }, [setCapturing]);
 
@@ -51,7 +41,7 @@ function ScreenshotTool() {
   }, [isDragging, selection]);
 
   const handleMouseUp = useCallback(async () => {
-    if (!selection || !isDragging) return;
+    if (!selection || !isDragging || !fullScreenBase64) return;
     setIsDragging(false);
 
     const x = Math.min(selection.x, selection.x2);
@@ -62,45 +52,35 @@ function ScreenshotTool() {
     setShowOverlay(false);
     setSelection(null);
 
-    // 如果选区太小，取消
     if (width < 10 || height < 10) {
       setCapturing(false);
-      try {
-        await getCurrentWindow().show();
-      } catch {}
       return;
     }
 
     try {
-      // 4. 裁剪选区
-      const path = await invoke<string>('take_screenshot_region', {
+      // 从全屏截图中裁剪选区
+      const path = await invoke<string>('crop_screenshot', {
+        fullScreenBase64,
         x, y, width, height
       });
+      console.log('Region cropped:', path);
       setScreenshotPath(path);
       setCaptureSuccess(true);
       setTimeout(() => setCaptureSuccess(false), 1500);
     } catch (err) {
-      console.error('Region capture error:', err);
+      console.error('Crop error:', err);
       setError(String(err));
     } finally {
       setCapturing(false);
-      // 5. 恢复应用窗口
-      try {
-        await getCurrentWindow().show();
-      } catch {}
     }
-  }, [selection, isDragging, setCapturing, setScreenshotPath]);
+  }, [selection, isDragging, fullScreenBase64, setCapturing, setScreenshotPath]);
 
-  const handleCancel = useCallback(async () => {
+  const handleCancel = useCallback(() => {
     setShowOverlay(false);
     setSelection(null);
     setCapturing(false);
-    try {
-      await getCurrentWindow().show();
-    } catch {}
   }, [setCapturing]);
 
-  // 监听全局快捷键
   useEffect(() => {
     const unlisten = listen('screenshot-triggered', () => {
       handleScreenshot();
@@ -110,7 +90,6 @@ function ScreenshotTool() {
     };
   }, [handleScreenshot]);
 
-  // ESC 取消
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && showOverlay) {
@@ -121,8 +100,7 @@ function ScreenshotTool() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [showOverlay, handleCancel]);
 
-  // 全屏截图覆盖层 - 用户在这里选择区域
-  if (showOverlay && fullScreenImage) {
+  if (showOverlay && fullScreenBase64) {
     const rect = selection ? {
       left: Math.min(selection.x, selection.x2),
       top: Math.min(selection.y, selection.y2),
@@ -137,7 +115,11 @@ function ScreenshotTool() {
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
       >
-        <img src={fullScreenImage} className="screenshot-image" draggable={false} />
+        <img 
+          src={`data:image/png;base64,${fullScreenBase64}`} 
+          className="screenshot-image" 
+          draggable={false} 
+        />
         
         {rect && rect.width > 0 && rect.height > 0 && (
           <div className="screenshot-selection" style={rect}>
@@ -154,7 +136,6 @@ function ScreenshotTool() {
     );
   }
 
-  // 主界面按钮
   return (
     <div className="p-3">
       <button
