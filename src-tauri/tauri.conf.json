@@ -13,9 +13,11 @@
     "withGlobalTauri": false,
     "windows": [
       {
-        "title": "MomentOCR",
-        "width": 800,
-        "height": 600
+        "title": "须臾OCR",
+        "width": 1000,
+        "height": 700,
+        "minWidth": 600,
+        "minHeight": 400
       }
     ],
     "security": {

@@ -28,10 +28,10 @@ function App() {
     <div className="app-container">
       {/* 标题栏 */}
       <header className="title-bar">
-        <span className="text-[10px] text-gray-400">耗时：</span>
-        <span className="text-[10px] text-gray-500">须臾OCR</span>
+        <span className="text-xs text-gray-400">耗时：</span>
+        <span className="text-xs text-gray-600 ml-2">须臾OCR</span>
         <div className="flex-1"></div>
-        <div className="flex items-center">
+        <div className="flex items-center gap-0.5">
           <button className="win-btn" title="置顶">📌</button>
           <button className="win-btn" onClick={(e) => { e.stopPropagation(); setShowMenu(!showMenu); }}>☰</button>
           
@@ -54,16 +54,16 @@ function App() {
 
       {/* 工具栏 */}
       <div className="toolbar">
-        <button className="tool-icon">T</button>
-        <button className="tool-icon">⊞</button>
-        <button className="tool-icon">⋮</button>
-        <button className="tool-icon">M</button>
-        <button className="tool-icon">✂</button>
-        <button className="tool-icon">🔍</button>
-        <button className="tool-icon">≡</button>
-        <button className="tool-icon">✎</button>
-        <button className="tool-icon">;</button>
-        <button className="tool-icon">♪</button>
+        <button className="tool-icon" title="文本">T</button>
+        <button className="tool-icon" title="表格">⊞</button>
+        <button className="tool-icon" title="竖线">⋮</button>
+        <button className="tool-icon" title="Markdown">M</button>
+        <button className="tool-icon" title="剪切">✂</button>
+        <button className="tool-icon" title="搜索">🔍</button>
+        <button className="tool-icon" title="列表">≡</button>
+        <button className="tool-icon" title="编辑">✎</button>
+        <button className="tool-icon" title="符号">;</button>
+        <button className="tool-icon" title="声音">♪</button>
         <div className="flex-1"></div>
         <button className="tool-icon active">docx</button>
         <button className="tool-icon">图</button>
@@ -109,7 +109,7 @@ function App() {
 
       {/* 状态栏 */}
       <footer className="status-bar">
-        <span className="text-[10px] text-gray-400">字数：0</span>
+        <span className="text-xs text-gray-400">字数：0</span>
         <div className="flex items-center gap-1">
           <button className="status-icon">中英</button>
           <button className="status-icon">+</button>
