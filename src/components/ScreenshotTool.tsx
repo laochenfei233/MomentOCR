@@ -1,10 +1,12 @@
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useScreenshotStore } from '../stores/screenshotStore';
+import RegionSelector from './RegionSelector';
 
 function ScreenshotTool() {
   const { isCapturing, setCapturing, screenshotPath, setScreenshotPath } = useScreenshotStore();
   const [error, setError] = useState<string | null>(null);
+  const [showRegionSelector, setShowRegionSelector] = useState(false);
 
   const handleFullScreen = async () => {
     setCapturing(true);
@@ -19,15 +21,16 @@ function ScreenshotTool() {
     }
   };
 
-  const handleRegion = async () => {
+  const handleRegionSelect = useCallback(async (region: { x: number; y: number; width: number; height: number }) => {
+    setShowRegionSelector(false);
     setCapturing(true);
     setError(null);
     try {
       const path = await invoke<string>('take_screenshot_region', {
-        x: 0,
-        y: 0,
-        width: 800,
-        height: 600,
+        x: region.x,
+        y: region.y,
+        width: region.width,
+        height: region.height,
       });
       setScreenshotPath(path);
     } catch (err) {
@@ -35,21 +38,29 @@ function ScreenshotTool() {
     } finally {
       setCapturing(false);
     }
-  };
+  }, [setCapturing, setScreenshotPath]);
+
+  const handleRegionCancel = useCallback(() => {
+    setShowRegionSelector(false);
+  }, []);
 
   return (
     <div className="flex flex-col items-center gap-4">
+      {showRegionSelector && (
+        <RegionSelector onSelect={handleRegionSelect} onCancel={handleRegionCancel} />
+      )}
+
       <div className="flex gap-3">
         <button
           onClick={handleFullScreen}
-          disabled={isCapturing}
+          disabled={isCapturing || showRegionSelector}
           className="rounded-lg bg-blue-600 px-6 py-3 text-white font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
         >
           {isCapturing ? '截图中...' : '全屏截图'}
         </button>
         <button
-          onClick={handleRegion}
-          disabled={isCapturing}
+          onClick={() => setShowRegionSelector(true)}
+          disabled={isCapturing || showRegionSelector}
           className="rounded-lg bg-emerald-600 px-6 py-3 text-white font-medium hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
         >
           {isCapturing ? '截图中...' : '区域截图'}
