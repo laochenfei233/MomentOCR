@@ -1,10 +1,10 @@
-import { Plugin, PluginInput, PluginOutput, PluginType } from '../types/plugin';
+import { Plugin, PluginConfig, PluginInput, PluginOutput, PluginType } from '../types/plugin';
 
 export class PluginManager {
   private plugins: Map<string, Plugin> = new Map();
   private activePlugins: Map<PluginType, Plugin> = new Map();
 
-  async register(plugin: Plugin, config: Record<string, unknown>): Promise<void> {
+  async register(plugin: Plugin, config: PluginConfig): Promise<void> {
     await plugin.init(config);
     this.plugins.set(plugin.metadata.id, plugin);
   }

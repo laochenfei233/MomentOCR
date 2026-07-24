@@ -4,7 +4,7 @@ export type PluginConfig = Record<string, string | number | boolean>;
 
 export interface PluginInput {
   type: 'image' | 'text';
-  data: string | Buffer;
+  data: string | Uint8Array;
   language?: string;
 }
 

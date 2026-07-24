@@ -11,10 +11,8 @@ export class GoogleTranslatePlugin implements Plugin {
   };
 
   private initialized = false;
-  private config: PluginConfig = {};
 
-  async init(config: PluginConfig): Promise<void> {
-    this.config = config;
+  async init(_config: PluginConfig): Promise<void> {
     this.initialized = true;
   }
 
