@@ -228,8 +228,9 @@ class ScreenshotOverlay(QWidget):
         print(json.dumps(result))
         sys.stdout.flush()
         
-        # 关闭窗口
+        # 关闭窗口并退出
         self.close()
+        QApplication.quit()
     
     def cancel(self):
         """取消"""
@@ -237,6 +238,7 @@ class ScreenshotOverlay(QWidget):
         print(json.dumps(result))
         sys.stdout.flush()
         self.close()
+        QApplication.quit()
     
     def closeEvent(self, event):
         """关闭事件"""

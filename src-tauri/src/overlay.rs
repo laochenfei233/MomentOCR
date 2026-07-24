@@ -1,5 +1,6 @@
 use std::process::{Command, Stdio};
 use std::io::{BufRead, BufReader};
+use std::time::Duration;
 use anyhow::Result;
 
 /// 截图覆盖窗口管理器
@@ -17,7 +18,6 @@ pub enum OverlayResult {
 impl OverlayManager {
     /// 创建新的覆盖窗口管理器
     pub fn new() -> Self {
-        // 获取Python脚本路径 - 从源代码目录查找
         let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")
             .unwrap_or_else(|_| ".".to_string());
         
@@ -50,7 +50,16 @@ impl OverlayManager {
         
         let mut result = Ok(OverlayResult::Cancel);
         
+        // 设置超时时间（60秒）
+        let timeout = Duration::from_secs(60);
+        let start = std::time::Instant::now();
+        
         for line in reader.lines() {
+            // 检查超时
+            if start.elapsed() > timeout {
+                break;
+            }
+            
             let line = line?;
             if line.trim().is_empty() {
                 continue;
@@ -69,18 +78,19 @@ impl OverlayManager {
                         let height = json_result["height"].as_u64().unwrap_or(0) as u32;
                         
                         result = Ok(OverlayResult::Ocr { path, x, y, width, height });
-                        break; // 收到结果后退出循环
+                        break;
                     }
                     "cancel" => {
                         result = Ok(OverlayResult::Cancel);
-                        break; // 收到结果后退出循环
+                        break;
                     }
                     _ => {}
                 }
             }
         }
         
-        // 等待进程结束并清理
+        // 强制终止进程
+        let _ = child.kill();
         let _ = child.wait();
         
         result
