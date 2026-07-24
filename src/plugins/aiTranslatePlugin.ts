@@ -12,8 +12,10 @@ export class AiTranslatePlugin implements Plugin {
   };
 
   private initialized = false;
+  private config: PluginConfig = {};
 
-  async init(_config: PluginConfig): Promise<void> {
+  async init(config: PluginConfig): Promise<void> {
+    this.config = config;
     this.initialized = true;
   }
 
