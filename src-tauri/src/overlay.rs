@@ -48,6 +48,8 @@ impl OverlayManager {
         let stdout = child.stdout.take().unwrap();
         let reader = BufReader::new(stdout);
         
+        let mut result = Ok(OverlayResult::Cancel);
+        
         for line in reader.lines() {
             let line = line?;
             if line.trim().is_empty() {
@@ -55,28 +57,33 @@ impl OverlayManager {
             }
             
             // 解析JSON结果
-            if let Ok(result) = serde_json::from_str::<serde_json::Value>(&line) {
-                let action = result["action"].as_str().unwrap_or("");
+            if let Ok(json_result) = serde_json::from_str::<serde_json::Value>(&line) {
+                let action = json_result["action"].as_str().unwrap_or("");
                 
                 match action {
                     "ocr" => {
-                        let path = result["path"].as_str().unwrap_or("").to_string();
-                        let x = result["x"].as_i64().unwrap_or(0) as i32;
-                        let y = result["y"].as_i64().unwrap_or(0) as i32;
-                        let width = result["width"].as_u64().unwrap_or(0) as u32;
-                        let height = result["height"].as_u64().unwrap_or(0) as u32;
+                        let path = json_result["path"].as_str().unwrap_or("").to_string();
+                        let x = json_result["x"].as_i64().unwrap_or(0) as i32;
+                        let y = json_result["y"].as_i64().unwrap_or(0) as i32;
+                        let width = json_result["width"].as_u64().unwrap_or(0) as u32;
+                        let height = json_result["height"].as_u64().unwrap_or(0) as u32;
                         
-                        return Ok(OverlayResult::Ocr { path, x, y, width, height });
+                        result = Ok(OverlayResult::Ocr { path, x, y, width, height });
+                        break; // 收到结果后退出循环
                     }
                     "cancel" => {
-                        return Ok(OverlayResult::Cancel);
+                        result = Ok(OverlayResult::Cancel);
+                        break; // 收到结果后退出循环
                     }
                     _ => {}
                 }
             }
         }
         
-        Ok(OverlayResult::Cancel)
+        // 等待进程结束并清理
+        let _ = child.wait();
+        
+        result
     }
 }
 
