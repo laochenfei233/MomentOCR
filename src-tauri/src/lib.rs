@@ -21,11 +21,9 @@ fn capture_screen() -> Result<String, String> {
     Ok(base64::engine::general_purpose::STANDARD.encode(&data))
 }
 
-/// 启动截图覆盖窗口 - 同步调用，Python窗口显示时主线程阻塞但用户在操作Python窗口
+/// 启动截图覆盖窗口 - 异步，不阻塞主线程
 #[tauri::command]
-fn start_screenshot_overlay() -> Result<String, String> {
-    let manager = OverlayManager::new();
-    
+async fn start_screenshot_overlay(app: tauri::AppHandle) -> Result<String, String> {
     // 1. 截图
     let data = ScreenshotManager::capture_full_screen()
         .map_err(|e| e.to_string())?;
@@ -34,24 +32,40 @@ fn start_screenshot_overlay() -> Result<String, String> {
         .map_err(|e| e.to_string())?;
     ScreenshotManager::set_last_screenshot(path.to_string_lossy().to_string());
     
-    // 2. 启动Python覆盖窗口（同步，阻塞直到用户操作完成）
-    match manager.start_overlay(Some(path.to_string_lossy().as_ref())) {
-        Ok(OverlayResult::Ocr { path: _, x, y, width, height }) => {
-            // 3. 裁剪选区
-            let screenshot_path = ScreenshotManager::get_last_screenshot()
-                .ok_or("No screenshot available")?;
-            let data = std::fs::read(&screenshot_path).map_err(|e| e.to_string())?;
-            let cropped = ScreenshotManager::crop_region(&data, x as u32, y as u32, width, height)
-                .map_err(|e| e.to_string())?;
-            let crop_path = ScreenshotManager::generate_temp_path("crop");
-            ScreenshotManager::save_to_file(&cropped, &crop_path).map_err(|e| e.to_string())?;
-            Ok(crop_path.to_string_lossy().to_string())
+    // 2. 在异步运行时中启动Python窗口
+    let app_handle = app.clone();
+    let screenshot_path = path.to_string_lossy().to_string();
+    
+    tauri::async_runtime::spawn(async move {
+        let manager = OverlayManager::new();
+        
+        // 在当前线程中同步调用Python（Python窗口会阻塞此线程）
+        let result = tokio::task::spawn_blocking(move || {
+            manager.start_overlay(Some(&screenshot_path))
+        }).await;
+        
+        match result {
+            Ok(Ok(OverlayResult::Ocr { path: _, x, y, width, height })) => {
+                if let Some(screenshot_path) = ScreenshotManager::get_last_screenshot() {
+                    if let Ok(data) = std::fs::read(&screenshot_path) {
+                        if let Ok(cropped) = ScreenshotManager::crop_region(&data, x as u32, y as u32, width, height) {
+                            let crop_path = ScreenshotManager::generate_temp_path("crop");
+                            let _ = ScreenshotManager::save_to_file(&cropped, &crop_path);
+                            let _ = app_handle.emit("screenshot-cropped", crop_path.to_string_lossy().to_string());
+                        }
+                    }
+                }
+            }
+            Ok(Ok(OverlayResult::Cancel)) | Ok(Err(_)) => {
+                let _ = app_handle.emit("screenshot-cancel", ());
+            }
+            Err(_) => {
+                let _ = app_handle.emit("screenshot-error", "Thread failed".to_string());
+            }
         }
-        Ok(OverlayResult::Cancel) => {
-            Err("Cancelled".to_string())
-        }
-        Err(e) => Err(e.to_string()),
-    }
+    });
+    
+    Ok("started".to_string())
 }
 
 /// 裁剪选区并返回路径
