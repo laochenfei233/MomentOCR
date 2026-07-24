@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { useScreenshotStore } from '../stores/screenshotStore';
 
 function ScreenshotTool() {
@@ -11,27 +12,43 @@ function ScreenshotTool() {
     setCapturing(true);
     setError(null);
     try {
-      // 调用Python覆盖窗口
-      const path = await invoke<string>('start_screenshot_overlay');
-      setScreenshotPath(path);
-      setCaptureSuccess(true);
-      setTimeout(() => setCaptureSuccess(false), 1500);
+      await invoke<string>('start_screenshot_overlay');
     } catch (err) {
-      // 用户取消不算错误
       if (err !== 'Cancelled') {
         setError(String(err));
+        setCapturing(false);
       }
-    } finally {
-      setCapturing(false);
     }
-  }, [setCapturing, setScreenshotPath]);
+  }, [setCapturing]);
 
   useEffect(() => {
-    import('@tauri-apps/api/event').then(({ listen }) => {
-      const unlisten = listen('screenshot-triggered', () => handleScreenshot());
-      return () => { unlisten.then((fn: () => void) => fn()); };
+    const unlisten1 = listen<string>('screenshot-cropped', (event) => {
+      setScreenshotPath(event.payload);
+      setCaptureSuccess(true);
+      setCapturing(false);
+      setTimeout(() => setCaptureSuccess(false), 1500);
     });
-  }, [handleScreenshot]);
+
+    const unlisten2 = listen('screenshot-cancel', () => {
+      setCapturing(false);
+    });
+
+    const unlisten3 = listen<string>('screenshot-error', (event) => {
+      setError(event.payload);
+      setCapturing(false);
+    });
+
+    const unlisten4 = listen('screenshot-triggered', () => {
+      handleScreenshot();
+    });
+
+    return () => {
+      unlisten1.then(fn => fn());
+      unlisten2.then(fn => fn());
+      unlisten3.then(fn => fn());
+      unlisten4.then(fn => fn());
+    };
+  }, [handleScreenshot, setCapturing, setScreenshotPath]);
 
   return (
     <div className="p-3">
