@@ -55,47 +55,44 @@ function App() {
     );
   }
 
-  const showSidebar = tab === 'file';
+  const showSidebar = tab === 'file' || tab === 'screenshot';
 
   return (
     <div className="app-container">
-      {/* 标题栏 */}
+      {/* 标题栏 - 合并为一行 */}
       <header className="title-bar">
-        <span className="text-sm font-medium" style={{ color: '#1c1c1e' }}>须臾OCR</span>
+        <button className="tool-icon" title="截图识别" onClick={() => { setTab('screenshot'); setShowSettings(false); }}>📷</button>
+        <button className="tool-icon" title="文件识别" onClick={() => { setTab('file'); setShowSettings(false); }}>📁</button>
         <div className="flex-1" />
-        <div className="flex items-center gap-0.5">
-          <button className="win-btn" onClick={(e) => { e.stopPropagation(); setShowMenu(!showMenu); }}>☰</button>
-          {showMenu && (
-            <div className="menu-dropdown" onClick={(e) => e.stopPropagation()}>
-              <button className="menu-item" onClick={() => { setTab('screenshot'); setShowSettings(true); setShowMenu(false); }}>设置</button>
-              <button className="menu-item" onClick={() => setShowMenu(false)}>同步信息</button>
-              <button className="menu-item" onClick={() => setShowMenu(false)}>检测更新</button>
-              <div className="menu-divider" />
-              <button className="menu-item" style={{ color: '#FF3B30' }} onClick={handleExit}>退出</button>
-            </div>
-          )}
-        </div>
+        <button className="tool-icon" title="复制" onClick={handleCopy}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+        </button>
+        <button className="tool-icon" title="翻译" onClick={handleTranslate}>译</button>
+        <button className="tool-icon" title="设置" onClick={() => setShowSettings(true)}>⚙</button>
+        <button className="win-btn" onClick={(e) => { e.stopPropagation(); setShowMenu(!showMenu); }}>☰</button>
+        {showMenu && (
+          <div className="menu-dropdown" onClick={(e) => e.stopPropagation()}>
+            <button className="menu-item" onClick={() => { setShowSettings(true); setShowMenu(false); }}>设置</button>
+            <button className="menu-item" onClick={() => setShowMenu(false)}>同步信息</button>
+            <button className="menu-item" onClick={() => setShowMenu(false)}>检测更新</button>
+            <div className="menu-divider" />
+            <button className="menu-item" style={{ color: '#FF3B30' }} onClick={handleExit}>退出</button>
+          </div>
+        )}
       </header>
 
-      {/* 工具栏 - 合并截图和文件功能 */}
-      <div className="toolbar">
-        <button className={`tool-icon ${tab === 'screenshot' && !showSettings ? 'active' : ''}`} title="截图识别" onClick={() => { setTab('screenshot'); setShowSettings(false); }}>📷</button>
-        <button className={`tool-icon ${tab === 'file' && !showSettings ? 'active' : ''}`} title="文件识别" onClick={() => { setTab('file'); setShowSettings(false); }}>📁</button>
-        <div className="flex-1" />
-        <button className="tool-icon" title="复制" onClick={handleCopy}>复制</button>
-        <button className="tool-icon" title="翻译" onClick={handleTranslate}>译</button>
-      </div>
-
       <main className="main-content">
-        {/* 左侧面板 - 仅文件模式显示 */}
+        {/* 左侧面板 */}
         {showSidebar && (
           <div className="side-panel">
-            <div className="side-content"><FileUploader /></div>
+            <div className="side-content">
+              {tab === 'screenshot' ? <ScreenshotTool /> : <FileUploader />}
+            </div>
           </div>
         )}
         {/* 右侧 - 主内容区 */}
         <div className="result-panel">
-          {showSettings ? <Settings /> : tab === 'screenshot' ? <ScreenshotTool /> : <OcrResult onTextChange={setOcrText} />}
+          {showSettings ? <Settings /> : <OcrResult onTextChange={setOcrText} />}
         </div>
       </main>
 
