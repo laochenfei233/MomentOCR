@@ -13,7 +13,6 @@ function ScreenshotTool() {
   const [captureSuccess, setCaptureSuccess] = useState(false);
   const [lastImagePath, setLastImagePath] = useState<string | null>(null);
 
-  // OCR识别
   const doOcr = useCallback(async (imagePath: string) => {
     setProcessing(true);
     try {
@@ -73,9 +72,7 @@ function ScreenshotTool() {
       setCaptureSuccess(true);
       setTimeout(() => setCaptureSuccess(false), 1500);
     } catch (err) {
-      if (err !== 'Cancelled') {
-        setError(String(err));
-      }
+      if (err !== 'Cancelled') setError(String(err));
     }
   }, [lastImagePath]);
 
@@ -87,29 +84,13 @@ function ScreenshotTool() {
       setCaptureSuccess(true);
       setCapturing(false);
       setTimeout(() => setCaptureSuccess(false), 1500);
-      // 自动调用OCR
+      // 自动调用OCR识别
       await doOcr(imagePath);
     });
-
-    const unlisten2 = listen('screenshot-cancel', () => {
-      setCapturing(false);
-    });
-
-    const unlisten3 = listen<string>('screenshot-error', (event) => {
-      setError(event.payload);
-      setCapturing(false);
-    });
-
-    const unlisten4 = listen('screenshot-triggered', () => {
-      handleScreenshot();
-    });
-
-    return () => {
-      unlisten1.then(fn => fn());
-      unlisten2.then(fn => fn());
-      unlisten3.then(fn => fn());
-      unlisten4.then(fn => fn());
-    };
+    const unlisten2 = listen('screenshot-cancel', () => setCapturing(false));
+    const unlisten3 = listen<string>('screenshot-error', (event) => { setError(event.payload); setCapturing(false); });
+    const unlisten4 = listen('screenshot-triggered', () => handleScreenshot());
+    return () => { unlisten1.then(fn => fn()); unlisten2.then(fn => fn()); unlisten3.then(fn => fn()); unlisten4.then(fn => fn()); };
   }, [handleScreenshot, setCapturing, setScreenshotPath, doOcr]);
 
   return (
@@ -120,27 +101,12 @@ function ScreenshotTool() {
       
       {lastImagePath && (
         <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-          <button onClick={handleCopyImage} style={{
-            flex: 1, padding: '8px 12px', fontSize: 12, background: '#F2F2F7',
-            border: '0.5px solid #D1D1D6', borderRadius: 8, cursor: 'pointer',
-            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6
-          }}>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <rect x="9" y="9" width="13" height="13" rx="2"/>
-              <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/>
-            </svg>
+          <button onClick={handleCopyImage} style={{ flex: 1, padding: '6px 10px', fontSize: 12, background: '#F2F2F7', border: '0.5px solid #D1D1D6', borderRadius: 6, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
             复制
           </button>
-          <button onClick={handleSaveImage} style={{
-            flex: 1, padding: '8px 12px', fontSize: 12, background: '#F2F2F7',
-            border: '0.5px solid #D1D1D6', borderRadius: 8, cursor: 'pointer',
-            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6
-          }}>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
-              <polyline points="7 10 12 15 17 10"/>
-              <line x1="12" y1="15" x2="12" y2="3"/>
-            </svg>
+          <button onClick={handleSaveImage} style={{ flex: 1, padding: '6px 10px', fontSize: 12, background: '#F2F2F7', border: '0.5px solid #D1D1D6', borderRadius: 6, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
             保存
           </button>
         </div>
