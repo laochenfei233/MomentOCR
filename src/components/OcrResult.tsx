@@ -1,5 +1,10 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { useOcrStore } from '../stores/ocrStore';
+
+interface OcrResultProps {
+  onTextChange?: (text: string) => void;
+  searchText?: string;
+}
 
 const Icons = {
   copy: (
@@ -31,9 +36,16 @@ const Icons = {
   ),
 };
 
-function OcrResult() {
+function OcrResult({ onTextChange, searchText = '' }: OcrResultProps) {
   const { isProcessing, result, history } = useOcrStore();
   const [copied, setCopied] = useState(false);
+
+  // 通知父组件文本变化
+  useEffect(() => {
+    if (onTextChange && result?.data) {
+      onTextChange(searchText ? result.data : result.data);
+    }
+  }, [result, onTextChange, searchText]);
 
   const handleCopy = useCallback(async () => {
     if (!result?.data) return;
