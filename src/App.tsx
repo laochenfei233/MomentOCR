@@ -46,7 +46,7 @@ function App() {
     return (
       <div className="app-container">
         <header className="title-bar" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <button className="win-btn" onClick={() => setShowSettings(false)} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}>← 返回</button>
+          <button onClick={() => setShowSettings(false)} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13, background: 'none', border: 'none', cursor: 'pointer', color: '#007AFF', padding: '4px 8px', borderRadius: 6, whiteSpace: 'nowrap' }}>← 返回</button>
           <span className="text-sm font-medium" style={{ color: '#1c1c1e' }}>设置</span>
           <div style={{ width: 60 }} />
         </header>
