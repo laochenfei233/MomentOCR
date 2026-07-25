@@ -45,10 +45,10 @@ function App() {
   if (showSettings) {
     return (
       <div className="app-container">
-        <header className="title-bar" style={{ display: 'flex', justifyContent: 'space-between' }}>
-          <button className="win-btn" onClick={() => setShowSettings(false)}>← 返回</button>
+        <header className="title-bar" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <button className="win-btn" onClick={() => setShowSettings(false)} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}>← 返回</button>
           <span className="text-sm font-medium" style={{ color: '#1c1c1e' }}>设置</span>
-          <div style={{ width: 32 }} />
+          <div style={{ width: 60 }} />
         </header>
         <main style={{ flex: 1, overflow: 'hidden' }}><Settings /></main>
       </div>
