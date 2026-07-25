@@ -356,6 +356,8 @@ body {
 .tool-btn:hover { background: #F2F2F7; color: #1c1c1e; }
 .tool-btn:active { background: #E5E5EA; transform: scale(0.97); }
 .tool-btn.active { background: rgba(0, 122, 255, 0.12); color: #007AFF; }
+
+.spinner-sm {
   display: inline-block;
   width: 12px;
   height: 12px;
