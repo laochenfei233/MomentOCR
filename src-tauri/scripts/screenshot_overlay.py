@@ -1,12 +1,13 @@
 """
 须臾OCR 截图覆盖窗口 - PyQt5实现
+支持多显示器截图
 """
 
 import sys
 import json
 import os
 from PyQt5.QtWidgets import QApplication, QWidget, QPushButton, QHBoxLayout
-from PyQt5.QtCore import Qt, QPoint
+from PyQt5.QtCore import Qt, QPoint, QRect
 from PyQt5.QtGui import QPainter, QColor, QPixmap, QPen
 
 
@@ -20,11 +21,26 @@ class ScreenshotOverlay(QWidget):
             Qt.Tool
         )
         
-        screen = QApplication.primaryScreen()
-        self.setGeometry(screen.geometry())
+        # 获取所有屏幕的虚拟桌面区域
+        app = QApplication.instance()
+        screens = app.screens()
         
-        # 截取屏幕
-        self.screenshot_pixmap = screen.grabWindow(0)
+        # 计算所有屏幕的总区域（虚拟桌面）
+        virtual_geometry = screens[0].virtualGeometry()
+        for screen in screens[1:]:
+            virtual_geometry = virtual_geometry.united(screen.virtualGeometry())
+        
+        # 设置窗口覆盖整个虚拟桌面
+        self.setGeometry(virtual_geometry)
+        
+        # 截取整个虚拟桌面（所有屏幕）
+        self.screenshot_pixmap = app.primaryScreen().grabWindow(
+            0, 
+            virtual_geometry.x(), 
+            virtual_geometry.y(), 
+            virtual_geometry.width(), 
+            virtual_geometry.height()
+        )
         
         # 选区状态
         self.selection_start = None
@@ -37,24 +53,24 @@ class ScreenshotOverlay(QWidget):
     def paintEvent(self, event):
         painter = QPainter(self)
         
-        # 1. 先绘制截图
+        # 1. 绘制截图（所有屏幕）
         painter.drawPixmap(0, 0, self.screenshot_pixmap)
         
-        # 2. 绘制半透明遮罩覆盖整个屏幕
+        # 2. 绘制半透明遮罩
         painter.setBrush(QColor(0, 0, 0, 80))
         painter.setPen(Qt.NoPen)
         painter.drawRect(0, 0, self.width(), self.height())
         
-        # 3. 如果有选区，在选区内重新绘制截图（清除遮罩效果）
+        # 3. 选区内重新绘制截图
         if self.selection_start and self.selection_end:
             rect = self.get_selection_rect()
             if rect:
                 x, y, w, h = rect
                 
-                # 在选区内重新绘制原始截图
+                # 重新绘制选区内的截图
                 painter.drawPixmap(x, y, self.screenshot_pixmap, x, y, w, h)
                 
-                # 绘制选区边框
+                # 选区边框
                 pen = QPen(QColor(0, 122, 255), 2)
                 painter.setPen(pen)
                 painter.setBrush(Qt.NoBrush)
@@ -146,8 +162,12 @@ class ScreenshotOverlay(QWidget):
         layout.addWidget(ocr_btn)
         layout.addWidget(cancel_btn)
         
+        # 工具栏位置（确保在屏幕内）
         toolbar_x = x + w // 2 - 65
         toolbar_y = y + h + 8
+        # 如果工具栏超出窗口底部，放到选区上方
+        if toolbar_y + 36 > self.height():
+            toolbar_y = y - 44
         self.toolbar.move(toolbar_x, toolbar_y)
         self.toolbar.show()
     
