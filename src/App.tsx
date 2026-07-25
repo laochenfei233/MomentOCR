@@ -21,11 +21,6 @@ function App() {
     }
   }, [showMenu]);
 
-  const handleTabChange = (newTab: Tab) => {
-    setTab(newTab);
-    setShowSettings(false);
-  };
-
   const handleCopy = async () => {
     if (!ocrText) return;
     try { await navigator.clipboard.writeText(ocrText); } catch {}
@@ -46,7 +41,7 @@ function App() {
     } catch {}
   };
 
-  // 设置页面全屏显示
+  // 设置页面
   if (showSettings) {
     return (
       <div className="app-container">
@@ -55,12 +50,12 @@ function App() {
           <span className="text-sm font-medium" style={{ color: '#1c1c1e' }}>设置</span>
           <div style={{ width: 32 }} />
         </header>
-        <main style={{ flex: 1, overflow: 'hidden' }}>
-          <Settings />
-        </main>
+        <main style={{ flex: 1, overflow: 'hidden' }}><Settings /></main>
       </div>
     );
   }
+
+  const showSidebar = tab === 'file';
 
   return (
     <div className="app-container">
@@ -72,36 +67,35 @@ function App() {
           <button className="win-btn" onClick={(e) => { e.stopPropagation(); setShowMenu(!showMenu); }}>☰</button>
           {showMenu && (
             <div className="menu-dropdown" onClick={(e) => e.stopPropagation()}>
-              <button className="menu-item" onClick={() => { setShowSettings(true); setShowMenu(false); }}>软件设置</button>
+              <button className="menu-item" onClick={() => { setTab('screenshot'); setShowSettings(true); setShowMenu(false); }}>设置</button>
               <button className="menu-item" onClick={() => setShowMenu(false)}>同步信息</button>
               <button className="menu-item" onClick={() => setShowMenu(false)}>检测更新</button>
-              <button className="menu-item" onClick={() => setShowMenu(false)}>问题反馈</button>
               <div className="menu-divider" />
-              <button className="menu-item" style={{ color: '#FF3B30' }} onClick={handleExit}>退出程序</button>
+              <button className="menu-item" style={{ color: '#FF3B30' }} onClick={handleExit}>退出</button>
             </div>
           )}
         </div>
       </header>
 
+      {/* 工具栏 - 合并截图和文件功能 */}
       <div className="toolbar">
-        <button className="tool-icon" title="复制" onClick={handleCopy}>⧉</button>
-        <button className="tool-icon" title="翻译" onClick={handleTranslate}>译</button>
+        <button className={`tool-icon ${tab === 'screenshot' && !showSettings ? 'active' : ''}`} title="截图识别" onClick={() => { setTab('screenshot'); setShowSettings(false); }}>📷</button>
+        <button className={`tool-icon ${tab === 'file' && !showSettings ? 'active' : ''}`} title="文件识别" onClick={() => { setTab('file'); setShowSettings(false); }}>📁</button>
         <div className="flex-1" />
-        <button className="tool-icon" title="设置" onClick={() => setShowSettings(true)}>⚙</button>
+        <button className="tool-icon" title="复制" onClick={handleCopy}>复制</button>
+        <button className="tool-icon" title="翻译" onClick={handleTranslate}>译</button>
       </div>
 
       <main className="main-content">
-        <div className="side-panel">
-          <div className="tab-bar">
-            <button onClick={() => handleTabChange('screenshot')} className={`tab-btn ${tab === 'screenshot' && !showSettings ? 'active' : ''}`}>截图识别</button>
-            <button onClick={() => handleTabChange('file')} className={`tab-btn ${tab === 'file' && !showSettings ? 'active' : ''}`}>文件识别</button>
+        {/* 左侧面板 - 仅文件模式显示 */}
+        {showSidebar && (
+          <div className="side-panel">
+            <div className="side-content"><FileUploader /></div>
           </div>
-          <div className="side-content">
-            {tab === 'screenshot' ? <ScreenshotTool /> : <FileUploader />}
-          </div>
-        </div>
+        )}
+        {/* 右侧 - 主内容区 */}
         <div className="result-panel">
-          <OcrResult onTextChange={setOcrText} />
+          {showSettings ? <Settings /> : tab === 'screenshot' ? <ScreenshotTool /> : <OcrResult onTextChange={setOcrText} />}
         </div>
       </main>
 
@@ -109,7 +103,6 @@ function App() {
         <span className="text-xs" style={{ color: '#8E8E93' }}>字数：{ocrText.length}</span>
         <div className="flex items-center gap-1">
           <button className="status-icon" onClick={handleCopy}>复制</button>
-          <button className="status-icon" onClick={handleTranslate}>翻译</button>
           <button className="status-icon" onClick={() => setShowSettings(true)}>⚙</button>
         </div>
       </footer>
