@@ -181,6 +181,48 @@ function Settings() {
                   ))}
                 </select>
               </div>
+              <p style={{ fontSize: 12, color: '#8E8E93', marginTop: 8 }}>
+                {translationPlugins.find((p) => p.metadata.id === activeTranslationPlugin)?.metadata.description}
+              </p>
+              {activeTranslationPlugin === 'ai-translate' && (
+                <PluginApiKeyConfig pluginId="ai-translate" fields={[{ key: 'apiKey', label: 'API Key', required: true }, { key: 'model', label: '模型', default: 'gpt-4o' }]} />
+              )}
+            </SettingsCard>
+
+            <SettingsCard title="大模型 OCR">
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <label style={{ fontSize: 13, color: '#1c1c1e' }}>选择模型:</label>
+                <select
+                  value={activeOcrPlugin === 'openai-vision' || activeOcrPlugin === 'local-llm' ? activeOcrPlugin : ''}
+                  onChange={(e) => setActiveOcrPlugin(e.target.value)}
+                  style={{ padding: '6px 10px', fontSize: 13, border: '0.5px solid #D1D1D6', borderRadius: 8, background: '#F2F2F7', outline: 'none' }}
+                >
+                  <option value="">未选择</option>
+                  <option value="openai-vision">OpenAI Vision</option>
+                  <option value="local-llm">本地 LLM (Ollama)</option>
+                </select>
+              </div>
+              <p style={{ fontSize: 12, color: '#8E8E93', marginTop: 8 }}>使用AI大模型进行文字识别，精度更高</p>
+              {activeOcrPlugin === 'openai-vision' && (
+                <PluginApiKeyConfig pluginId="openai-vision" fields={[
+                  { key: 'apiKey', label: 'API Key', required: true },
+                  { key: 'model', label: '模型', default: 'gpt-4o' },
+                  { key: 'maxTokens', label: '最大Token数', default: '1024' }
+                ]} />
+              )}
+              {activeOcrPlugin === 'local-llm' && (
+                <div style={{ marginTop: 12 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
+                    <label style={{ fontSize: 13, color: '#1c1c1e' }}>Ollama 地址:</label>
+                    <input type="text" defaultValue="http://localhost:11434" style={{ padding: '6px 10px', fontSize: 13, border: '0.5px solid #D1D1D6', borderRadius: 8, background: '#F2F2F7', outline: 'none', width: 220 }} />
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                    <label style={{ fontSize: 13, color: '#1c1c1e' }}>模型名称:</label>
+                    <input type="text" defaultValue="llava" style={{ padding: '6px 10px', fontSize: 13, border: '0.5px solid #D1D1D6', borderRadius: 8, background: '#F2F2F7', outline: 'none', width: 220 }} />
+                  </div>
+                  <p style={{ fontSize: 11, color: '#AEAEB2', marginTop: 8 }}>需要先安装并运行 Ollama: https://ollama.com</p>
+                </div>
+              )}
             </SettingsCard>
           </div>
         )}
@@ -239,6 +281,31 @@ function CheckboxItem({ label, checked: defaultChecked = false }: { label: strin
         style={{ width: 18, height: 18, accentColor: '#007AFF', cursor: 'pointer' }} />
       <span style={{ fontSize: 13, color: '#1c1c1e' }}>{label}</span>
     </label>
+  );
+}
+
+// 插件 API Key 配置组件
+function PluginApiKeyConfig({ pluginId, fields }: { pluginId: string; fields: { key: string; label: string; required?: boolean; default?: string }[] }) {
+  const { pluginSettings, setPluginSetting } = useSettingsStore();
+  const settings = pluginSettings[pluginId] || {};
+
+  return (
+    <div style={{ marginTop: 12, padding: 12, background: '#F2F2F7', borderRadius: 10 }}>
+      {fields.map((field) => (
+        <div key={field.key} style={{ marginBottom: 8 }}>
+          <label style={{ fontSize: 12, color: '#636366', marginBottom: 4, display: 'block' }}>
+            {field.label} {field.required && <span style={{ color: '#FF3B30' }}>*</span>}
+          </label>
+          <input
+            type={field.key === 'maxTokens' ? 'number' : 'text'}
+            value={(settings[field.key] as string) || field.default || ''}
+            onChange={(e) => setPluginSetting(pluginId, field.key, e.target.value)}
+            placeholder={field.default || ''}
+            style={{ width: '100%', padding: '6px 10px', fontSize: 13, border: '0.5px solid #D1D1D6', borderRadius: 8, background: '#FFFFFF', outline: 'none' }}
+          />
+        </div>
+      ))}
+    </div>
   );
 }
 
