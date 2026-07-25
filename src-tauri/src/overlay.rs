@@ -3,6 +3,37 @@ use std::io::{BufRead, BufReader};
 use std::time::Duration;
 use anyhow::Result;
 
+/// 查找脚本文件路径
+pub fn find_script(filename: &str) -> String {
+    // 尝试1: 硬编码路径（开发环境）
+    let hardcoded = format!("C:\\Users\\chenfei\\Documents\\GitHub\\MomentOCR\\src-tauri\\scripts\\{}", filename);
+    if std::path::Path::new(&hardcoded).exists() {
+        return hardcoded;
+    }
+    
+    // 尝试2: CARGO_MANIFEST_DIR
+    if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
+        let path = std::path::Path::new(&manifest_dir)
+            .join("scripts")
+            .join(filename);
+        if path.exists() {
+            return path.to_string_lossy().to_string();
+        }
+    }
+    
+    // 尝试3: 可执行文件目录
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            let path = exe_dir.join("scripts").join(filename);
+            if path.exists() {
+                return path.to_string_lossy().to_string();
+            }
+        }
+    }
+    
+    filename.to_string()
+}
+
 pub struct OverlayManager {
     python_script: String,
 }
@@ -20,33 +51,7 @@ impl OverlayManager {
     }
     
     fn find_python_script() -> String {
-        // 尝试1: 硬编码路径（开发环境）
-        let hardcoded = "C:\\Users\\chenfei\\Documents\\GitHub\\MomentOCR\\src-tauri\\scripts\\screenshot_overlay.py";
-        if std::path::Path::new(hardcoded).exists() {
-            return hardcoded.to_string();
-        }
-        
-        // 尝试2: CARGO_MANIFEST_DIR
-        if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
-            let path = std::path::Path::new(&manifest_dir)
-                .join("scripts")
-                .join("screenshot_overlay.py");
-            if path.exists() {
-                return path.to_string_lossy().to_string();
-            }
-        }
-        
-        // 尝试3: 可执行文件目录
-        if let Ok(exe_path) = std::env::current_exe() {
-            if let Some(exe_dir) = exe_path.parent() {
-                let path = exe_dir.join("scripts").join("screenshot_overlay.py");
-                if path.exists() {
-                    return path.to_string_lossy().to_string();
-                }
-            }
-        }
-        
-        "screenshot_overlay.py".to_string()
+        super::overlay::find_script("screenshot_overlay.py")
     }
     
     pub fn start_overlay(&self) -> Result<OverlayResult> {

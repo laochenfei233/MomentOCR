@@ -12,7 +12,6 @@ function ScreenshotTool() {
   const [error, setError] = useState<string | null>(null);
   const [captureSuccess, setCaptureSuccess] = useState(false);
 
-  // OCR识别函数
   const doOcr = useCallback(async (imagePath: string) => {
     setProcessing(true);
     try {
@@ -36,7 +35,7 @@ function ScreenshotTool() {
         
         ocrResult = await invoke<string>('ocr_ollama', { endpoint, model, imagePath });
       } else if (activeOcrPlugin === 'paddle-ocr') {
-        ocrResult = 'PaddleOCR需要下载模型，暂未实现';
+        ocrResult = await invoke<string>('ocr_paddleocr', { imagePath });
       } else {
         ocrResult = `未知的OCR引擎: ${activeOcrPlugin}`;
       }
@@ -81,7 +80,6 @@ function ScreenshotTool() {
       setCapturing(false);
       setTimeout(() => setCaptureSuccess(false), 1500);
       
-      // 自动调用OCR识别
       await doOcr(imagePath);
     });
 

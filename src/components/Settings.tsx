@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { useSettingsStore } from '../stores/settingsStore';
 import { builtinPlugins } from '../plugins';
 
@@ -18,6 +19,9 @@ const SETTINGS_TABS: { key: SettingsTab; label: string }[] = [
 
 function Settings() {
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
+  const [paddleocrInstalled, setPaddleocrInstalled] = useState<boolean | null>(null);
+  const [installing, setInstalling] = useState(false);
+  const [installMsg, setInstallMsg] = useState<string | null>(null);
   const {
     activeOcrPlugin,
     activeTranslationPlugin,
@@ -30,6 +34,40 @@ function Settings() {
   const ocrPlugins = builtinPlugins.filter((p) => p.metadata.type === 'ocr');
   const translationPlugins = builtinPlugins.filter((p) => p.metadata.type === 'translation');
 
+  // 检查PaddleOCR安装状态
+  const checkPaddleOcr = async () => {
+    try {
+      const installed = await invoke<boolean>('check_paddleocr');
+      setPaddleocrInstalled(installed);
+    } catch {
+      setPaddleocrInstalled(false);
+    }
+  };
+
+  // 安装PaddleOCR
+  const handleInstallPaddleOcr = async () => {
+    setInstalling(true);
+    setInstallMsg(null);
+    try {
+      const msg = await invoke<string>('install_paddleocr');
+      setInstallMsg(msg);
+      setPaddleocrInstalled(true);
+    } catch (err) {
+      setInstallMsg(`安装失败: ${err}`);
+      setPaddleocrInstalled(false);
+    } finally {
+      setInstalling(false);
+    }
+  };
+
+  // 进入API标签页时检查PaddleOCR
+  const handleTabChange = (tab: SettingsTab) => {
+    setActiveTab(tab);
+    if (tab === 'api' && paddleocrInstalled === null) {
+      checkPaddleOcr();
+    }
+  };
+
   return (
     <div className="flex h-full">
       {/* 左侧导航 */}
@@ -38,7 +76,7 @@ function Settings() {
           {SETTINGS_TABS.map(({ key, label }) => (
             <button
               key={key}
-              onClick={() => setActiveTab(key)}
+              onClick={() => handleTabChange(key)}
               className={`w-full px-3 py-2 text-left text-sm transition-colors ${
                 activeTab === key
                   ? 'bg-blue-50 text-blue-600 font-medium'
@@ -120,6 +158,37 @@ function Settings() {
               <p className="ios-text-caption text-gray-500 mt-2">
                 {ocrPlugins.find((p) => p.metadata.id === activeOcrPlugin)?.metadata.description}
               </p>
+
+              {/* PaddleOCR 安装状态 */}
+              {activeOcrPlugin === 'paddle-ocr' && (
+                <div className="mt-4 p-3 bg-gray-50 rounded-lg">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-gray-700">
+                      PaddleOCR 状态: {
+                        paddleocrInstalled === null ? '检查中...' :
+                        paddleocrInstalled ? '✅ 已安装' : '❌ 未安装'
+                      }
+                    </span>
+                    {!paddleocrInstalled && (
+                      <button
+                        onClick={handleInstallPaddleOcr}
+                        disabled={installing}
+                        className="px-3 py-1.5 bg-blue-500 text-white text-xs rounded hover:bg-blue-600 disabled:opacity-50"
+                      >
+                        {installing ? '安装中...' : '安装 PaddleOCR'}
+                      </button>
+                    )}
+                  </div>
+                  {installMsg && (
+                    <p className="text-xs text-gray-500 mt-2">{installMsg}</p>
+                  )}
+                  {paddleocrInstalled && (
+                    <p className="text-xs text-gray-400 mt-1">
+                      PaddleOCR 已就绪，可直接使用截图识别功能
+                    </p>
+                  )}
+                </div>
+              )}
             </SettingsSection>
 
             <SettingsSection title="翻译服务">

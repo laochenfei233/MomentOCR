@@ -1,11 +1,12 @@
 mod api;
 mod screenshot;
 mod overlay;
+mod paddleocr;
 
 use overlay::{OverlayManager, OverlayResult};
 use tauri::Emitter;
 
-/// 启动截图覆盖窗口 - 异步，不阻塞主线程
+/// 启动截图覆盖窗口
 #[tauri::command]
 async fn start_screenshot_overlay(app: tauri::AppHandle) -> Result<String, String> {
     let app_handle = app.clone();
@@ -36,6 +37,40 @@ async fn start_screenshot_overlay(app: tauri::AppHandle) -> Result<String, Strin
     Ok("started".to_string())
 }
 
+/// OCR识别 - PaddleOCR
+#[tauri::command]
+async fn ocr_paddleocr(image_path: String) -> Result<String, String> {
+    let result = tokio::task::spawn_blocking(move || {
+        paddleocr::recognize(&image_path)
+    }).await;
+    
+    match result {
+        Ok(Ok(text)) => Ok(text),
+        Ok(Err(e)) => Err(e.to_string()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// 检查PaddleOCR是否已安装
+#[tauri::command]
+fn check_paddleocr() -> bool {
+    paddleocr::check_installed()
+}
+
+/// 安装PaddleOCR
+#[tauri::command]
+async fn install_paddleocr() -> Result<String, String> {
+    let result = tokio::task::spawn_blocking(|| {
+        paddleocr::install()
+    }).await;
+    
+    match result {
+        Ok(Ok(msg)) => Ok(msg),
+        Ok(Err(e)) => Err(e.to_string()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 #[tauri::command]
 async fn ocr_openai(api_key: String, image_path: String, model: String, max_tokens: u32) -> Result<String, String> {
     let image_base64 = screenshot::ScreenshotManager::image_to_base64(&image_path).map_err(|e| e.to_string())?;
@@ -64,6 +99,7 @@ pub fn run() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             start_screenshot_overlay,
+            ocr_paddleocr, check_paddleocr, install_paddleocr,
             ocr_openai, ocr_ollama, translate_google, translate_ai
         ])
         .setup(|app| {
