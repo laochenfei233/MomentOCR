@@ -1,13 +1,12 @@
 """
 须臾OCR 截图覆盖窗口 - PyQt5实现
-Python自己截图+显示+选区+裁剪，一步到位
 """
 
 import sys
 import json
 import os
 from PyQt5.QtWidgets import QApplication, QWidget, QPushButton, QHBoxLayout
-from PyQt5.QtCore import Qt, QPoint, QRect
+from PyQt5.QtCore import Qt, QPoint
 from PyQt5.QtGui import QPainter, QColor, QPixmap, QPen
 
 
@@ -15,18 +14,16 @@ class ScreenshotOverlay(QWidget):
     def __init__(self):
         super().__init__()
         
-        # 无边框 + 置顶 + 不在任务栏
         self.setWindowFlags(
             Qt.FramelessWindowHint |
             Qt.WindowStaysOnTopHint |
             Qt.Tool
         )
         
-        # 获取屏幕尺寸并设置全屏
         screen = QApplication.primaryScreen()
         self.setGeometry(screen.geometry())
         
-        # 用Qt原生API截取屏幕（最快）
+        # 截取屏幕
         self.screenshot_pixmap = screen.grabWindow(0)
         
         # 选区状态
@@ -40,24 +37,22 @@ class ScreenshotOverlay(QWidget):
     def paintEvent(self, event):
         painter = QPainter(self)
         
-        # 绘制截图
+        # 1. 先绘制截图
         painter.drawPixmap(0, 0, self.screenshot_pixmap)
         
-        # 绘制半透明遮罩
+        # 2. 绘制半透明遮罩覆盖整个屏幕
         painter.setBrush(QColor(0, 0, 0, 80))
         painter.setPen(Qt.NoPen)
         painter.drawRect(0, 0, self.width(), self.height())
         
-        # 绘制选区
+        # 3. 如果有选区，在选区内重新绘制截图（清除遮罩效果）
         if self.selection_start and self.selection_end:
             rect = self.get_selection_rect()
             if rect:
                 x, y, w, h = rect
                 
-                # 清除选区内遮罩（显示原始截图）
-                painter.setCompositionMode(QPainter.CompositionMode_Clear)
-                painter.drawRect(x, y, w, h)
-                painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
+                # 在选区内重新绘制原始截图
+                painter.drawPixmap(x, y, self.screenshot_pixmap, x, y, w, h)
                 
                 # 绘制选区边框
                 pen = QPen(QColor(0, 122, 255), 2)
@@ -69,7 +64,7 @@ class ScreenshotOverlay(QWidget):
                 painter.setPen(QColor(255, 255, 255))
                 painter.drawText(x + w // 2 - 30, y - 8, f"{w} x {h}")
         
-        # 提示文字
+        # 4. 提示文字
         if not self.is_selecting and not self.selection_start:
             painter.setPen(QColor(255, 255, 255))
             painter.drawText(self.width() // 2 - 120, self.height() // 2, "拖拽选择要识别的区域 · ESC 取消")
@@ -171,7 +166,6 @@ class ScreenshotOverlay(QWidget):
         print(json.dumps(result))
         sys.stdout.flush()
         
-        # 退出
         QApplication.quit()
     
     def cancel(self):
