@@ -2,65 +2,33 @@ mod api;
 mod screenshot;
 mod overlay;
 
-use screenshot::ScreenshotManager;
 use overlay::{OverlayManager, OverlayResult};
 use tauri::Emitter;
-
-/// 截图并返回 base64
-#[tauri::command]
-fn capture_screen() -> Result<String, String> {
-    let data = ScreenshotManager::capture_full_screen()
-        .map_err(|e| e.to_string())?;
-    
-    let path = ScreenshotManager::generate_temp_path("screenshot");
-    ScreenshotManager::save_to_file(&data, &path)
-        .map_err(|e| e.to_string())?;
-    ScreenshotManager::set_last_screenshot(path.to_string_lossy().to_string());
-    
-    use base64::Engine;
-    Ok(base64::engine::general_purpose::STANDARD.encode(&data))
-}
 
 /// 启动截图覆盖窗口 - 异步，不阻塞主线程
 #[tauri::command]
 async fn start_screenshot_overlay(app: tauri::AppHandle) -> Result<String, String> {
-    // 1. 截图
-    let data = ScreenshotManager::capture_full_screen()
-        .map_err(|e| e.to_string())?;
-    let path = ScreenshotManager::generate_temp_path("screenshot");
-    ScreenshotManager::save_to_file(&data, &path)
-        .map_err(|e| e.to_string())?;
-    ScreenshotManager::set_last_screenshot(path.to_string_lossy().to_string());
-    
-    // 2. 在异步运行时中启动Python窗口
     let app_handle = app.clone();
-    let screenshot_path = path.to_string_lossy().to_string();
     
     tauri::async_runtime::spawn(async move {
         let manager = OverlayManager::new();
         
-        // 在当前线程中同步调用Python（Python窗口会阻塞此线程）
         let result = tokio::task::spawn_blocking(move || {
-            manager.start_overlay(Some(&screenshot_path))
+            manager.start_overlay()
         }).await;
         
         match result {
-            Ok(Ok(OverlayResult::Ocr { path: _, x, y, width, height })) => {
-                if let Some(screenshot_path) = ScreenshotManager::get_last_screenshot() {
-                    if let Ok(data) = std::fs::read(&screenshot_path) {
-                        if let Ok(cropped) = ScreenshotManager::crop_region(&data, x as u32, y as u32, width, height) {
-                            let crop_path = ScreenshotManager::generate_temp_path("crop");
-                            let _ = ScreenshotManager::save_to_file(&cropped, &crop_path);
-                            let _ = app_handle.emit("screenshot-cropped", crop_path.to_string_lossy().to_string());
-                        }
-                    }
-                }
+            Ok(Ok(OverlayResult::Ocr { path })) => {
+                let _ = app_handle.emit("screenshot-cropped", path);
             }
-            Ok(Ok(OverlayResult::Cancel)) | Ok(Err(_)) => {
+            Ok(Ok(OverlayResult::Cancel)) => {
                 let _ = app_handle.emit("screenshot-cancel", ());
             }
-            Err(_) => {
-                let _ = app_handle.emit("screenshot-error", "Thread failed".to_string());
+            Ok(Err(e)) => {
+                let _ = app_handle.emit("screenshot-error", e.to_string());
+            }
+            Err(e) => {
+                let _ = app_handle.emit("screenshot-error", e.to_string());
             }
         }
     });
@@ -68,28 +36,15 @@ async fn start_screenshot_overlay(app: tauri::AppHandle) -> Result<String, Strin
     Ok("started".to_string())
 }
 
-/// 裁剪选区并返回路径
-#[tauri::command]
-fn crop_screenshot(x: u32, y: u32, width: u32, height: u32) -> Result<String, String> {
-    let screenshot_path = ScreenshotManager::get_last_screenshot()
-        .ok_or("No screenshot available")?;
-    let data = std::fs::read(&screenshot_path).map_err(|e| e.to_string())?;
-    let cropped = ScreenshotManager::crop_region(&data, x, y, width, height)
-        .map_err(|e| e.to_string())?;
-    let crop_path = ScreenshotManager::generate_temp_path("crop");
-    ScreenshotManager::save_to_file(&cropped, &crop_path).map_err(|e| e.to_string())?;
-    Ok(crop_path.to_string_lossy().to_string())
-}
-
 #[tauri::command]
 async fn ocr_openai(api_key: String, image_path: String, model: String, max_tokens: u32) -> Result<String, String> {
-    let image_base64 = api::image_to_base64(&image_path).map_err(|e| e.to_string())?;
+    let image_base64 = screenshot::ScreenshotManager::image_to_base64(&image_path).map_err(|e| e.to_string())?;
     api::call_openai_vision(&api_key, &image_base64, &model, max_tokens).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 async fn ocr_ollama(endpoint: String, model: String, image_path: String) -> Result<String, String> {
-    let image_base64 = api::image_to_base64(&image_path).map_err(|e| e.to_string())?;
+    let image_base64 = screenshot::ScreenshotManager::image_to_base64(&image_path).map_err(|e| e.to_string())?;
     api::call_ollama(&endpoint, &model, &image_base64).await.map_err(|e| e.to_string())
 }
 
@@ -108,7 +63,7 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
-            capture_screen, start_screenshot_overlay, crop_screenshot,
+            start_screenshot_overlay,
             ocr_openai, ocr_ollama, translate_google, translate_ai
         ])
         .setup(|app| {
