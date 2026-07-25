@@ -3,29 +3,61 @@ import { useOcrStore } from '../stores/ocrStore';
 
 interface OcrResultProps {
   onTextChange?: (text: string) => void;
-  searchText?: string;
 }
 
-function OcrResult({ onTextChange, searchText = '' }: OcrResultProps) {
+function OcrResult({ onTextChange }: OcrResultProps) {
   const { isProcessing, result, history } = useOcrStore();
   const [copied, setCopied] = useState(false);
+  const [editableText, setEditableText] = useState('');
 
+  // 当结果变化时更新可编辑文本
   useEffect(() => {
-    if (onTextChange && result?.data) {
-      onTextChange(result.data);
+    if (result?.data) {
+      setEditableText(result.data);
+      if (onTextChange) onTextChange(result.data);
     }
-  }, [result, onTextChange, searchText]);
+  }, [result, onTextChange]);
+
+  // 文本变化时通知父组件
+  const handleTextChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const newText = e.target.value;
+    setEditableText(newText);
+    if (onTextChange) onTextChange(newText);
+  }, [onTextChange]);
 
   const handleCopy = useCallback(async () => {
-    if (!result?.data) return;
-    try { await navigator.clipboard.writeText(result.data); setCopied(true); setTimeout(() => setCopied(false), 1200); } catch {}
-  }, [result?.data]);
+    const textToCopy = editableText || result?.data || '';
+    if (!textToCopy) return;
+    try {
+      await navigator.clipboard.writeText(textToCopy);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1200);
+    } catch {
+      // 备用方案
+      const textarea = document.createElement('textarea');
+      textarea.value = textToCopy;
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand('copy');
+      document.body.removeChild(textarea);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1200);
+    }
+  }, [editableText, result?.data]);
 
   const handleCopyHistory = useCallback(async (text: string) => {
-    try { await navigator.clipboard.writeText(text); } catch {}
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      const textarea = document.createElement('textarea');
+      textarea.value = text;
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand('copy');
+      document.body.removeChild(textarea);
+    }
   }, []);
 
-  // 处理中
   if (isProcessing) {
     return (
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
@@ -37,10 +69,10 @@ function OcrResult({ onTextChange, searchText = '' }: OcrResultProps) {
     );
   }
 
-  // 有结果
   if (result) {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: '#FFFFFF' }}>
+        {/* 结果头部 */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 16px', borderBottom: '0.5px solid #E5E5EA' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <span style={{ fontSize: 13, fontWeight: 600, color: '#1c1c1e' }}>识别结果</span>
@@ -52,8 +84,26 @@ function OcrResult({ onTextChange, searchText = '' }: OcrResultProps) {
           </button>
         </div>
 
+        {/* 可编辑的识别结果 */}
         <div style={{ flex: 1, overflow: 'auto', padding: 16 }}>
-          <pre style={{ fontSize: 13, color: '#1c1c1e', fontFamily: 'SF Mono, Menlo, monospace', lineHeight: 1.6, whiteSpace: 'pre-wrap', margin: 0 }}>{result.data}</pre>
+          <textarea
+            value={editableText}
+            onChange={handleTextChange}
+            style={{
+              width: '100%',
+              height: '100%',
+              minHeight: 200,
+              fontSize: 13,
+              color: '#1c1c1e',
+              fontFamily: 'SF Mono, Menlo, monospace',
+              lineHeight: 1.6,
+              border: 'none',
+              outline: 'none',
+              resize: 'none',
+              background: 'transparent',
+            }}
+            placeholder="识别结果将显示在这里..."
+          />
         </div>
 
         {!result.success && result.error && (
@@ -87,7 +137,6 @@ function OcrResult({ onTextChange, searchText = '' }: OcrResultProps) {
     );
   }
 
-  // 空状态
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#C7C7CC' }}>
       <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
