@@ -2,12 +2,47 @@ import { useState, useCallback, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { useScreenshotStore } from '../stores/screenshotStore';
+import { useOcrStore } from '../stores/ocrStore';
+import { useSettingsStore } from '../stores/settingsStore';
 
 function ScreenshotTool() {
   const { isCapturing, setCapturing, setScreenshotPath } = useScreenshotStore();
+  const { setProcessing, setResult, addToHistory } = useOcrStore();
+  const { activeOcrPlugin, pluginSettings } = useSettingsStore();
   const [error, setError] = useState<string | null>(null);
   const [captureSuccess, setCaptureSuccess] = useState(false);
   const [lastImagePath, setLastImagePath] = useState<string | null>(null);
+
+  // OCR识别
+  const doOcr = useCallback(async (imagePath: string) => {
+    setProcessing(true);
+    try {
+      let ocrResult = '';
+      if (activeOcrPlugin === 'openai-vision') {
+        const apiKey = (pluginSettings['openai-vision']?.apiKey as string) || '';
+        const model = (pluginSettings['openai-vision']?.model as string) || 'gpt-4o';
+        const maxTokens = (pluginSettings['openai-vision']?.maxTokens as number) || 1024;
+        if (!apiKey) { ocrResult = '错误：未配置OpenAI API Key'; } else {
+          ocrResult = await invoke<string>('ocr_openai', { apiKey, imagePath, model, maxTokens });
+        }
+      } else if (activeOcrPlugin === 'local-llm') {
+        const endpoint = (pluginSettings['local-llm']?.endpoint as string) || 'http://localhost:11434';
+        const model = (pluginSettings['local-llm']?.model as string) || 'llava';
+        ocrResult = await invoke<string>('ocr_ollama', { endpoint, model, imagePath });
+      } else if (activeOcrPlugin === 'paddle-ocr') {
+        ocrResult = await invoke<string>('ocr_paddleocr', { imagePath });
+      } else {
+        ocrResult = `未知引擎: ${activeOcrPlugin}`;
+      }
+      const result = { success: !ocrResult.startsWith('错误'), data: ocrResult, confidence: 0, language: 'auto' };
+      setResult(result);
+      addToHistory(result);
+    } catch (err) {
+      setResult({ success: false, data: '', error: String(err) });
+    } finally {
+      setProcessing(false);
+    }
+  }, [activeOcrPlugin, pluginSettings, setProcessing, setResult, addToHistory]);
 
   const handleScreenshot = useCallback(async () => {
     setCapturing(true);
@@ -34,12 +69,9 @@ function ScreenshotTool() {
   const handleSaveImage = useCallback(async () => {
     if (!lastImagePath) return;
     try {
-      const savePath = await invoke<string>('save_screenshot_dialog');
-      if (savePath) {
-        await invoke('copy_file', { from: lastImagePath, to: savePath });
-        setCaptureSuccess(true);
-        setTimeout(() => setCaptureSuccess(false), 1500);
-      }
+      await invoke<string>('save_screenshot_dialog');
+      setCaptureSuccess(true);
+      setTimeout(() => setCaptureSuccess(false), 1500);
     } catch (err) {
       if (err !== 'Cancelled') {
         setError(String(err));
@@ -48,12 +80,15 @@ function ScreenshotTool() {
   }, [lastImagePath]);
 
   useEffect(() => {
-    const unlisten1 = listen<string>('screenshot-cropped', (event) => {
-      setScreenshotPath(event.payload);
-      setLastImagePath(event.payload);
+    const unlisten1 = listen<string>('screenshot-cropped', async (event) => {
+      const imagePath = event.payload;
+      setScreenshotPath(imagePath);
+      setLastImagePath(imagePath);
       setCaptureSuccess(true);
       setCapturing(false);
       setTimeout(() => setCaptureSuccess(false), 1500);
+      // 自动调用OCR
+      await doOcr(imagePath);
     });
 
     const unlisten2 = listen('screenshot-cancel', () => {
@@ -75,7 +110,7 @@ function ScreenshotTool() {
       unlisten3.then(fn => fn());
       unlisten4.then(fn => fn());
     };
-  }, [handleScreenshot, setCapturing, setScreenshotPath]);
+  }, [handleScreenshot, setCapturing, setScreenshotPath, doOcr]);
 
   return (
     <div style={{ padding: 12 }}>
