@@ -73,6 +73,34 @@ async fn save_screenshot_dialog() -> Result<String, String> {
     Ok(save_path.to_string_lossy().to_string())
 }
 
+/// 选择图片文件
+#[tauri::command]
+fn select_image_files() -> Result<Vec<String>, String> {
+    let paths = rfd::FileDialog::new()
+        .add_filter("图片文件", &["png", "jpg", "jpeg", "gif", "webp", "bmp"])
+        .set_title("选择图片文件")
+        .pick_files()
+        .ok_or("用户取消选择")?;
+    
+    Ok(paths.iter().map(|p| p.to_string_lossy().to_string()).collect())
+}
+
+/// 保存临时文件（用于拖拽的文件）
+#[tauri::command]
+fn save_temp_files(file_names: Vec<String>, file_data: Vec<Vec<u8>>) -> Result<Vec<String>, String> {
+    let mut paths = Vec::new();
+    let temp_dir = std::env::temp_dir().join("moment_ocr");
+    std::fs::create_dir_all(&temp_dir).map_err(|e| e.to_string())?;
+    
+    for (name, data) in file_names.iter().zip(file_data.iter()) {
+        let path = temp_dir.join(name);
+        std::fs::write(&path, data).map_err(|e| e.to_string())?;
+        paths.push(path.to_string_lossy().to_string());
+    }
+    
+    Ok(paths)
+}
+
 /// OCR识别 - PaddleOCR
 #[tauri::command]
 async fn ocr_paddleocr(image_path: String) -> Result<String, String> {
@@ -138,6 +166,8 @@ pub fn run() {
             get_screenshot_base64,
             copy_image_to_clipboard,
             save_screenshot_dialog,
+            select_image_files,
+            save_temp_files,
             ocr_paddleocr, check_paddleocr, install_paddleocr,
             ocr_openai, ocr_ollama, translate_google, translate_ai
         ])
