@@ -34,7 +34,6 @@ function Settings() {
   const ocrPlugins = builtinPlugins.filter((p) => p.metadata.type === 'ocr');
   const translationPlugins = builtinPlugins.filter((p) => p.metadata.type === 'translation');
 
-  // 检查PaddleOCR安装状态
   const checkPaddleOcr = async () => {
     try {
       const installed = await invoke<boolean>('check_paddleocr');
@@ -44,7 +43,6 @@ function Settings() {
     }
   };
 
-  // 安装PaddleOCR
   const handleInstallPaddleOcr = async () => {
     setInstalling(true);
     setInstallMsg(null);
@@ -60,7 +58,6 @@ function Settings() {
     }
   };
 
-  // 进入API标签页时检查PaddleOCR
   const handleTabChange = (tab: SettingsTab) => {
     setActiveTab(tab);
     if (tab === 'api' && paddleocrInstalled === null) {
@@ -70,18 +67,26 @@ function Settings() {
 
   return (
     <div className="flex h-full">
-      {/* 左侧导航 */}
-      <div className="w-24 border-r border-gray-200 bg-gray-50">
-        <nav className="py-2">
+      {/* 左侧导航 - iOS 18 风格 */}
+      <div style={{ width: 88, borderRight: '0.5px solid #E5E5EA', background: '#F2F2F7' }}>
+        <nav style={{ padding: '8px 0' }}>
           {SETTINGS_TABS.map(({ key, label }) => (
             <button
               key={key}
               onClick={() => handleTabChange(key)}
-              className={`w-full px-3 py-2 text-left text-sm transition-colors ${
-                activeTab === key
-                  ? 'bg-blue-50 text-blue-600 font-medium'
-                  : 'text-gray-700 hover:bg-gray-100'
-              }`}
+              style={{
+                width: '100%',
+                padding: '8px 12px',
+                textAlign: 'left',
+                fontSize: 13,
+                background: activeTab === key ? 'rgba(0,122,255,0.12)' : 'transparent',
+                color: activeTab === key ? '#007AFF' : '#1c1c1e',
+                fontWeight: activeTab === key ? 600 : 400,
+                border: 'none',
+                cursor: 'pointer',
+                borderLeft: activeTab === key ? '2px solid #007AFF' : '2px solid transparent',
+                transition: 'all 100ms ease-out',
+              }}
             >
               {label}
             </button>
@@ -90,151 +95,119 @@ function Settings() {
       </div>
 
       {/* 右侧内容 */}
-      <div className="flex-1 overflow-y-auto p-6">
-        {/* 常规设置 */}
+      <div style={{ flex: 1, overflowY: 'auto', padding: 20, background: '#F2F2F7' }}>
         {activeTab === 'general' && (
-          <div className="space-y-6">
-            <SettingsSection title="启动时">
-              <CheckboxItem label="开机时自动启动" defaultChecked={false} />
-              <CheckboxItem label="以管理员身份运行" defaultChecked={false} />
-              <CheckboxItem label="启动时显示窗口" defaultChecked={true} />
-              <CheckboxItem label="启动时显示工具栏" defaultChecked={true} />
-            </SettingsSection>
-
-            <SettingsSection title="截图时">
-              <CheckboxItem label="截图时启用十字线" defaultChecked={true} />
-              <CheckboxItem label="复制图片和文件" defaultChecked={true} />
-              <CheckboxItem label="截图时启用放大镜" defaultChecked={false} />
-            </SettingsSection>
-
-            <SettingsSection title="识别时">
-              <CheckboxItem label="识别时启用十字线" defaultChecked={false} />
-              <CheckboxItem label="识别时启用放大镜" defaultChecked={true} />
-            </SettingsSection>
-
-            <SettingsSection title="识别后">
-              <CheckboxItem label="识别后文本叠加" defaultChecked={false} />
-              <CheckboxItem label="识别后播放音效" defaultChecked={false} />
-            </SettingsSection>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <SettingsCard title="启动时">
+              <CheckboxItem label="开机时自动启动" />
+              <CheckboxItem label="以管理员身份运行" />
+              <CheckboxItem label="启动时显示窗口" checked />
+              <CheckboxItem label="启动时显示工具栏" checked />
+            </SettingsCard>
+            <SettingsCard title="截图时">
+              <CheckboxItem label="截图时启用十字线" checked />
+              <CheckboxItem label="复制图片和文件" checked />
+              <CheckboxItem label="截图时启用放大镜" />
+            </SettingsCard>
+            <SettingsCard title="识别后">
+              <CheckboxItem label="识别后文本叠加" />
+              <CheckboxItem label="识别后播放音效" />
+            </SettingsCard>
           </div>
         )}
 
-        {/* 热键设置 */}
         {activeTab === 'hotkey' && (
-          <div className="space-y-6">
-            <SettingsSection title="截图热键">
-              <div className="flex items-center gap-3">
-                <label className="ios-text-body text-gray-700">截图快捷键:</label>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <SettingsCard title="截图热键">
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <label style={{ fontSize: 13, color: '#1c1c1e' }}>截图快捷键:</label>
                 <input
                   type="text"
                   value={hotkey}
                   onChange={(e) => setHotkey(e.target.value)}
-                  className="ios-input w-48"
+                  style={{ padding: '6px 10px', fontSize: 13, border: '0.5px solid #D1D1D6', borderRadius: 8, background: '#F2F2F7', outline: 'none', width: 180 }}
                   placeholder="Ctrl+Shift+Q"
                 />
               </div>
-            </SettingsSection>
+            </SettingsCard>
           </div>
         )}
 
-        {/* 接口设置 */}
         {activeTab === 'api' && (
-          <div className="space-y-6">
-            <SettingsSection title="OCR 引擎">
-              <div className="flex items-center gap-3">
-                <label className="ios-text-body text-gray-700">选择引擎:</label>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <SettingsCard title="OCR 引擎">
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <label style={{ fontSize: 13, color: '#1c1c1e' }}>选择引擎:</label>
                 <select
                   value={activeOcrPlugin}
                   onChange={(e) => setActiveOcrPlugin(e.target.value)}
-                  className="ios-select"
+                  style={{ padding: '6px 10px', fontSize: 13, border: '0.5px solid #D1D1D6', borderRadius: 8, background: '#F2F2F7', outline: 'none' }}
                 >
                   {ocrPlugins.map((p) => (
-                    <option key={p.metadata.id} value={p.metadata.id}>
-                      {p.metadata.name}
-                    </option>
+                    <option key={p.metadata.id} value={p.metadata.id}>{p.metadata.name}</option>
                   ))}
                 </select>
               </div>
-              <p className="ios-text-caption text-gray-500 mt-2">
+              <p style={{ fontSize: 12, color: '#8E8E93', marginTop: 8 }}>
                 {ocrPlugins.find((p) => p.metadata.id === activeOcrPlugin)?.metadata.description}
               </p>
-
-              {/* PaddleOCR 安装状态 */}
               {activeOcrPlugin === 'paddle-ocr' && (
-                <div className="mt-4 p-3 bg-gray-50 rounded-lg">
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm text-gray-700">
-                      PaddleOCR 状态: {
-                        paddleocrInstalled === null ? '检查中...' :
-                        paddleocrInstalled ? '✅ 已安装' : '❌ 未安装'
-                      }
+                <div style={{ marginTop: 12, padding: 12, background: '#F2F2F7', borderRadius: 10 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <span style={{ fontSize: 13, color: '#1c1c1e' }}>
+                      PaddleOCR: {paddleocrInstalled === null ? '检查中...' : paddleocrInstalled ? '✅ 已安装' : '❌ 未安装'}
                     </span>
                     {!paddleocrInstalled && (
-                      <button
-                        onClick={handleInstallPaddleOcr}
-                        disabled={installing}
-                        className="px-3 py-1.5 bg-blue-500 text-white text-xs rounded hover:bg-blue-600 disabled:opacity-50"
-                      >
-                        {installing ? '安装中...' : '安装 PaddleOCR'}
+                      <button onClick={handleInstallPaddleOcr} disabled={installing}
+                        style={{ padding: '6px 12px', background: '#007AFF', color: 'white', border: 'none', borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+                        {installing ? '安装中...' : '安装'}
                       </button>
                     )}
                   </div>
-                  {installMsg && (
-                    <p className="text-xs text-gray-500 mt-2">{installMsg}</p>
-                  )}
-                  {paddleocrInstalled && (
-                    <p className="text-xs text-gray-400 mt-1">
-                      PaddleOCR 已就绪，可直接使用截图识别功能
-                    </p>
-                  )}
+                  {installMsg && <p style={{ fontSize: 12, color: '#8E8E93', marginTop: 8 }}>{installMsg}</p>}
                 </div>
               )}
-            </SettingsSection>
-
-            <SettingsSection title="翻译服务">
-              <div className="flex items-center gap-3">
-                <label className="ios-text-body text-gray-700">选择翻译:</label>
+            </SettingsCard>
+            <SettingsCard title="翻译服务">
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <label style={{ fontSize: 13, color: '#1c1c1e' }}>选择翻译:</label>
                 <select
                   value={activeTranslationPlugin}
                   onChange={(e) => setActiveTranslationPlugin(e.target.value)}
-                  className="ios-select"
+                  style={{ padding: '6px 10px', fontSize: 13, border: '0.5px solid #D1D1D6', borderRadius: 8, background: '#F2F2F7', outline: 'none' }}
                 >
                   {translationPlugins.map((p) => (
-                    <option key={p.metadata.id} value={p.metadata.id}>
-                      {p.metadata.name}
-                    </option>
+                    <option key={p.metadata.id} value={p.metadata.id}>{p.metadata.name}</option>
                   ))}
                 </select>
               </div>
-              <p className="ios-text-caption text-gray-500 mt-2">
-                {translationPlugins.find((p) => p.metadata.id === activeTranslationPlugin)?.metadata.description}
-              </p>
-            </SettingsSection>
+            </SettingsCard>
           </div>
         )}
 
-        {/* 关于 */}
-        {activeTab === 'about' && (
-          <div className="space-y-6">
-            <SettingsSection title="关于须臾OCR">
-              <div className="space-y-2">
-                <p className="ios-text-body text-gray-700">版本: 0.1.0</p>
-                <p className="ios-text-body text-gray-700">构建: 2024.07.24</p>
-                <p className="ios-text-caption text-gray-500 mt-4">
-                  须臾OCR - 智能OCR软件
-                </p>
-                <p className="ios-text-caption text-gray-500">
-                  支持本地OCR引擎、AI大模型、截图识别
-                </p>
+        {activeTab === 'hotkey' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <SettingsCard title="截图热键">
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <label style={{ fontSize: 13, color: '#1c1c1e' }}>截图快捷键:</label>
+                <input type="text" value={hotkey} onChange={(e) => setHotkey(e.target.value)}
+                  style={{ padding: '6px 10px', fontSize: 13, border: '0.5px solid #D1D1D6', borderRadius: 8, background: '#F2F2F7', outline: 'none', width: 180 }} />
               </div>
-            </SettingsSection>
+            </SettingsCard>
           </div>
         )}
 
-        {/* 其他标签页占位 */}
-        {['advanced', 'config', 'screenshot', 'extra', 'update'].includes(activeTab) && (
-          <div className="flex items-center justify-center h-64">
-            <p className="ios-text-body text-gray-400">设置开发中...</p>
+        {activeTab === 'about' && (
+          <SettingsCard title="关于须臾OCR">
+            <p style={{ fontSize: 13, color: '#1c1c1e', marginBottom: 4 }}>版本: 0.1.0</p>
+            <p style={{ fontSize: 12, color: '#8E8E93' }}>须臾OCR - 智能OCR桌面软件</p>
+            <p style={{ fontSize: 12, color: '#8E8E93', marginTop: 4 }}>支持 PaddleOCR / OpenAI Vision / 本地LLM</p>
+          </SettingsCard>
+        )}
+
+        {!['general', 'hotkey', 'api', 'about'].includes(activeTab) && (
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 200 }}>
+            <p style={{ fontSize: 13, color: '#8E8E93' }}>开发中...</p>
           </div>
         )}
       </div>
@@ -242,33 +215,29 @@ function Settings() {
   );
 }
 
-// 设置区块组件
-function SettingsSection({ title, children }: { title: string; children: React.ReactNode }) {
+// iOS 18 风格设置卡片
+function SettingsCard({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div>
-      <h3 className="ios-text-headline text-gray-900 mb-3">{title}</h3>
-      <div className="ios-card">
-        <div className="space-y-3">
-          {children}
-        </div>
-      </div>
+    <div style={{
+      background: '#FFFFFF',
+      borderRadius: 10,
+      padding: 16,
+      boxShadow: '0 0.5px 0 rgba(0,0,0,0.04)',
+    }}>
+      <h3 style={{ fontSize: 15, fontWeight: 600, color: '#1c1c1e', margin: '0 0 12px 0' }}>{title}</h3>
+      {children}
     </div>
   );
 }
 
-// 复选框项组件
-function CheckboxItem({ label, defaultChecked = false }: { label: string; defaultChecked?: boolean }) {
+// iOS 18 风格复选框
+function CheckboxItem({ label, checked: defaultChecked = false }: { label: string; checked?: boolean }) {
   const [checked, setChecked] = useState(defaultChecked);
-  
   return (
-    <label className="flex items-center gap-3 cursor-pointer">
-      <input
-        type="checkbox"
-        checked={checked}
-        onChange={(e) => setChecked(e.target.checked)}
-        className="ios-checkbox"
-      />
-      <span className="ios-text-body text-gray-700">{label}</span>
+    <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', padding: '4px 0' }}>
+      <input type="checkbox" checked={checked} onChange={(e) => setChecked(e.target.checked)}
+        style={{ width: 18, height: 18, accentColor: '#007AFF', cursor: 'pointer' }} />
+      <span style={{ fontSize: 13, color: '#1c1c1e' }}>{label}</span>
     </label>
   );
 }
