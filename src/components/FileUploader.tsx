@@ -1,13 +1,52 @@
 import { useCallback, useRef, useState } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { useFileStore } from '../stores/fileStore';
+import { useOcrStore } from '../stores/ocrStore';
+import { useSettingsStore } from '../stores/settingsStore';
 
 const ALLOWED_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/bmp'];
 
 function FileUploader() {
   const { files, addFiles, removeFile, clearFiles } = useFileStore();
+  const { setProcessing, setResult, addToHistory } = useOcrStore();
+  const { activeOcrPlugin, pluginSettings } = useSettingsStore();
   const inputRef = useRef<HTMLInputElement>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [validationError, setValidationError] = useState<string | null>(null);
+  const [processingFile, setProcessingFile] = useState<string | null>(null);
+
+  // OCR识别
+  const doOcr = useCallback(async (imagePath: string) => {
+    setProcessing(true);
+    setProcessingFile(imagePath);
+    try {
+      let ocrResult = '';
+      if (activeOcrPlugin === 'openai-vision') {
+        const apiKey = (pluginSettings['openai-vision']?.apiKey as string) || '';
+        const model = (pluginSettings['openai-vision']?.model as string) || 'gpt-4o';
+        const maxTokens = (pluginSettings['openai-vision']?.maxTokens as number) || 1024;
+        if (!apiKey) { ocrResult = '错误：未配置OpenAI API Key'; } else {
+          ocrResult = await invoke<string>('ocr_openai', { apiKey, imagePath, model, maxTokens });
+        }
+      } else if (activeOcrPlugin === 'local-llm') {
+        const endpoint = (pluginSettings['local-llm']?.endpoint as string) || 'http://localhost:11434';
+        const model = (pluginSettings['local-llm']?.model as string) || 'llava';
+        ocrResult = await invoke<string>('ocr_ollama', { endpoint, model, imagePath });
+      } else if (activeOcrPlugin === 'paddle-ocr') {
+        ocrResult = await invoke<string>('ocr_paddleocr', { imagePath });
+      } else {
+        ocrResult = `未知引擎: ${activeOcrPlugin}`;
+      }
+      const result = { success: !ocrResult.startsWith('错误'), data: ocrResult, confidence: 0, language: 'auto' };
+      setResult(result);
+      addToHistory(result);
+    } catch (err) {
+      setResult({ success: false, data: '', error: String(err) });
+    } finally {
+      setProcessing(false);
+      setProcessingFile(null);
+    }
+  }, [activeOcrPlugin, pluginSettings, setProcessing, setResult, addToHistory]);
 
   const validateFiles = useCallback((fileList: FileList | null): File[] => {
     if (!fileList) return [];
@@ -22,10 +61,17 @@ function FileUploader() {
     return validFiles;
   }, []);
 
-  const handleFiles = useCallback((fileList: FileList | null) => {
+  const handleFiles = useCallback(async (fileList: FileList | null) => {
     const valid = validateFiles(fileList);
-    if (valid.length > 0) addFiles(valid.map(f => ({ name: f.name, path: f.name })));
-  }, [addFiles, validateFiles]);
+    if (valid.length > 0) {
+      const newFiles = valid.map(f => ({ name: f.name, path: f.name }));
+      addFiles(newFiles);
+      // 自动对第一个文件进行OCR
+      if (newFiles.length > 0) {
+        await doOcr(newFiles[0].path);
+      }
+    }
+  }, [addFiles, validateFiles, doOcr]);
 
   return (
     <div style={{ padding: 12 }}>
@@ -47,6 +93,12 @@ function FileUploader() {
         <input ref={inputRef} type="file" multiple accept="image/*" className="hidden" onChange={(e) => handleFiles(e.target.files)} />
       </div>
       {validationError && <div style={{ marginTop: 8, padding: 8, background: 'rgba(255,59,48,0.08)', borderRadius: 8, fontSize: 11, color: '#FF3B30' }}>⚠ {validationError}</div>}
+      {processingFile && (
+        <div style={{ marginTop: 8, padding: 8, background: 'rgba(0,122,255,0.08)', borderRadius: 8, fontSize: 11, color: '#007AFF', display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span className="spinner-sm"></span>
+          正在识别: {processingFile}
+        </div>
+      )}
       {files.length > 0 && (
         <div style={{ marginTop: 12 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
