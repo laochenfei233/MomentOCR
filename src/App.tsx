@@ -46,6 +46,22 @@ function App() {
     } catch {}
   };
 
+  // 设置页面全屏显示
+  if (showSettings) {
+    return (
+      <div className="app-container">
+        <header className="title-bar" style={{ display: 'flex', justifyContent: 'space-between' }}>
+          <button className="win-btn" onClick={() => setShowSettings(false)}>← 返回</button>
+          <span className="text-sm font-medium" style={{ color: '#1c1c1e' }}>设置</span>
+          <div style={{ width: 32 }} />
+        </header>
+        <main style={{ flex: 1, overflow: 'hidden' }}>
+          <Settings />
+        </main>
+      </div>
+    );
+  }
+
   return (
     <div className="app-container">
       {/* 标题栏 */}
@@ -64,13 +80,9 @@ function App() {
               <button className="menu-item" style={{ color: '#FF3B30' }} onClick={handleExit}>退出程序</button>
             </div>
           )}
-          <button className="win-btn">─</button>
-          <button className="win-btn">□</button>
-          <button className="win-btn" style={{ color: '#FF3B30' }} onClick={handleExit}>✕</button>
         </div>
       </header>
 
-      {/* 工具栏 */}
       <div className="toolbar">
         <button className="tool-icon" title="复制" onClick={handleCopy}>⧉</button>
         <button className="tool-icon" title="翻译" onClick={handleTranslate}>译</button>
@@ -78,7 +90,6 @@ function App() {
         <button className="tool-icon" title="设置" onClick={() => setShowSettings(true)}>⚙</button>
       </div>
 
-      {/* 主内容区 */}
       <main className="main-content">
         <div className="side-panel">
           <div className="tab-bar">
@@ -86,7 +97,7 @@ function App() {
             <button onClick={() => handleTabChange('file')} className={`tab-btn ${tab === 'file' && !showSettings ? 'active' : ''}`}>文件识别</button>
           </div>
           <div className="side-content">
-            {showSettings ? <Settings /> : tab === 'screenshot' ? <ScreenshotTool /> : <FileUploader />}
+            {tab === 'screenshot' ? <ScreenshotTool /> : <FileUploader />}
           </div>
         </div>
         <div className="result-panel">
@@ -94,7 +105,6 @@ function App() {
         </div>
       </main>
 
-      {/* 状态栏 */}
       <footer className="status-bar">
         <span className="text-xs" style={{ color: '#8E8E93' }}>字数：{ocrText.length}</span>
         <div className="flex items-center gap-1">
