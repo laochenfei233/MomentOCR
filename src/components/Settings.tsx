@@ -247,7 +247,170 @@ function Settings() {
           </SettingsCard>
         )}
 
-        {!['general', 'hotkey', 'api', 'about'].includes(activeTab) && (
+        {activeTab === 'advanced' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <SettingsCard title="OCR引擎">
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <label style={{ fontSize: 13, color: '#1c1c1e' }}>选择引擎:</label>
+                <select
+                  value={activeOcrPlugin}
+                  onChange={(e) => setActiveOcrPlugin(e.target.value)}
+                  style={{ padding: '6px 10px', fontSize: 13, border: '0.5px solid #D1D1D6', borderRadius: 8, background: '#F2F2F7', outline: 'none' }}
+                >
+                  {ocrPlugins.map((p) => (
+                    <option key={p.metadata.id} value={p.metadata.id}>{p.metadata.name}</option>
+                  ))}
+                </select>
+              </div>
+              <p style={{ fontSize: 12, color: '#8E8E93', marginTop: 8 }}>
+                {ocrPlugins.find((p) => p.metadata.id === activeOcrPlugin)?.metadata.description}
+              </p>
+              {activeOcrPlugin === 'paddle-ocr' && (
+                <div style={{ marginTop: 12, padding: 12, background: '#F2F2F7', borderRadius: 10 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <span style={{ fontSize: 13, color: '#1c1c1e' }}>
+                      PaddleOCR: {paddleocrInstalled === null ? '检查中...' : paddleocrInstalled ? '✅ 已安装' : '❌ 未安装'}
+                    </span>
+                    {!paddleocrInstalled && (
+                      <button onClick={handleInstallPaddleOcr} disabled={installing}
+                        style={{ padding: '6px 12px', background: '#007AFF', color: 'white', border: 'none', borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+                        {installing ? '安装中...' : '安装'}
+                      </button>
+                    )}
+                  </div>
+                  {installMsg && <p style={{ fontSize: 12, color: '#8E8E93', marginTop: 8 }}>{installMsg}</p>}
+                </div>
+              )}
+            </SettingsCard>
+            <SettingsCard title="翻译服务">
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <label style={{ fontSize: 13, color: '#1c1c1e' }}>选择翻译:</label>
+                <select
+                  value={activeTranslationPlugin}
+                  onChange={(e) => setActiveTranslationPlugin(e.target.value)}
+                  style={{ padding: '6px 10px', fontSize: 13, border: '0.5px solid #D1D1D6', borderRadius: 8, background: '#F2F2F7', outline: 'none' }}
+                >
+                  {translationPlugins.map((p) => (
+                    <option key={p.metadata.id} value={p.metadata.id}>{p.metadata.name}</option>
+                  ))}
+                </select>
+              </div>
+              <p style={{ fontSize: 12, color: '#8E8E93', marginTop: 8 }}>
+                {translationPlugins.find((p) => p.metadata.id === activeTranslationPlugin)?.metadata.description}
+              </p>
+              {activeTranslationPlugin === 'ai-translate' && (
+                <PluginApiKeyConfig pluginId="ai-translate" fields={[{ key: 'apiKey', label: 'API Key', required: true }, { key: 'model', label: '模型', default: 'gpt-4o' }]} />
+              )}
+            </SettingsCard>
+            <SettingsCard title="大模型 OCR">
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <label style={{ fontSize: 13, color: '#1c1c1e' }}>选择模型:</label>
+                <select
+                  value={activeOcrPlugin === 'openai-vision' || activeOcrPlugin === 'local-llm' ? activeOcrPlugin : ''}
+                  onChange={(e) => setActiveOcrPlugin(e.target.value)}
+                  style={{ padding: '6px 10px', fontSize: 13, border: '0.5px solid #D1D1D6', borderRadius: 8, background: '#F2F2F7', outline: 'none' }}
+                >
+                  <option value="">未选择</option>
+                  <option value="openai-vision">OpenAI Vision</option>
+                  <option value="local-llm">本地 LLM (Ollama)</option>
+                </select>
+              </div>
+              <p style={{ fontSize: 12, color: '#8E8E93', marginTop: 8 }}>使用AI大模型进行文字识别，精度更高</p>
+              {activeOcrPlugin === 'openai-vision' && (
+                <PluginApiKeyConfig pluginId="openai-vision" fields={[
+                  { key: 'apiKey', label: 'API Key', required: true },
+                  { key: 'model', label: '模型', default: 'gpt-4o' },
+                  { key: 'maxTokens', label: '最大Token数', default: '1024' }
+                ]} />
+              )}
+              {activeOcrPlugin === 'local-llm' && (
+                <div style={{ marginTop: 12 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
+                    <label style={{ fontSize: 13, color: '#1c1c1e' }}>Ollama 地址:</label>
+                    <input type="text" defaultValue="http://localhost:11434" style={{ padding: '6px 10px', fontSize: 13, border: '0.5px solid #D1D1D6', borderRadius: 8, background: '#F2F2F7', outline: 'none', width: 220 }} />
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                    <label style={{ fontSize: 13, color: '#1c1c1e' }}>模型名称:</label>
+                    <input type="text" defaultValue="llava" style={{ padding: '6px 10px', fontSize: 13, border: '0.5px solid #D1D1D6', borderRadius: 8, background: '#F2F2F7', outline: 'none', width: 220 }} />
+                  </div>
+                  <p style={{ fontSize: 11, color: '#AEAEB2', marginTop: 8 }}>需要先安装并运行 Ollama: https://ollama.com</p>
+                </div>
+              )}
+            </SettingsCard>
+          </div>
+        )}
+
+        {activeTab === 'config' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <SettingsCard title="识别设置">
+              <CheckboxItem label="自动识别" checked />
+              <CheckboxItem label="识别后自动复制到剪贴板" />
+              <CheckboxItem label="识别后自动翻译" />
+              <CheckboxItem label="识别后自动朗读" />
+            </SettingsCard>
+            <SettingsCard title="语言设置">
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <label style={{ fontSize: 13, color: '#1c1c1e' }}>识别语言:</label>
+                <select style={{ padding: '6px 10px', fontSize: 13, border: '0.5px solid #D1D1D6', borderRadius: 8, background: '#F2F2F7', outline: 'none' }}>
+                  <option>自动检测</option>
+                  <option>中文</option>
+                  <option>英文</option>
+                  <option>日文</option>
+                  <option>韩文</option>
+                </select>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 8 }}>
+                <label style={{ fontSize: 13, color: '#1c1c1e' }}>翻译目标:</label>
+                <select style={{ padding: '6px 10px', fontSize: 13, border: '0.5px solid #D1D1D6', borderRadius: 8, background: '#F2F2F7', outline: 'none' }}>
+                  <option>中文</option>
+                  <option>英文</option>
+                  <option>日文</option>
+                  <option>韩文</option>
+                </select>
+              </div>
+            </SettingsCard>
+          </div>
+        )}
+
+        {activeTab === 'screenshot' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <SettingsCard title="截图设置">
+              <CheckboxItem label="截图时隐藏主窗口" checked />
+              <CheckboxItem label="截图后自动识别" checked />
+              <CheckboxItem label="显示截图预览" checked />
+              <CheckboxItem label="支持多屏幕截图" checked />
+            </SettingsCard>
+            <SettingsCard title="截图格式">
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <label style={{ fontSize: 13, color: '#1c1c1e' }}>保存格式:</label>
+                <select style={{ padding: '6px 10px', fontSize: 13, border: '0.5px solid #D1D1D6', borderRadius: 8, background: '#F2F2F7', outline: 'none' }}>
+                  <option>PNG (无损)</option>
+                  <option>JPG (有损)</option>
+                </select>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 8 }}>
+                <label style={{ fontSize: 13, color: '#1c1c1e' }}>保存目录:</label>
+                <input type="text" defaultValue="%TEMP%/MomentOCR" readOnly style={{ padding: '6px 10px', fontSize: 13, border: '0.5px solid #D1D1D6', borderRadius: 8, background: '#F2F2F7', outline: 'none', width: 220 }} />
+              </div>
+            </SettingsCard>
+          </div>
+        )}
+
+        {activeTab === 'extra' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <SettingsCard title="附加功能">
+              <CheckboxItem label="启动时检查更新" checked />
+              <CheckboxItem label="发送使用统计" />
+              <CheckboxItem label="显示通知" checked />
+            </SettingsCard>
+            <SettingsCard title="数据管理">
+              <button style={{ padding: '6px 12px', background: '#FF3B30', color: 'white', border: 'none', borderRadius: 8, fontSize: 12, cursor: 'pointer' }}>清除缓存</button>
+              <p style={{ fontSize: 11, color: '#AEAEB2', marginTop: 8 }}>清除临时文件和识别历史</p>
+            </SettingsCard>
+          </div>
+        )}
+
+        {!['general', 'hotkey', 'api', 'about', 'advanced', 'config', 'screenshot', 'extra'].includes(activeTab) && (
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 200 }}>
             <p style={{ fontSize: 13, color: '#8E8E93' }}>开发中...</p>
           </div>
