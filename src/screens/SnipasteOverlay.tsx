@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useSnipasteStore, type Point, type Annotation, type AnnotationType } from '../stores/snipasteStore';
+import { useSettingsStore } from '../stores/settingsStore';
 
 interface Selection {
   startX: number;
@@ -615,7 +616,10 @@ export default function SnipasteOverlay() {
       for (let i = 0; i < binaryString.length; i++) {
         bytes[i] = binaryString.charCodeAt(i);
       }
-      await invoke('snipaste_save_screenshot', { data: Array.from(bytes) });
+      // 使用设置中的保存路径
+      const { screenshot } = useSettingsStore.getState();
+      const savePath = screenshot.savePath || undefined;
+      await invoke('snipaste_save_screenshot', { data: Array.from(bytes), path: savePath });
       await getCurrentWindow().close();
     } catch (err) {
       console.error('Save failed:', err);

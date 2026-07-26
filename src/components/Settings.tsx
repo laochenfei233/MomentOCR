@@ -235,6 +235,28 @@ function Settings() {
               <CheckboxItem label="是否启用" checked={screenshot.autoSave} onChange={(v) => setScreenshot({ autoSave: v })} />
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
                 <InputItem label="图片路径" value={screenshot.savePath} onChange={(v) => setScreenshot({ savePath: v })} />
+                <button
+                  onClick={async () => {
+                    try {
+                      const path = await invoke<string>('select_folder');
+                      setScreenshot({ savePath: path });
+                    } catch (err) {
+                      console.error('Failed to select folder:', err);
+                    }
+                  }}
+                  style={{
+                    padding: '6px 12px',
+                    background: '#007AFF',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: 6,
+                    fontSize: 12,
+                    cursor: 'pointer',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  选择文件夹
+                </button>
               </div>
             </SettingsCard>
             <SettingsCard title="截图设置">

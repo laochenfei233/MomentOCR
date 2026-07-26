@@ -59,6 +59,15 @@ fn select_image_files() -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
+fn select_folder() -> Result<String, String> {
+    let path = rfd::FileDialog::new()
+        .set_title("选择保存路径")
+        .pick_folder()
+        .ok_or("用户取消选择")?;
+    Ok(path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
 fn save_temp_files(file_names: Vec<String>, file_data: Vec<Vec<u8>>) -> Result<Vec<String>, String> {
     let mut paths = Vec::new();
     let temp_dir = std::env::temp_dir().join("moment_ocr");
@@ -370,6 +379,7 @@ pub fn run() {
         .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, Some(vec![])))
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
+            select_folder,
             start_screenshot_overlay, get_screenshot_base64, copy_image_to_clipboard,
             save_screenshot_dialog, select_image_files, save_temp_files,
             ocr_paddleocr, check_paddleocr, install_paddleocr,

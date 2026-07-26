@@ -69,6 +69,8 @@ interface SettingsState {
     screenshot: string;
     copy: string;
     translate: string;
+    snipaste: string;
+    longScreenshot: string;
   };
 
   // 配置 - 代理
@@ -171,6 +173,8 @@ export const useSettingsStore = create<SettingsState>()(
         screenshot: 'CmdOrCtrl+Shift+S',
         copy: 'CmdOrCtrl+Shift+C',
         translate: 'CmdOrCtrl+Shift+T',
+        snipaste: 'CmdOrCtrl+Shift+X',
+        longScreenshot: 'CmdOrCtrl+Shift+L',
       },
 
       proxy: {
