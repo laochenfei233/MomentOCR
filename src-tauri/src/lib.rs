@@ -7,7 +7,7 @@ use screenshot::ScreenshotManager;
 use overlay::{OverlayManager, OverlayResult};
 use tauri::Emitter;
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
-use tauri_plugin_global_shortcut::{Shortcut, ShortcutState};
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 use chrono::Local;
 use std::collections::HashMap;
 
@@ -118,25 +118,38 @@ fn set_autostart(app: tauri::AppHandle, enable: bool) -> Result<(), String> {
 fn get_autostart(app: tauri::AppHandle) -> bool { app.autolaunch().is_enabled().unwrap_or(false) }
 #[tauri::command]
 fn register_shortcuts(app: tauri::AppHandle, shortcuts: HashMap<String, String>) -> Result<(), String> {
-    use tauri_plugin_global_shortcut::GlobalShortcutExt;
     let app_handle = app.clone();
     app.global_shortcut().unregister_all().map_err(|e| e.to_string())?;
-    for (action, shortcut_str) in &shortcuts {
-        let shortcut: Shortcut = shortcut_str.parse().map_err(|e| format!("Invalid shortcut '{}': {}", shortcut_str, e))?;
-        let action_clone = action.clone();
+
+    // Parse all shortcuts first — if any is invalid, fail without registering anything
+    let parsed: Vec<(String, Shortcut)> = shortcuts.iter().map(|(action, shortcut_str)| {
+        let shortcut: Shortcut = shortcut_str.parse().map_err(|e| {
+            format!("Invalid shortcut '{}' for action '{}': {}", shortcut_str, action, e)
+        })?;
+        Ok((action.clone(), shortcut))
+    }).collect::<Result<Vec<_>, String>>()?;
+
+    // Register all, rollback on failure
+    for (action, shortcut) in &parsed {
+        let action_owned = action.clone();
         let handle = app_handle.clone();
-        app.global_shortcut().on_shortcut(shortcut, move |_app, _shortcut, event| {
+        let action_for_err = action_owned.clone();
+        app.global_shortcut().on_shortcut(shortcut.clone(), move |_app, _shortcut, event| {
             if event.state == ShortcutState::Pressed {
-                let _ = handle.emit("global-shortcut-triggered", serde_json::json!({ "action": action_clone }));
+                let _ = handle.emit("global-shortcut-triggered", serde_json::json!({ "action": action_owned }));
             }
-        }).map_err(|e| e.to_string())?;
+        }).map_err(|e| {
+            // Rollback: unregister everything
+            let _ = app_handle.global_shortcut().unregister_all();
+            format!("Failed to register shortcut for '{}': {}", action_for_err, e)
+        })?;
     }
+
     Ok(())
 }
 
 #[tauri::command]
 fn unregister_all_shortcuts(app: tauri::AppHandle) -> Result<(), String> {
-    use tauri_plugin_global_shortcut::GlobalShortcutExt;
     app.global_shortcut().unregister_all().map_err(|e| e.to_string())?;
     Ok(())
 }
