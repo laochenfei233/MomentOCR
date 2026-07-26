@@ -27,18 +27,25 @@ export default function SnipasteOverlay() {
   const [drawStart, setDrawStart] = useState<Point | null>(null);
   const [drawEnd, setDrawEnd] = useState<Point | null>(null);
 
+  // 选择和调整状态
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [isResizing, setIsResizing] = useState(false);
+  const [resizeHandle, setResizeHandle] = useState<string | null>(null);
+  const [resizeStart, setResizeStart] = useState<Point | null>(null);
+
   const {
     activeTool,
     setActiveTool,
     annotations,
     addAnnotation,
+    updateAnnotation,
     undoAnnotation,
     annotationColor,
     setAnnotationColor,
     strokeWidth,
     setStrokeWidth,
-    numberCounter,
-    incrementNumber,
+    opacity,
+    setOpacity,
   } = useSnipasteStore();
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -84,7 +91,47 @@ export default function SnipasteOverlay() {
     for (const annotation of annotations) {
       drawAnnotation(ctx, annotation);
     }
-  }, [annotations]);
+
+    // 绘制选中状态和调整手柄
+    if (selectedId) {
+      const selected = annotations.find(a => a.id === selectedId);
+      if (selected) {
+        ctx.save();
+        ctx.strokeStyle = '#007AFF';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([5, 5]);
+
+        // 绘制选中框
+        if (selected.width !== undefined && selected.height !== undefined) {
+          ctx.strokeRect(selected.x - 2, selected.y - 2, selected.width + 4, selected.height + 4);
+
+          // 绘制调整手柄
+          ctx.setLineDash([]);
+          ctx.fillStyle = '#007AFF';
+          const handles = getResizeHandles(selected);
+          for (const handle of handles) {
+            ctx.beginPath();
+            ctx.arc(handle.x, handle.y, 5, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        } else if (selected.endX !== undefined && selected.endY !== undefined) {
+          // 线段类标注
+          ctx.strokeRect(
+            Math.min(selected.x, selected.endX) - 2,
+            Math.min(selected.y, selected.endY) - 2,
+            Math.abs(selected.endX - selected.x) + 4,
+            Math.abs(selected.endY - selected.y) + 4
+          );
+        } else if (selected.type === 'text') {
+          // 文字标注
+          const textWidth = (selected.text?.length || 5) * 10;
+          ctx.strokeRect(selected.x - 2, selected.y - 22, textWidth + 4, 26);
+        }
+
+        ctx.restore();
+      }
+    }
+  }, [annotations, selectedId]);
 
   // 绘制单个标注
   const drawAnnotation = (ctx: CanvasRenderingContext2D, annotation: Annotation) => {
@@ -94,6 +141,7 @@ export default function SnipasteOverlay() {
     ctx.lineWidth = annotation.strokeWidth || 3;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
+    ctx.globalAlpha = annotation.opacity ?? 1;
 
     switch (annotation.type) {
       case 'pen':
@@ -116,9 +164,6 @@ export default function SnipasteOverlay() {
         break;
       case 'highlighter':
         drawHighlighter(ctx, annotation);
-        break;
-      case 'number':
-        drawNumber(ctx, annotation);
         break;
       case 'blur':
         drawBlur(ctx, annotation);
@@ -205,7 +250,6 @@ export default function SnipasteOverlay() {
   const drawHighlighter = (ctx: CanvasRenderingContext2D, annotation: Annotation) => {
     if (!annotation.points || annotation.points.length < 2) return;
     ctx.save();
-    ctx.globalAlpha = 0.3;
     ctx.lineWidth = 20;
     ctx.beginPath();
     ctx.moveTo(annotation.points[0].x, annotation.points[0].y);
@@ -213,22 +257,6 @@ export default function SnipasteOverlay() {
       ctx.lineTo(annotation.points[i].x, annotation.points[i].y);
     }
     ctx.stroke();
-    ctx.restore();
-  };
-
-  // 序号
-  const drawNumber = (ctx: CanvasRenderingContext2D, annotation: Annotation) => {
-    if (annotation.number === undefined) return;
-    const radius = 15;
-    ctx.beginPath();
-    ctx.arc(annotation.x, annotation.y, radius, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.save();
-    ctx.fillStyle = '#FFFFFF';
-    ctx.font = 'bold 14px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(annotation.number.toString(), annotation.x, annotation.y);
     ctx.restore();
   };
 
@@ -258,6 +286,57 @@ export default function SnipasteOverlay() {
     height: Math.abs(selection.endY - selection.startY),
   } : null;
 
+  // 检查点是否在标注内
+  const hitTestAnnotation = (x: number, y: number): Annotation | null => {
+    // 从后向前遍历（后绘制的在上面）
+    for (let i = annotations.length - 1; i >= 0; i--) {
+      const a = annotations[i];
+      const padding = 5;
+      if (a.width !== undefined && a.height !== undefined) {
+        // 有宽高的标注（矩形、马赛克、模糊）
+        const minX = Math.min(a.x, a.x + a.width) - padding;
+        const maxX = Math.max(a.x, a.x + a.width) + padding;
+        const minY = Math.min(a.y, a.y + a.height) - padding;
+        const maxY = Math.max(a.y, a.y + a.height) + padding;
+        if (x >= minX && x <= maxX && y >= minY && y <= maxY) return a;
+      } else if (a.endX !== undefined && a.endY !== undefined) {
+        // 线段类（直线、箭头）- 简单的包围盒检测
+        const minX = Math.min(a.x, a.endX) - padding;
+        const maxX = Math.max(a.x, a.endX) + padding;
+        const minY = Math.min(a.y, a.endY) - padding;
+        const maxY = Math.max(a.y, a.endY) + padding;
+        if (x >= minX && x <= maxX && y >= minY && y <= maxY) return a;
+      } else if (a.type === 'text') {
+        // 文字 - 简单的包围盒检测
+        const textWidth = (a.text?.length || 5) * 10;
+        const textHeight = 20;
+        if (x >= a.x - padding && x <= a.x + textWidth + padding &&
+            y >= a.y - textHeight - padding && y <= a.y + padding) return a;
+      } else if (a.points && a.points.length > 0) {
+        // 路径类（画笔、荧光笔）- 检查是否在路径附近
+        for (const p of a.points) {
+          if (Math.abs(x - p.x) < padding + 5 && Math.abs(y - p.y) < padding + 5) return a;
+        }
+      }
+    }
+    return null;
+  };
+
+  // 获取调整手柄位置
+  const getResizeHandles = (annotation: Annotation) => {
+    if (annotation.width === undefined || annotation.height === undefined) return [];
+    const x = annotation.x;
+    const y = annotation.y;
+    const w = annotation.width;
+    const h = annotation.height;
+    return [
+      { id: 'nw', x: x, y: y },
+      { id: 'ne', x: x + w, y: y },
+      { id: 'sw', x: x, y: y + h },
+      { id: 'se', x: x + w, y: y + h },
+    ];
+  };
+
   // 鼠标按下
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     // 如果有活动工具，开始绘图
@@ -272,8 +351,32 @@ export default function SnipasteOverlay() {
       return;
     }
 
+    // 检查是否点击了调整手柄
+    if (selectedId) {
+      const selected = annotations.find(a => a.id === selectedId);
+      if (selected) {
+        const handles = getResizeHandles(selected);
+        for (const handle of handles) {
+          if (Math.abs(e.clientX - handle.x) < 8 && Math.abs(e.clientY - handle.y) < 8) {
+            setIsResizing(true);
+            setResizeHandle(handle.id);
+            setResizeStart({ x: e.clientX, y: e.clientY });
+            return;
+          }
+        }
+      }
+    }
+
+    // 检查是否点击了已有标注
+    const hit = hitTestAnnotation(e.clientX, e.clientY);
+    if (hit) {
+      setSelectedId(hit.id);
+      return;
+    }
+
     // 否则开始选区
     if (showToolbar) return;
+    setSelectedId(null);
     setIsDragging(true);
     setShowToolbar(false);
     setSelection({
@@ -282,10 +385,47 @@ export default function SnipasteOverlay() {
       endX: e.clientX,
       endY: e.clientY
     });
-  }, [activeTool, showToolbar]);
+  }, [activeTool, showToolbar, selectedId, annotations]);
 
   // 鼠标移动
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
+    // 调整大小模式
+    if (isResizing && selectedId && resizeStart && resizeHandle) {
+      const dx = e.clientX - resizeStart.x;
+      const dy = e.clientY - resizeStart.y;
+      const annotation = annotations.find(a => a.id === selectedId);
+      if (annotation && annotation.width !== undefined && annotation.height !== undefined) {
+        let newX = annotation.x;
+        let newY = annotation.y;
+        let newWidth = annotation.width;
+        let newHeight = annotation.height;
+
+        if (resizeHandle.includes('w')) {
+          newX += dx;
+          newWidth -= dx;
+        }
+        if (resizeHandle.includes('e')) {
+          newWidth += dx;
+        }
+        if (resizeHandle.includes('n')) {
+          newY += dy;
+          newHeight -= dy;
+        }
+        if (resizeHandle.includes('s')) {
+          newHeight += dy;
+        }
+
+        updateAnnotation(selectedId, {
+          x: newX,
+          y: newY,
+          width: newWidth,
+          height: newHeight,
+        });
+        setResizeStart({ x: e.clientX, y: e.clientY });
+      }
+      return;
+    }
+
     // 绘图模式
     if (isDrawing && drawStart) {
       const point = { x: e.clientX, y: e.clientY };
@@ -303,10 +443,18 @@ export default function SnipasteOverlay() {
       endX: e.clientX,
       endY: e.clientY
     } : null);
-  }, [isDrawing, drawStart, activeTool, isDragging]);
+  }, [isResizing, selectedId, resizeStart, resizeHandle, annotations, isDrawing, drawStart, activeTool, isDragging]);
 
   // 鼠标抬起
   const handleMouseUp = useCallback(() => {
+    // 调整大小模式 - 结束调整
+    if (isResizing) {
+      setIsResizing(false);
+      setResizeHandle(null);
+      setResizeStart(null);
+      return;
+    }
+
     // 绘图模式 - 完成标注
     if (isDrawing && drawStart && drawEnd && activeTool) {
       const newAnnotation: Annotation = {
@@ -316,6 +464,7 @@ export default function SnipasteOverlay() {
         y: drawStart.y,
         color: annotationColor,
         strokeWidth,
+        opacity,
       };
 
       switch (activeTool) {
@@ -346,10 +495,6 @@ export default function SnipasteOverlay() {
             return;
           }
           break;
-        case 'number':
-          newAnnotation.number = numberCounter;
-          incrementNumber();
-          break;
       }
 
       addAnnotation(newAnnotation);
@@ -370,7 +515,7 @@ export default function SnipasteOverlay() {
     } else {
       setSelection(null);
     }
-  }, [isDrawing, drawStart, drawEnd, activeTool, currentPoints, annotationColor, strokeWidth, numberCounter, isDragging, selection]);
+  }, [isResizing, isDrawing, drawStart, drawEnd, activeTool, currentPoints, annotationColor, strokeWidth, opacity, isDragging, selection]);
 
   // ESC 取消
   useEffect(() => {
@@ -392,6 +537,18 @@ export default function SnipasteOverlay() {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [activeTool, undoAnnotation]);
+
+  // 双击编辑文字
+  const handleDoubleClick = useCallback((e: React.MouseEvent) => {
+    if (activeTool) return;
+    const hit = hitTestAnnotation(e.clientX, e.clientY);
+    if (hit && hit.type === 'text') {
+      const newText = prompt('编辑文字:', hit.text || '');
+      if (newText !== null) {
+        updateAnnotation(hit.id, { text: newText });
+      }
+    }
+  }, [activeTool, annotations]);
 
   const handleConfirm = useCallback(async () => {
     if (!selection) return;
@@ -555,6 +712,7 @@ export default function SnipasteOverlay() {
       <canvas
         ref={canvasRef}
         style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%' }}
+        onDoubleClick={handleDoubleClick}
       />
 
       {/* 选区外的暗色遮罩 */}
@@ -594,7 +752,6 @@ export default function SnipasteOverlay() {
            activeTool === 'text' ? '点击添加文字' :
            activeTool === 'mosaic' ? '按住鼠标拖动添加马赛克' :
            activeTool === 'highlighter' ? '按住鼠标拖动高亮' :
-           activeTool === 'number' ? '点击添加序号' :
            activeTool === 'blur' ? '按住鼠标拖动添加模糊' : ''} · ESC 取消
         </div>
       )}
@@ -621,7 +778,6 @@ export default function SnipasteOverlay() {
           <button onClick={() => setActiveTool(activeTool === 'arrow' ? null : 'arrow')} style={toolBtnStyle('arrow')} title="箭头 (A)">→</button>
           <button onClick={() => setActiveTool(activeTool === 'rectangle' ? null : 'rectangle')} style={toolBtnStyle('rectangle')} title="矩形 (R)">□</button>
           <button onClick={() => setActiveTool(activeTool === 'highlighter' ? null : 'highlighter')} style={toolBtnStyle('highlighter')} title="荧光笔 (H)">🖍️</button>
-          <button onClick={() => setActiveTool(activeTool === 'number' ? null : 'number')} style={toolBtnStyle('number')} title="序号 (N)">①</button>
           <button onClick={() => setActiveTool(activeTool === 'text' ? null : 'text')} style={toolBtnStyle('text')} title="文字 (T)">T</button>
           <button onClick={() => setActiveTool(activeTool === 'mosaic' ? null : 'mosaic')} style={toolBtnStyle('mosaic')} title="马赛克 (M)">▦</button>
           <button onClick={() => setActiveTool(activeTool === 'blur' ? null : 'blur')} style={toolBtnStyle('blur')} title="模糊 (B)">朦胧</button>
@@ -684,6 +840,21 @@ export default function SnipasteOverlay() {
             <option value={5}>粗</option>
             <option value={8}>特粗</option>
           </select>
+
+          {/* 透明度选择 */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <span style={{ fontSize: 11, color: '#666' }}>透明度</span>
+            <input
+              type="range"
+              min="0.1"
+              max="1"
+              step="0.1"
+              value={opacity}
+              onChange={(e) => setOpacity(Number(e.target.value))}
+              style={{ width: 60 }}
+            />
+            <span style={{ fontSize: 11, color: '#666' }}>{Math.round(opacity * 100)}%</span>
+          </div>
 
           <div style={{ width: 1, background: '#E5E5EA', margin: '0 4px' }} />
 

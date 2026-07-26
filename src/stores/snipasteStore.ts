@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 
-export type AnnotationType = 'pen' | 'line' | 'arrow' | 'rectangle' | 'text' | 'mosaic' | 'highlighter' | 'number' | 'blur';
+export type AnnotationType = 'pen' | 'line' | 'arrow' | 'rectangle' | 'text' | 'mosaic' | 'highlighter' | 'blur';
 
 export interface Point {
   x: number;
@@ -19,8 +19,8 @@ export interface Annotation {
   text?: string;
   color: string;
   strokeWidth?: number;
+  opacity?: number;  // 透明度 0-1
   points?: Point[];  // 用于画笔和荧光笔的路径点
-  number?: number;   // 用于序号标注
 }
 
 export interface PinState {
@@ -48,7 +48,7 @@ interface SnipasteState {
   annotations: Annotation[];
   annotationColor: string;
   strokeWidth: number;
-  numberCounter: number;
+  opacity: number;
 
   // 贴图管理
   pins: PinState[];
@@ -63,11 +63,12 @@ interface SnipasteState {
   setActiveTool: (tool: AnnotationType | null) => void;
   setAnnotationColor: (color: string) => void;
   setStrokeWidth: (width: number) => void;
+  setOpacity: (opacity: number) => void;
   addAnnotation: (annotation: Annotation) => void;
+  updateAnnotation: (id: string, updates: Partial<Annotation>) => void;
   removeAnnotation: (id: string) => void;
   undoAnnotation: () => void;
   clearAnnotations: () => void;
-  incrementNumber: () => void;
   addPin: (pin: PinState) => void;
   removePin: (id: string) => void;
   updatePin: (id: string, updates: Partial<PinState>) => void;
@@ -85,7 +86,7 @@ export const useSnipasteStore = create<SnipasteState>((set) => ({
   annotations: [],
   annotationColor: '#FF3B30',
   strokeWidth: 3,
-  numberCounter: 1,
+  opacity: 1,
   pins: [],
 
   // Actions
@@ -100,8 +101,12 @@ export const useSnipasteStore = create<SnipasteState>((set) => ({
   setActiveTool: (tool) => set({ activeTool: tool }),
   setAnnotationColor: (color) => set({ annotationColor: color }),
   setStrokeWidth: (width) => set({ strokeWidth: width }),
+  setOpacity: (opacity) => set({ opacity }),
   addAnnotation: (annotation) => set((state) => ({
     annotations: [...state.annotations, annotation]
+  })),
+  updateAnnotation: (id, updates) => set((state) => ({
+    annotations: state.annotations.map(a => a.id === id ? { ...a, ...updates } : a)
   })),
   removeAnnotation: (id) => set((state) => ({
     annotations: state.annotations.filter(a => a.id !== id)
@@ -110,7 +115,6 @@ export const useSnipasteStore = create<SnipasteState>((set) => ({
     annotations: state.annotations.slice(0, -1)
   })),
   clearAnnotations: () => set({ annotations: [] }),
-  incrementNumber: () => set((state) => ({ numberCounter: state.numberCounter + 1 })),
   addPin: (pin) => set((state) => ({
     pins: [...state.pins, pin]
   })),
