@@ -33,6 +33,8 @@ export default function SnipasteOverlay() {
   const [isResizing, setIsResizing] = useState(false);
   const [resizeHandle, setResizeHandle] = useState<string | null>(null);
   const [resizeStart, setResizeStart] = useState<Point | null>(null);
+  const [isMoving, setIsMoving] = useState(false);
+  const [moveStart, setMoveStart] = useState<Point | null>(null);
 
   const {
     activeTool,
@@ -41,6 +43,7 @@ export default function SnipasteOverlay() {
     addAnnotation,
     updateAnnotation,
     undoAnnotation,
+    redoAnnotation,
     annotationColor,
     setAnnotationColor,
     strokeWidth,
@@ -365,6 +368,12 @@ export default function SnipasteOverlay() {
             return;
           }
         }
+        // 检查是否点击了选中的标注内部（用于移动）
+        if (hitTestAnnotation(e.clientX, e.clientY)?.id === selectedId) {
+          setIsMoving(true);
+          setMoveStart({ x: e.clientX, y: e.clientY });
+          return;
+        }
       }
     }
 
@@ -390,6 +399,34 @@ export default function SnipasteOverlay() {
 
   // 鼠标移动
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
+    // 移动模式
+    if (isMoving && selectedId && moveStart) {
+      const dx = e.clientX - moveStart.x;
+      const dy = e.clientY - moveStart.y;
+      const annotation = annotations.find(a => a.id === selectedId);
+      if (annotation) {
+        const updates: Partial<Annotation> = {
+          x: annotation.x + dx,
+          y: annotation.y + dy,
+        };
+        // 如果有 endX/endY（线段类），也需要移动
+        if (annotation.endX !== undefined && annotation.endY !== undefined) {
+          updates.endX = annotation.endX + dx;
+          updates.endY = annotation.endY + dy;
+        }
+        // 如果有 points（画笔/荧光笔），需要移动所有点
+        if (annotation.points) {
+          updates.points = annotation.points.map(p => ({
+            x: p.x + dx,
+            y: p.y + dy,
+          }));
+        }
+        updateAnnotation(selectedId, updates);
+        setMoveStart({ x: e.clientX, y: e.clientY });
+      }
+      return;
+    }
+
     // 调整大小模式
     if (isResizing && selectedId && resizeStart && resizeHandle) {
       const dx = e.clientX - resizeStart.x;
@@ -448,6 +485,13 @@ export default function SnipasteOverlay() {
 
   // 鼠标抬起
   const handleMouseUp = useCallback(() => {
+    // 移动模式 - 结束移动
+    if (isMoving) {
+      setIsMoving(false);
+      setMoveStart(null);
+      return;
+    }
+
     // 调整大小模式 - 结束调整
     if (isResizing) {
       setIsResizing(false);
@@ -513,10 +557,14 @@ export default function SnipasteOverlay() {
     const height = Math.abs(selection.endY - selection.startY);
     if (width > 10 && height > 10) {
       setShowToolbar(true);
+      // 长截图模式下显示继续按钮
+      if (isLongScreenshot) {
+        setShowContinueBtn(true);
+      }
     } else {
       setSelection(null);
     }
-  }, [isResizing, isDrawing, drawStart, drawEnd, activeTool, currentPoints, annotationColor, strokeWidth, opacity, isDragging, selection]);
+  }, [isMoving, isResizing, isDrawing, drawStart, drawEnd, activeTool, currentPoints, annotationColor, strokeWidth, opacity, isDragging, selection, isLongScreenshot]);
 
   // ESC 取消
   useEffect(() => {
@@ -531,13 +579,20 @@ export default function SnipasteOverlay() {
         } else {
           handleCancel();
         }
-      } else if (e.key === 'z' && (e.ctrlKey || e.metaKey)) {
+      } else if (e.key === 'z' && (e.ctrlKey || e.metaKey) && !e.shiftKey) {
         undoAnnotation();
+      } else if ((e.key === 'z' && (e.ctrlKey || e.metaKey) && e.shiftKey) || (e.key === 'y' && (e.ctrlKey || e.metaKey))) {
+        redoAnnotation();
+      } else if (e.key === 'Delete' && selectedId) {
+        // Delete 键删除选中的标注
+        const { removeAnnotation } = useSnipasteStore.getState();
+        removeAnnotation(selectedId);
+        setSelectedId(null);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [activeTool, undoAnnotation]);
+  }, [activeTool, undoAnnotation, redoAnnotation, selectedId]);
 
   // 双击编辑文字
   const handleDoubleClick = useCallback((e: React.MouseEvent) => {
@@ -725,7 +780,7 @@ export default function SnipasteOverlay() {
   return (
     <div
       ref={containerRef}
-      style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', background: '#000', cursor: activeTool ? 'crosshair' : 'crosshair' }}
+      style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', background: '#000', cursor: activeTool ? 'crosshair' : isMoving ? 'grabbing' : selectedId ? 'move' : 'crosshair' }}
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}

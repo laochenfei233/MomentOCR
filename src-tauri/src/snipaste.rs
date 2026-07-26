@@ -120,46 +120,110 @@ impl SnipasteManager {
         LONG_SCREENSHOT_PATHS.lock().unwrap().clear();
     }
 
-    /// 拼接多张截图（垂直拼接）
+    /// 拼接多张截图（垂直拼接，带重叠检测）
     pub fn stitch_screenshots(paths: &[String]) -> Result<Vec<u8>> {
         use screenshots::image::io::Reader;
-        
+
         if paths.is_empty() {
             return Err(anyhow::anyhow!("No screenshots to stitch"));
         }
 
-        let mut images = Vec::new();
-        let mut total_height: u32 = 0;
-        let mut max_width: u32 = 0;
-
-        // 加载所有图片
-        for path in paths {
-            let data = std::fs::read(path)?;
-            let img = Reader::new(Cursor::new(data)).with_guessed_format()?.decode()?;
-            let rgba = img.to_rgba8();
-            total_height += rgba.height();
-            if rgba.width() > max_width {
-                max_width = rgba.width();
-            }
-            images.push(rgba);
+        if paths.len() == 1 {
+            // 只有一张图片，直接返回
+            return std::fs::read(&paths[0]).map_err(|e| e.into());
         }
 
-        // 创建画布
-        let mut canvas = screenshots::image::ImageBuffer::new(max_width, total_height);
-        let mut y_offset: u32 = 0;
+        // 加载第一张图片
+        let first_data = std::fs::read(&paths[0])?;
+        let first_img = Reader::new(Cursor::new(first_data)).with_guessed_format()?.decode()?.to_rgba8();
+        let mut result = first_img;
+        let mut max_width = result.width();
 
-        for img in &images {
-            for y in 0..img.height() {
-                for x in 0..img.width() {
-                    canvas.put_pixel(x, y + y_offset, *img.get_pixel(x, y));
+        // 依次拼接后续图片
+        for path in &paths[1..] {
+            let data = std::fs::read(path)?;
+            let new_img = Reader::new(Cursor::new(data)).with_guessed_format()?.decode()?.to_rgba8();
+
+            if new_img.width() > max_width {
+                max_width = new_img.width();
+            }
+
+            // 检测重叠区域
+            let overlap = Self::find_overlap_rgba(&result, &new_img, 10);
+
+            // 计算新图片需要拼接的高度（减去重叠部分）
+            let new_height = new_img.height().saturating_sub(overlap);
+            if new_height == 0 {
+                continue; // 完全重叠，跳过
+            }
+
+            // 创建新的画布
+            let total_height = result.height() + new_height;
+            let mut canvas = screenshots::image::ImageBuffer::new(max_width, total_height);
+
+            // 复制旧图片
+            for y in 0..result.height() {
+                for x in 0..result.width() {
+                    canvas.put_pixel(x, y, *result.get_pixel(x, y));
                 }
             }
-            y_offset += img.height();
+
+            // 拼接新图片（跳过重叠部分）
+            for y in overlap..new_img.height() {
+                for x in 0..new_img.width() {
+                    canvas.put_pixel(x, result.height() + y - overlap, *new_img.get_pixel(x, y));
+                }
+            }
+
+            result = canvas;
         }
 
         let mut buf = Cursor::new(Vec::new());
-        canvas.write_to(&mut buf, screenshots::image::ImageOutputFormat::Png)?;
+        result.write_to(&mut buf, screenshots::image::ImageOutputFormat::Png)?;
         Ok(buf.into_inner())
+    }
+
+    /// 检测两张 RGBA 图片的重叠区域（优化版本）
+    fn find_overlap_rgba(old_img: &screenshots::image::RgbaImage, new_img: &screenshots::image::RgbaImage, tolerance: u8) -> u32 {
+        let old_height = old_img.height();
+        let new_height = new_img.height();
+        let width = std::cmp::min(old_img.width(), new_img.width());
+
+        // 从新图顶部向下扫描，找到与旧图底部匹配的行
+        // 限制搜索范围为图片高度的 50%
+        let search_limit = std::cmp::min(old_height, new_height) / 2;
+
+        for offset in 0..search_limit {
+            let old_y = old_height - 1 - offset;
+            let new_y = offset;
+
+            let mut match_count = 0;
+            let mut total_pixels = 0;
+
+            // 每隔 4 个像素采样，提高性能
+            for x in (0..width).step_by(4) {
+                let old_pixel = old_img.get_pixel(x, old_y);
+                let new_pixel = new_img.get_pixel(x, new_y);
+
+                let r_diff = (old_pixel[0] as i32 - new_pixel[0] as i32).unsigned_abs() as u8;
+                let g_diff = (old_pixel[1] as i32 - new_pixel[1] as i32).unsigned_abs() as u8;
+                let b_diff = (old_pixel[2] as i32 - new_pixel[2] as i32).unsigned_abs() as u8;
+                let a_diff = (old_pixel[3] as i32 - new_pixel[3] as i32).unsigned_abs() as u8;
+
+                if r_diff <= tolerance && g_diff <= tolerance && b_diff <= tolerance && a_diff <= tolerance {
+                    match_count += 1;
+                }
+                total_pixels += 1;
+            }
+
+            let match_ratio = match_count as f64 / total_pixels as f64;
+            if match_ratio >= 0.90 {
+                // 找到重叠，返回重叠高度（偏移量 + 1）
+                return offset + 1;
+            }
+        }
+
+        0 // 没有找到重叠
     }
 
     /// 检测两张图片的重叠区域

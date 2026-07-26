@@ -46,6 +46,7 @@ interface SnipasteState {
   // 标注状态
   activeTool: AnnotationType | null;
   annotations: Annotation[];
+  undoneAnnotations: Annotation[];  // 用于重做
   annotationColor: string;
   strokeWidth: number;
   opacity: number;
@@ -68,6 +69,7 @@ interface SnipasteState {
   updateAnnotation: (id: string, updates: Partial<Annotation>) => void;
   removeAnnotation: (id: string) => void;
   undoAnnotation: () => void;
+  redoAnnotation: () => void;
   clearAnnotations: () => void;
   addPin: (pin: PinState) => void;
   removePin: (id: string) => void;
@@ -84,6 +86,7 @@ export const useSnipasteStore = create<SnipasteState>((set) => ({
   currentStitchedPath: null,
   activeTool: null,
   annotations: [],
+  undoneAnnotations: [],
   annotationColor: '#FF3B30',
   strokeWidth: 3,
   opacity: 1,
@@ -103,7 +106,8 @@ export const useSnipasteStore = create<SnipasteState>((set) => ({
   setStrokeWidth: (width) => set({ strokeWidth: width }),
   setOpacity: (opacity) => set({ opacity }),
   addAnnotation: (annotation) => set((state) => ({
-    annotations: [...state.annotations, annotation]
+    annotations: [...state.annotations, annotation],
+    undoneAnnotations: [],  // 新标注后清空重做历史
   })),
   updateAnnotation: (id, updates) => set((state) => ({
     annotations: state.annotations.map(a => a.id === id ? { ...a, ...updates } : a)
@@ -111,10 +115,23 @@ export const useSnipasteStore = create<SnipasteState>((set) => ({
   removeAnnotation: (id) => set((state) => ({
     annotations: state.annotations.filter(a => a.id !== id)
   })),
-  undoAnnotation: () => set((state) => ({
-    annotations: state.annotations.slice(0, -1)
-  })),
-  clearAnnotations: () => set({ annotations: [] }),
+  undoAnnotation: () => set((state) => {
+    if (state.annotations.length === 0) return state;
+    const lastAnnotation = state.annotations[state.annotations.length - 1];
+    return {
+      annotations: state.annotations.slice(0, -1),
+      undoneAnnotations: [...state.undoneAnnotations, lastAnnotation],
+    };
+  }),
+  redoAnnotation: () => set((state) => {
+    if (state.undoneAnnotations.length === 0) return state;
+    const lastUndone = state.undoneAnnotations[state.undoneAnnotations.length - 1];
+    return {
+      annotations: [...state.annotations, lastUndone],
+      undoneAnnotations: state.undoneAnnotations.slice(0, -1),
+    };
+  }),
+  clearAnnotations: () => set({ annotations: [], undoneAnnotations: [] }),
   addPin: (pin) => set((state) => ({
     pins: [...state.pins, pin]
   })),
