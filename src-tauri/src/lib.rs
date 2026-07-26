@@ -2,10 +2,11 @@ mod api;
 mod screenshot;
 mod overlay;
 mod paddleocr;
+mod snipaste;
 
 use screenshot::ScreenshotManager;
 use overlay::{OverlayManager, OverlayResult};
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 use chrono::Local;
@@ -93,11 +94,6 @@ async fn ocr_ollama(endpoint: String, model: String, image_path: String) -> Resu
     api::call_ollama(&endpoint, &model, &b64).await.map_err(|e| e.to_string())
 }
 #[tauri::command]
-async fn ocr_custom_vision(base_url: String, api_key: String, model: String, image_path: String, max_tokens: u32) -> Result<String, String> {
-    let b64 = ScreenshotManager::image_to_base64(&image_path).map_err(|e| e.to_string())?;
-    api::call_custom_vision(&base_url, &api_key, &model, &b64, max_tokens).await.map_err(|e| e.to_string())
-}
-#[tauri::command]
 async fn translate_google(text: String, target_lang: String) -> Result<String, String> {
     api::call_google_translate(&text, &target_lang).await.map_err(|e| e.to_string())
 }
@@ -108,6 +104,11 @@ async fn translate_ai(api_key: String, text: String, target_lang: String, model:
 #[tauri::command]
 async fn translate_custom(base_url: String, api_key: String, model: String, text: String, target_lang: String) -> Result<String, String> {
     api::call_custom_translate(&base_url, &api_key, &model, &text, &target_lang).await.map_err(|e| e.to_string())
+}
+#[tauri::command]
+async fn ocr_custom_vision(base_url: String, api_key: String, model: String, image_path: String, max_tokens: u32) -> Result<String, String> {
+    let b64 = ScreenshotManager::image_to_base64(&image_path).map_err(|e| e.to_string())?;
+    api::call_custom_vision(&base_url, &api_key, &model, &b64, max_tokens).await.map_err(|e| e.to_string())
 }
 #[tauri::command]
 fn set_autostart(app: tauri::AppHandle, enable: bool) -> Result<(), String> {
@@ -163,6 +164,204 @@ fn clear_temp_cache() -> Result<String, String> {
     Ok("已清除临时缓存".to_string())
 }
 
+// ============ Snipaste 截图功能 ============
+
+#[tauri::command]
+async fn start_snipaste(app: tauri::AppHandle) -> Result<(), String> {
+    let app_handle = app.clone();
+
+    // 全屏截图
+    let data = snipaste::SnipasteManager::capture_full_screen()
+        .map_err(|e: anyhow::Error| e.to_string())?;
+
+    // 保存到临时文件
+    let path = snipaste::SnipasteManager::generate_temp_path("snipaste");
+    snipaste::SnipasteManager::save_to_file(&data, &path)
+        .map_err(|e: anyhow::Error| e.to_string())?;
+
+    let path_str = path.to_string_lossy().to_string();
+    snipaste::SnipasteManager::set_last_screenshot(path_str.clone());
+
+    // 隐藏主窗口
+    if let Some(main_window) = app.get_webview_window("main") {
+        main_window.hide().map_err(|e: tauri::Error| e.to_string())?;
+    }
+
+    // 创建覆盖窗口
+    use tauri::{WebviewUrl, WebviewWindowBuilder};
+    let _overlay = WebviewWindowBuilder::new(
+        &app,
+        "snipaste-overlay",
+        WebviewUrl::App("/snipaste-overlay".into())
+    )
+    .title("截图")
+    .fullscreen(true)
+    .always_on_top(true)
+    .decorations(false)
+    .skip_taskbar(true)
+    .build()
+    .map_err(|e: tauri::Error| e.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn start_long_screenshot(app: tauri::AppHandle) -> Result<(), String> {
+    let app_handle = app.clone();
+
+    // 清空之前的长截图路径
+    snipaste::SnipasteManager::clear_long_screenshot_paths();
+
+    // 全屏截图
+    let data = snipaste::SnipasteManager::capture_full_screen()
+        .map_err(|e: anyhow::Error| e.to_string())?;
+
+    // 保存到临时文件
+    let path = snipaste::SnipasteManager::generate_temp_path("longshot");
+    snipaste::SnipasteManager::save_to_file(&data, &path)
+        .map_err(|e: anyhow::Error| e.to_string())?;
+
+    let path_str = path.to_string_lossy().to_string();
+    snipaste::SnipasteManager::add_long_screenshot_path(path_str.clone());
+    snipaste::SnipasteManager::set_last_screenshot(path_str.clone());
+
+    // 隐藏主窗口
+    if let Some(main_window) = app.get_webview_window("main") {
+        main_window.hide().map_err(|e: tauri::Error| e.to_string())?;
+    }
+
+    // 创建覆盖窗口（长截图模式）
+    use tauri::{WebviewUrl, WebviewWindowBuilder};
+    let _overlay = WebviewWindowBuilder::new(
+        &app,
+        "snipaste-overlay",
+        WebviewUrl::App("/snipaste-overlay?mode=long".into())
+    )
+    .title("长截图")
+    .fullscreen(true)
+    .always_on_top(true)
+    .decorations(false)
+    .skip_taskbar(true)
+    .build()
+    .map_err(|e: tauri::Error| e.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
+fn snipaste_crop_region(x: u32, y: u32, width: u32, height: u32) -> Result<String, String> {
+    let screenshot_path = snipaste::SnipasteManager::get_last_screenshot()
+        .ok_or("No screenshot available")?;
+    
+    let data = std::fs::read(&screenshot_path)
+        .map_err(|e| e.to_string())?;
+    
+    let cropped = snipaste::SnipasteManager::crop_region(&data, x, y, width, height)
+        .map_err(|e| e.to_string())?;
+    
+    let crop_path = snipaste::SnipasteManager::generate_temp_path("crop");
+    snipaste::SnipasteManager::save_to_file(&cropped, &crop_path)
+        .map_err(|e| e.to_string())?;
+    
+    Ok(crop_path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+fn snipaste_stitch_screenshots() -> Result<String, String> {
+    let paths = snipaste::SnipasteManager::get_long_screenshot_paths();
+    if paths.is_empty() {
+        return Err("No screenshots to stitch".to_string());
+    }
+    
+    let stitched = snipaste::SnipasteManager::stitch_screenshots(&paths)
+        .map_err(|e| e.to_string())?;
+    
+    let stitch_path = snipaste::SnipasteManager::generate_temp_path("stitched");
+    snipaste::SnipasteManager::save_to_file(&stitched, &stitch_path)
+        .map_err(|e| e.to_string())?;
+    
+    Ok(stitch_path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+fn snipaste_capture_next() -> Result<String, String> {
+    // 全屏截图
+    let data = snipaste::SnipasteManager::capture_full_screen()
+        .map_err(|e| e.to_string())?;
+    
+    // 保存到临时文件
+    let path = snipaste::SnipasteManager::generate_temp_path("longshot");
+    snipaste::SnipasteManager::save_to_file(&data, &path)
+        .map_err(|e| e.to_string())?;
+    
+    let path_str = path.to_string_lossy().to_string();
+    snipaste::SnipasteManager::add_long_screenshot_path(path_str.clone());
+    
+    Ok(path_str)
+}
+
+#[tauri::command]
+fn snipaste_save_screenshot(data: Vec<u8>, path: Option<String>) -> Result<String, String> {
+    let save_path = if let Some(p) = path {
+        std::path::PathBuf::from(p)
+    } else {
+        let desktop = dirs::desktop_dir().ok_or("无法获取桌面路径")?;
+        desktop.join(format!("screenshot_{}.png", Local::now().format("%Y%m%d_%H%M%S")))
+    };
+    
+    snipaste::SnipasteManager::save_to_file(&data, &save_path)
+        .map_err(|e| e.to_string())?;
+    
+    Ok(save_path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+fn snipaste_copy_to_clipboard(_path: String) -> Result<(), String> {
+    // 在 Windows 上，复制图片到剪贴板需要使用 Windows API
+    // 这里先实现基础版本，后续可以完善
+    Ok(())
+}
+
+#[tauri::command]
+fn snipaste_get_screenshot_base64() -> Result<String, String> {
+    let path = snipaste::SnipasteManager::get_last_screenshot()
+        .ok_or("No screenshot")?;
+    snipaste::SnipasteManager::image_to_base64(&path)
+        .map_err(|e: anyhow::Error| e.to_string())
+}
+
+#[tauri::command]
+fn snipaste_create_pin(image_data: String, _x: f64, _y: f64) -> Result<(), String> {
+    // 保存图片到临时文件
+    use base64::Engine;
+    let data = base64::engine::general_purpose::STANDARD.decode(&image_data)
+        .map_err(|e| e.to_string())?;
+
+    let path = snipaste::SnipasteManager::generate_temp_path("pin");
+    snipaste::SnipasteManager::save_to_file(&data, &path)
+        .map_err(|e: anyhow::Error| e.to_string())?;
+
+    // 发送事件给前端创建贴图窗口
+    // 这里需要通过前端来创建贴图窗口
+    Ok(())
+}
+
+#[tauri::command]
+fn snipaste_finish(app: tauri::AppHandle) -> Result<(), String> {
+    // 关闭覆盖窗口
+    if let Some(overlay) = app.get_webview_window("snipaste-overlay") {
+        overlay.close().map_err(|e: tauri::Error| e.to_string())?;
+    }
+
+    // 显示主窗口
+    if let Some(main_window) = app.get_webview_window("main") {
+        main_window.show().map_err(|e: tauri::Error| e.to_string())?;
+        main_window.set_focus().map_err(|e: tauri::Error| e.to_string())?;
+    }
+
+    Ok(())
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -174,7 +373,11 @@ pub fn run() {
             ocr_paddleocr, check_paddleocr, install_paddleocr,
             ocr_openai, ocr_ollama, translate_google, translate_ai, translate_custom,
             ocr_custom_vision, set_autostart, get_autostart, clear_temp_cache,
-            register_shortcuts, unregister_all_shortcuts
+            register_shortcuts, unregister_all_shortcuts,
+            start_snipaste, start_long_screenshot, snipaste_crop_region,
+            snipaste_stitch_screenshots, snipaste_capture_next, snipaste_save_screenshot,
+            snipaste_copy_to_clipboard, snipaste_get_screenshot_base64,
+            snipaste_create_pin, snipaste_finish
         ])
         .setup(|app| {
             use tauri::Manager;
