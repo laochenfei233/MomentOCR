@@ -550,23 +550,50 @@ export default function SnipasteOverlay() {
     }
   }, [activeTool, annotations]);
 
-  const handleConfirm = useCallback(async () => {
-    if (!selection) return;
+  // 生成带标注的图片
+  const generateAnnotatedImage = useCallback(async (selection: Selection): Promise<string> => {
     const x = Math.min(selection.startX, selection.endX);
     const y = Math.min(selection.startY, selection.endY);
     const width = Math.abs(selection.endX - selection.startX);
     const height = Math.abs(selection.endY - selection.startY);
 
+    // 创建临时画布
+    const tempCanvas = document.createElement('canvas');
+    tempCanvas.width = width;
+    tempCanvas.height = height;
+    const ctx = tempCanvas.getContext('2d');
+    if (!ctx) throw new Error('Failed to create canvas');
+
+    // 绘制背景图片
+    const img = new Image();
+    img.src = imageSrc;
+    await new Promise((resolve) => { img.onload = resolve; });
+    ctx.drawImage(img, x, y, width, height, 0, 0, width, height);
+
+    // 绘制标注（偏移到选区内）
+    ctx.save();
+    ctx.translate(-x, -y);
+    for (const annotation of annotations) {
+      drawAnnotation(ctx, annotation);
+    }
+    ctx.restore();
+
+    // 转换为 base64
+    return tempCanvas.toDataURL('image/png').split(',')[1];
+  }, [imageSrc, annotations]);
+
+  const handleConfirm = useCallback(async () => {
+    if (!selection) return;
     try {
-      const cropPath = await invoke<string>('snipaste_crop_region', { x, y, width, height });
+      const imageData = await generateAnnotatedImage(selection);
       const { emit } = await import('@tauri-apps/api/event');
-      await emit('snipaste-cropped', { path: cropPath });
+      await emit('snipaste-cropped', { imageData });
       await getCurrentWindow().close();
     } catch (err) {
-      console.error('Crop failed:', err);
+      console.error('Export failed:', err);
       await getCurrentWindow().close();
     }
-  }, [selection]);
+  }, [selection, generateAnnotatedImage]);
 
   const handleCancel = useCallback(async () => {
     try {
@@ -580,35 +607,36 @@ export default function SnipasteOverlay() {
 
   const handleSave = useCallback(async () => {
     if (!selection) return;
-    const x = Math.min(selection.startX, selection.endX);
-    const y = Math.min(selection.startY, selection.endY);
-    const width = Math.abs(selection.endX - selection.startX);
-    const height = Math.abs(selection.endY - selection.startY);
-
     try {
-      const cropPath = await invoke<string>('snipaste_crop_region', { x, y, width, height });
-      await invoke('snipaste_save_screenshot', { path: cropPath });
+      const imageData = await generateAnnotatedImage(selection);
+      // 转换为 Uint8Array
+      const binaryString = atob(imageData);
+      const bytes = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+      await invoke('snipaste_save_screenshot', { data: Array.from(bytes) });
       await getCurrentWindow().close();
     } catch (err) {
       console.error('Save failed:', err);
     }
-  }, [selection]);
+  }, [selection, generateAnnotatedImage]);
 
   const handleCopy = useCallback(async () => {
     if (!selection) return;
-    const x = Math.min(selection.startX, selection.endX);
-    const y = Math.min(selection.startY, selection.endY);
-    const width = Math.abs(selection.endX - selection.startX);
-    const height = Math.abs(selection.endY - selection.startY);
-
     try {
-      const cropPath = await invoke<string>('snipaste_crop_region', { x, y, width, height });
-      await invoke('snipaste_copy_to_clipboard', { path: cropPath });
+      const imageData = await generateAnnotatedImage(selection);
+      const binaryString = atob(imageData);
+      const bytes = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+      await invoke('snipaste_copy_to_clipboard', { data: Array.from(bytes) });
       await getCurrentWindow().close();
     } catch (err) {
       console.error('Copy failed:', err);
     }
-  }, [selection]);
+  }, [selection, generateAnnotatedImage]);
 
   const handlePin = useCallback(async () => {
     if (!selection) return;

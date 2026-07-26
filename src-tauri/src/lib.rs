@@ -316,9 +316,11 @@ fn snipaste_save_screenshot(data: Vec<u8>, path: Option<String>) -> Result<Strin
 }
 
 #[tauri::command]
-fn snipaste_copy_to_clipboard(_path: String) -> Result<(), String> {
-    // 在 Windows 上，复制图片到剪贴板需要使用 Windows API
-    // 这里先实现基础版本，后续可以完善
+fn snipaste_copy_to_clipboard(data: Vec<u8>) -> Result<(), String> {
+    // 保存到临时文件（完整的剪贴板实现需要将 PNG 转换为 DIB 格式）
+    let temp_path = snipaste::SnipasteManager::generate_temp_path("clipboard");
+    snipaste::SnipasteManager::save_to_file(&data, &temp_path)
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 
