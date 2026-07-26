@@ -6,74 +6,47 @@ mod paddleocr;
 use screenshot::ScreenshotManager;
 use overlay::{OverlayManager, OverlayResult};
 use tauri::Emitter;
+use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
+use tauri_plugin_global_shortcut::{Shortcut, ShortcutState};
 use chrono::Local;
+use std::collections::HashMap;
 
-/// 启动截图覆盖窗口
 #[tauri::command]
 async fn start_screenshot_overlay(app: tauri::AppHandle) -> Result<String, String> {
     let app_handle = app.clone();
-    
     tauri::async_runtime::spawn(async move {
         let manager = OverlayManager::new();
-        
-        let result = tokio::task::spawn_blocking(move || {
-            manager.start_overlay()
-        }).await;
-        
+        let result = tokio::task::spawn_blocking(move || manager.start_overlay()).await;
         match result {
-            Ok(Ok(OverlayResult::Ocr { path })) => {
-                let _ = app_handle.emit("screenshot-cropped", path);
-            }
-            Ok(Ok(OverlayResult::Cancel)) => {
-                let _ = app_handle.emit("screenshot-cancel", ());
-            }
-            Ok(Err(e)) => {
-                let _ = app_handle.emit("screenshot-error", e.to_string());
-            }
-            Err(e) => {
-                let _ = app_handle.emit("screenshot-error", e.to_string());
-            }
+            Ok(Ok(OverlayResult::Ocr { path })) => { let _ = app_handle.emit("screenshot-cropped", path); }
+            Ok(Ok(OverlayResult::Cancel)) => { let _ = app_handle.emit("screenshot-cancel", ()); }
+            Ok(Err(e)) => { let _ = app_handle.emit("screenshot-error", e.to_string()); }
+            Err(e) => { let _ = app_handle.emit("screenshot-error", e.to_string()); }
         }
     });
-    
     Ok("started".to_string())
 }
 
-/// 获取截图 base64（供前端使用）
 #[tauri::command]
 fn get_screenshot_base64() -> Result<String, String> {
-    let path = ScreenshotManager::get_last_screenshot()
-        .ok_or_else(|| "No screenshot available".to_string())?;
+    let path = ScreenshotManager::get_last_screenshot().ok_or("No screenshot")?;
     let data = std::fs::read(&path).map_err(|e| e.to_string())?;
     use base64::Engine;
     Ok(base64::engine::general_purpose::STANDARD.encode(&data))
 }
 
-/// 复制图片到剪贴板
 #[tauri::command]
-fn copy_image_to_clipboard(path: String) -> Result<(), String> {
-    let _data = std::fs::read(&path).map_err(|e| e.to_string())?;
-    // 暂时返回成功
-    Ok(())
-}
+fn copy_image_to_clipboard(_path: String) -> Result<(), String> { Ok(()) }
 
-/// 保存截图对话框
 #[tauri::command]
 async fn save_screenshot_dialog() -> Result<String, String> {
-    // 简单实现：保存到桌面
-    let screenshot_path = ScreenshotManager::get_last_screenshot()
-        .ok_or("没有截图")?;
-    
+    let screenshot_path = ScreenshotManager::get_last_screenshot().ok_or("没有截图")?;
     let desktop = dirs::desktop_dir().ok_or("无法获取桌面路径")?;
-    let save_path = desktop.join(format!("screenshot_{}.png", 
-        Local::now().format("%Y%m%d_%H%M%S")));
-    
+    let save_path = desktop.join(format!("screenshot_{}.png", Local::now().format("%Y%m%d_%H%M%S")));
     std::fs::copy(&screenshot_path, &save_path).map_err(|e| e.to_string())?;
-    
     Ok(save_path.to_string_lossy().to_string())
 }
 
-/// 选择图片文件
 #[tauri::command]
 fn select_image_files() -> Result<Vec<String>, String> {
     let paths = rfd::FileDialog::new()
@@ -81,105 +54,123 @@ fn select_image_files() -> Result<Vec<String>, String> {
         .set_title("选择图片文件")
         .pick_files()
         .ok_or("用户取消选择")?;
-    
     Ok(paths.iter().map(|p| p.to_string_lossy().to_string()).collect())
 }
 
-/// 保存临时文件（用于拖拽的文件）
 #[tauri::command]
 fn save_temp_files(file_names: Vec<String>, file_data: Vec<Vec<u8>>) -> Result<Vec<String>, String> {
     let mut paths = Vec::new();
     let temp_dir = std::env::temp_dir().join("moment_ocr");
     std::fs::create_dir_all(&temp_dir).map_err(|e| e.to_string())?;
-    
     for (name, data) in file_names.iter().zip(file_data.iter()) {
         let path = temp_dir.join(name);
         std::fs::write(&path, data).map_err(|e| e.to_string())?;
         paths.push(path.to_string_lossy().to_string());
     }
-    
     Ok(paths)
 }
 
-/// OCR识别 - PaddleOCR
 #[tauri::command]
 async fn ocr_paddleocr(image_path: String) -> Result<String, String> {
-    let result = tokio::task::spawn_blocking(move || {
-        paddleocr::recognize(&image_path)
-    }).await;
-    
-    match result {
-        Ok(Ok(text)) => Ok(text),
-        Ok(Err(e)) => Err(e.to_string()),
-        Err(e) => Err(e.to_string()),
-    }
+    let r = tokio::task::spawn_blocking(move || paddleocr::recognize(&image_path)).await;
+    match r { Ok(Ok(t)) => Ok(t), Ok(Err(e)) => Err(e.to_string()), Err(e) => Err(e.to_string()) }
 }
-
-/// 检查PaddleOCR是否已安装
 #[tauri::command]
-fn check_paddleocr() -> bool {
-    paddleocr::check_installed()
-}
-
-/// 安装PaddleOCR
+fn check_paddleocr() -> bool { paddleocr::check_installed() }
 #[tauri::command]
 async fn install_paddleocr() -> Result<String, String> {
-    let result = tokio::task::spawn_blocking(|| {
-        paddleocr::install()
-    }).await;
-    
-    match result {
-        Ok(Ok(msg)) => Ok(msg),
-        Ok(Err(e)) => Err(e.to_string()),
-        Err(e) => Err(e.to_string()),
-    }
+    let r = tokio::task::spawn_blocking(|| paddleocr::install()).await;
+    match r { Ok(Ok(m)) => Ok(m), Ok(Err(e)) => Err(e.to_string()), Err(e) => Err(e.to_string()) }
 }
-
 #[tauri::command]
 async fn ocr_openai(api_key: String, image_path: String, model: String, max_tokens: u32) -> Result<String, String> {
-    let image_base64 = screenshot::ScreenshotManager::image_to_base64(&image_path).map_err(|e| e.to_string())?;
-    api::call_openai_vision(&api_key, &image_base64, &model, max_tokens).await.map_err(|e| e.to_string())
+    let b64 = ScreenshotManager::image_to_base64(&image_path).map_err(|e| e.to_string())?;
+    api::call_openai_vision(&api_key, &b64, &model, max_tokens).await.map_err(|e| e.to_string())
 }
-
 #[tauri::command]
 async fn ocr_ollama(endpoint: String, model: String, image_path: String) -> Result<String, String> {
-    let image_base64 = screenshot::ScreenshotManager::image_to_base64(&image_path).map_err(|e| e.to_string())?;
-    api::call_ollama(&endpoint, &model, &image_base64).await.map_err(|e| e.to_string())
+    let b64 = ScreenshotManager::image_to_base64(&image_path).map_err(|e| e.to_string())?;
+    api::call_ollama(&endpoint, &model, &b64).await.map_err(|e| e.to_string())
 }
-
+#[tauri::command]
+async fn ocr_custom_vision(base_url: String, api_key: String, model: String, image_path: String, max_tokens: u32) -> Result<String, String> {
+    let b64 = ScreenshotManager::image_to_base64(&image_path).map_err(|e| e.to_string())?;
+    api::call_custom_vision(&base_url, &api_key, &model, &b64, max_tokens).await.map_err(|e| e.to_string())
+}
 #[tauri::command]
 async fn translate_google(text: String, target_lang: String) -> Result<String, String> {
     api::call_google_translate(&text, &target_lang).await.map_err(|e| e.to_string())
 }
-
 #[tauri::command]
 async fn translate_ai(api_key: String, text: String, target_lang: String, model: String, provider: String) -> Result<String, String> {
     api::call_ai_translate(&api_key, &text, &target_lang, &model, &provider).await.map_err(|e| e.to_string())
+}
+#[tauri::command]
+async fn translate_custom(base_url: String, api_key: String, model: String, text: String, target_lang: String) -> Result<String, String> {
+    api::call_custom_translate(&base_url, &api_key, &model, &text, &target_lang).await.map_err(|e| e.to_string())
+}
+#[tauri::command]
+fn set_autostart(app: tauri::AppHandle, enable: bool) -> Result<(), String> {
+    let am = app.autolaunch();
+    if enable { am.enable().map_err(|e| e.to_string()) } else { am.disable().map_err(|e| e.to_string()) }
+}
+#[tauri::command]
+fn get_autostart(app: tauri::AppHandle) -> bool { app.autolaunch().is_enabled().unwrap_or(false) }
+#[tauri::command]
+fn register_shortcuts(app: tauri::AppHandle, shortcuts: HashMap<String, String>) -> Result<(), String> {
+    use tauri_plugin_global_shortcut::GlobalShortcutExt;
+    let app_handle = app.clone();
+    app.global_shortcut().unregister_all().map_err(|e| e.to_string())?;
+    for (action, shortcut_str) in &shortcuts {
+        let shortcut: Shortcut = shortcut_str.parse().map_err(|e| format!("Invalid shortcut '{}': {}", shortcut_str, e))?;
+        let action_clone = action.clone();
+        let handle = app_handle.clone();
+        app.global_shortcut().on_shortcut(shortcut, move |_app, _shortcut, event| {
+            if event.state == ShortcutState::Pressed {
+                let _ = handle.emit("global-shortcut-triggered", serde_json::json!({ "action": action_clone }));
+            }
+        }).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn unregister_all_shortcuts(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri_plugin_global_shortcut::GlobalShortcutExt;
+    app.global_shortcut().unregister_all().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn clear_temp_cache() -> Result<String, String> {
+    use std::fs;
+    let t = std::env::temp_dir().join("moment_ocr");
+    if t.exists() { fs::remove_dir_all(&t).map_err(|e| e.to_string())?; }
+    fs::create_dir_all(&t).map_err(|e| e.to_string())?;
+    Ok("已清除临时缓存".to_string())
 }
 
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, Some(vec![])))
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
-            start_screenshot_overlay,
-            get_screenshot_base64,
-            copy_image_to_clipboard,
-            save_screenshot_dialog,
-            select_image_files,
-            save_temp_files,
+            start_screenshot_overlay, get_screenshot_base64, copy_image_to_clipboard,
+            save_screenshot_dialog, select_image_files, save_temp_files,
             ocr_paddleocr, check_paddleocr, install_paddleocr,
-            ocr_openai, ocr_ollama, translate_google, translate_ai
+            ocr_openai, ocr_ollama, translate_google, translate_ai, translate_custom,
+            ocr_custom_vision, set_autostart, get_autostart, clear_temp_cache,
+            register_shortcuts, unregister_all_shortcuts
         ])
         .setup(|app| {
-            use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut};
-            let shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyQ);
-            let app_handle = app.handle().clone();
-            let _ = app.global_shortcut().on_shortcut(shortcut, move |_, _, event| {
-                if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
-                    let _ = app_handle.emit("screenshot-triggered", ());
+            use tauri::Manager;
+            for p in &["icons/icon.png", "src-tauri/icons/icon.png", "../src-tauri/icons/icon.png"] {
+                if let Ok(img) = tauri::image::Image::from_path(p) {
+                    if let Some(w) = app.get_webview_window("main") { let _ = w.set_icon(img); }
+                    break;
                 }
-            });
+            }
             Ok(())
         })
         .run(tauri::generate_context!())
