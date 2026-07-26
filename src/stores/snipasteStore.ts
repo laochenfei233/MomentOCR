@@ -1,8 +1,15 @@
 import { create } from 'zustand';
 
+export type AnnotationType = 'pen' | 'line' | 'arrow' | 'rectangle' | 'text' | 'mosaic' | 'highlighter' | 'number' | 'blur';
+
+export interface Point {
+  x: number;
+  y: number;
+}
+
 export interface Annotation {
   id: string;
-  type: 'arrow' | 'rectangle' | 'text' | 'mosaic';
+  type: AnnotationType;
   x: number;
   y: number;
   width?: number;
@@ -11,6 +18,9 @@ export interface Annotation {
   endY?: number;
   text?: string;
   color: string;
+  strokeWidth?: number;
+  points?: Point[];  // 用于画笔和荧光笔的路径点
+  number?: number;   // 用于序号标注
 }
 
 export interface PinState {
@@ -27,19 +37,22 @@ interface SnipasteState {
   // 截图状态
   isCapturing: boolean;
   screenshotPath: string | null;
-  
+
   // 长截图状态
   isLongScreenshot: boolean;
   longScreenshotPaths: string[];
   currentStitchedPath: string | null;
-  
+
   // 标注状态
-  activeTool: 'arrow' | 'rectangle' | 'text' | 'mosaic' | null;
+  activeTool: AnnotationType | null;
   annotations: Annotation[];
-  
+  annotationColor: string;
+  strokeWidth: number;
+  numberCounter: number;
+
   // 贴图管理
   pins: PinState[];
-  
+
   // Actions
   setCapturing: (isCapturing: boolean) => void;
   setScreenshotPath: (path: string | null) => void;
@@ -47,11 +60,14 @@ interface SnipasteState {
   addLongScreenshotPath: (path: string) => void;
   clearLongScreenshotPaths: () => void;
   setCurrentStitchedPath: (path: string | null) => void;
-  setActiveTool: (tool: 'arrow' | 'rectangle' | 'text' | 'mosaic' | null) => void;
+  setActiveTool: (tool: AnnotationType | null) => void;
+  setAnnotationColor: (color: string) => void;
+  setStrokeWidth: (width: number) => void;
   addAnnotation: (annotation: Annotation) => void;
   removeAnnotation: (id: string) => void;
   undoAnnotation: () => void;
   clearAnnotations: () => void;
+  incrementNumber: () => void;
   addPin: (pin: PinState) => void;
   removePin: (id: string) => void;
   updatePin: (id: string, updates: Partial<PinState>) => void;
@@ -67,8 +83,11 @@ export const useSnipasteStore = create<SnipasteState>((set) => ({
   currentStitchedPath: null,
   activeTool: null,
   annotations: [],
+  annotationColor: '#FF3B30',
+  strokeWidth: 3,
+  numberCounter: 1,
   pins: [],
-  
+
   // Actions
   setCapturing: (isCapturing) => set({ isCapturing }),
   setScreenshotPath: (path) => set({ screenshotPath: path }),
@@ -79,6 +98,8 @@ export const useSnipasteStore = create<SnipasteState>((set) => ({
   clearLongScreenshotPaths: () => set({ longScreenshotPaths: [] }),
   setCurrentStitchedPath: (path) => set({ currentStitchedPath: path }),
   setActiveTool: (tool) => set({ activeTool: tool }),
+  setAnnotationColor: (color) => set({ annotationColor: color }),
+  setStrokeWidth: (width) => set({ strokeWidth: width }),
   addAnnotation: (annotation) => set((state) => ({
     annotations: [...state.annotations, annotation]
   })),
@@ -89,6 +110,7 @@ export const useSnipasteStore = create<SnipasteState>((set) => ({
     annotations: state.annotations.slice(0, -1)
   })),
   clearAnnotations: () => set({ annotations: [] }),
+  incrementNumber: () => set((state) => ({ numberCounter: state.numberCounter + 1 })),
   addPin: (pin) => set((state) => ({
     pins: [...state.pins, pin]
   })),
