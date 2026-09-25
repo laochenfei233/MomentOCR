@@ -201,6 +201,10 @@ pub fn run() {
         ])
         .setup(|app| {
             use tauri::Manager;
+            // 注入资源目录：安装版把 OCR/截图脚本随包发布到此处（见 tauri.conf.json 的 bundle.resources）
+            if let Ok(resource_dir) = app.path().resource_dir() {
+                overlay::set_resource_dir(resource_dir);
+            }
             for p in &["icons/icon.png", "src-tauri/icons/icon.png", "../src-tauri/icons/icon.png"] {
                 if let Ok(img) = tauri::image::Image::from_path(p) {
                     if let Some(w) = app.get_webview_window("main") { let _ = w.set_icon(img); }

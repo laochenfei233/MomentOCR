@@ -1,17 +1,26 @@
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::OnceLock;
 use std::time::Duration;
 use anyhow::Result;
+
+/// Tauri 资源目录（安装版随包发布的脚本位于其 `scripts/` 下），启动时注入。
+static RESOURCE_DIR: OnceLock<PathBuf> = OnceLock::new();
+
+pub fn set_resource_dir(dir: PathBuf) {
+    let _ = RESOURCE_DIR.set(dir);
+}
 
 /// 查找脚本文件路径。
 ///
 /// 解析顺序全部基于运行时位置，不依赖任何硬编码的本地绝对路径：
-/// 1. 可执行文件所在目录及其上溯 4 层内的 `scripts/`
+/// 1. Tauri 资源目录下的 `scripts/`（安装版首选，跨平台由 Tauri 提供正确位置）；
+/// 2. 可执行文件所在目录及其上溯 4 层内的 `scripts/`
 ///    —— 安装版命中 `<安装目录>/scripts/`，开发版从 `src-tauri/target/<profile>/`
 ///    上溯到 `src-tauri/scripts/`；
-/// 2. `CARGO_MANIFEST_DIR`（`cargo run` 启动时存在）；
-/// 3. 当前工作目录下的 `scripts/` 与 `src-tauri/scripts/`。
+/// 3. `CARGO_MANIFEST_DIR`（`cargo run` 启动时存在）；
+/// 4. 当前工作目录下的 `scripts/` 与 `src-tauri/scripts/`。
 ///
 /// 均未命中时返回原始文件名，交由调用方（由 Python 在当前工作目录查找）。
 pub fn find_script(filename: &str) -> String {
@@ -21,7 +30,15 @@ pub fn find_script(filename: &str) -> String {
 }
 
 fn search_script(filename: &str) -> Option<PathBuf> {
-    // 1) 可执行文件目录及上溯若干层
+    // 1) Tauri 资源目录（安装版：Windows 在安装目录、macOS 在 AppBundle/Contents/Resources）
+    if let Some(dir) = RESOURCE_DIR.get() {
+        let candidate = dir.join("scripts").join(filename);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+
+    // 2) 可执行文件目录及上溯若干层
     if let Ok(exe_path) = std::env::current_exe() {
         let mut dir = exe_path.parent();
         for _ in 0..4 {
@@ -34,7 +51,7 @@ fn search_script(filename: &str) -> Option<PathBuf> {
         }
     }
 
-    // 2) cargo 运行环境
+    // 3) cargo 运行环境
     if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
         let candidate = Path::new(&manifest_dir).join("scripts").join(filename);
         if candidate.is_file() {
@@ -42,7 +59,7 @@ fn search_script(filename: &str) -> Option<PathBuf> {
         }
     }
 
-    // 3) 当前工作目录
+    // 4) 当前工作目录
     for base in ["scripts", "src-tauri/scripts"] {
         let candidate = Path::new(base).join(filename);
         if candidate.is_file() {

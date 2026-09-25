@@ -41,6 +41,9 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "resources": [
+      "scripts/*.py"
+    ],
     "windows": {
       "nsis": {
         "installMode": "perMachine",
