@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import ScreenshotTool from './components/ScreenshotTool';
 import FileUploader from './components/FileUploader';
 import OcrResult from './components/OcrResult';
@@ -7,6 +7,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { useOcrStore } from './stores/ocrStore';
 import { useSettingsStore } from './stores/settingsStore';
+import { builtinPlugins } from './plugins';
 
 type Tab = 'screenshot' | 'file' | 'settings';
 
@@ -16,8 +17,37 @@ function App() {
   const [showMenu, setShowMenu] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [ocrText, setOcrText] = useState('');
-  const { history, restoreFromHistory, clearHistory } = useOcrStore();
-  const { shortcuts, quickAction, config, activeTranslationPlugin, pluginSettings } = useSettingsStore();
+  const [translation, setTranslation] = useState('');
+  const [translateFeedback, setTranslateFeedback] = useState<{ ok: boolean; msg: string } | null>(null);
+  const { history, restoreFromHistory, clearHistory, result: storeResult } = useOcrStore();
+  const { shortcuts, quickAction, config, activeOcrPlugin, activeTranslationPlugin, pluginSettings, language, setActiveOcrPlugin, setActiveTranslationPlugin, setPluginSetting } = useSettingsStore();
+
+  const showTranslateFeedback = (ok: boolean, msg: string) => {
+    setTranslateFeedback({ ok, msg });
+    setTimeout(() => setTranslateFeedback(null), 4000);
+  };
+
+  // 新识别结果（或从历史恢复）到达时，清空上一次的译文
+  useEffect(() => { setTranslation(''); }, [storeResult]);
+
+  // 迁移：已删除的插件（如 ai-translate）不再存在于列表时回退到默认项
+  useEffect(() => {
+    const ids = new Set(builtinPlugins.map((p) => p.metadata.id));
+    if (!ids.has(activeOcrPlugin)) setActiveOcrPlugin('paddle-ocr');
+    if (!ids.has(activeTranslationPlugin)) setActiveTranslationPlugin('google-translate');
+  }, [activeOcrPlugin, activeTranslationPlugin, setActiveOcrPlugin, setActiveTranslationPlugin]);
+
+  // 迁移：阿里百炼接入域名切换 —— 本地已保存的老 dashscope 地址 / 未替换的 WorkspaceId 占位符
+  // 统一换成实测可直接访问的地域接入域名（无需业务空间 ID）
+  useEffect(() => {
+    const NEW_BAILIAN_BASE = 'https://trial.cn-beijing.maas.aliyuncs.com/compatible-mode/v1';
+    for (const pid of ['qwen-vision', 'qwen-translate']) {
+      const baseUrl = (pluginSettings[pid]?.baseUrl as string) || '';
+      if (baseUrl.includes('dashscope.aliyuncs.com') || baseUrl.includes('{WorkspaceId}')) {
+        setPluginSetting(pid, 'baseUrl', NEW_BAILIAN_BASE);
+      }
+    }
+  }, [pluginSettings, setPluginSetting]);
 
   useEffect(() => {
     const handleClick = () => setShowMenu(false);
@@ -27,7 +57,9 @@ function App() {
     }
   }, [showMenu]);
 
-  // 全局快捷键监听
+  // 全局快捷键监听（通过 ref 调用最新函数，避免闭包捕获旧状态）
+  const translateRef = useRef<() => void>(() => {});
+  const copyRef = useRef<() => void>(() => {});
   useEffect(() => {
     const unlisten = listen<{ action: string }>('global-shortcut-triggered', (event) => {
       const { action } = event.payload;
@@ -36,10 +68,10 @@ function App() {
           invoke('start_screenshot_overlay');
           break;
         case 'copy':
-          handleCopy();
+          copyRef.current();
           break;
         case 'translate':
-          handleTranslate();
+          translateRef.current();
           break;
       }
     });
@@ -73,21 +105,25 @@ function App() {
   };
 
   const handleTranslate = async () => {
-    if (!ocrText) { alert('请先识别文字'); return; }
+    if (!ocrText.trim()) { showTranslateFeedback(false, '请先识别文字'); return; }
+    // 翻译目标语言：设置里的「翻译目标」（大模型用中文名，Google 用语言代码）
+    const targetName = language.translateTarget || '中文';
+    const targetCodeMap: Record<string, string> = { '中文': 'zh-CN', '英文': 'en', '日文': 'ja', '韩文': 'ko' };
+    const targetCode = targetCodeMap[targetName] || 'zh-CN';
     try {
       let result = '';
-      const customTranslatePlugins = ['openai-translate', 'qwen-translate', 'zhipu-translate', 'doubao-translate', 'gemini-translate'];
+      const customTranslatePlugins = ['openai-translate', 'qwen-translate', 'zhipu-translate', 'doubao-translate', 'gemini-translate', 'mimo-translate', 'deepseek-translate'];
       if (activeTranslationPlugin === 'google-translate') {
-        result = await invoke<string>('translate_google', { text: ocrText, targetLang: 'zh-CN' });
-      } else if (activeTranslationPlugin === 'ai-translate') {
-        // 兼容旧的 AI 大模型翻译（走 translate_ai，provider=openai）
-        const cfg = pluginSettings['ai-translate'] || {};
+        result = await invoke<string>('translate_google', { text: ocrText, targetLang: targetCode });
+      } else if (activeTranslationPlugin === 'claude-translate') {
+        const cfg = pluginSettings['claude-translate'] || {};
         const apiKey = (cfg.apiKey as string) || '';
-        const model = (cfg.model as string) || 'gpt-4o';
+        const model = (cfg.model as string) || 'claude-sonnet-4-5';
+        const baseUrl = (cfg.baseUrl as string) || 'https://api.anthropic.com/v1';
         if (!apiKey) { result = '错误：未配置翻译 API Key'; }
         else {
-          result = await invoke<string>('translate_ai', {
-            apiKey, text: ocrText, targetLang: 'zh', model, provider: 'openai',
+          result = await invoke<string>('translate_claude', {
+            baseUrl, apiKey, model, text: ocrText, targetLang: targetName,
           });
         }
       } else if (customTranslatePlugins.includes(activeTranslationPlugin)) {
@@ -97,10 +133,12 @@ function App() {
         const baseUrl = (cfg.baseUrl as string) || '';
         const defaultBaseUrls: Record<string, string> = {
           'openai-translate': 'https://api.openai.com/v1',
-          'qwen-translate': 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+          'qwen-translate': 'https://trial.cn-beijing.maas.aliyuncs.com/compatible-mode/v1',
           'zhipu-translate': 'https://open.bigmodel.cn/api/paas/v4',
           'doubao-translate': 'https://ark.cn-beijing.volces.com/api/v3',
           'gemini-translate': 'https://generativelanguage.googleapis.com/v1beta/openai',
+          'mimo-translate': 'https://api.xiaomimimo.com/v1',
+          'deepseek-translate': 'https://api.deepseek.com/v1',
         };
         const defaultModels: Record<string, string> = {
           'openai-translate': 'gpt-4o',
@@ -108,27 +146,42 @@ function App() {
           'zhipu-translate': 'glm-4-flash',
           'doubao-translate': 'doubao-pro-32k',
           'gemini-translate': 'gemini-1.5-flash',
+          'mimo-translate': '',
+          'deepseek-translate': 'deepseek-chat',
         };
         const finalBaseUrl = baseUrl || defaultBaseUrls[activeTranslationPlugin] || '';
         const finalModel = model || defaultModels[activeTranslationPlugin] || '';
         console.log('[translate]', activeTranslationPlugin, 'baseUrl=', finalBaseUrl, 'model=', finalModel);
         if (!apiKey) { result = '错误：未配置翻译 API Key'; }
         else if (!finalBaseUrl) { result = `错误：缺少 baseUrl (${activeTranslationPlugin})`; }
+        else if (!finalModel) { result = '错误：未选择模型，请在设置中拉取模型列表后选择'; }
         else {
           result = await invoke<string>('translate_custom', {
             baseUrl: finalBaseUrl, apiKey, model: finalModel,
-            text: ocrText, targetLang: 'zh',
+            text: ocrText, targetLang: targetName,
           });
         }
       } else {
         result = `未知翻译服务: ${activeTranslationPlugin}`;
       }
-      if (!result.startsWith('错误')) setOcrText(result);
-      else console.warn('[translate] error result:', result);
+      if (result.startsWith('错误') || result.startsWith('未知')) {
+        showTranslateFeedback(false, result);
+      } else if (result.trim()) {
+        // 译文进入独立翻译框，不覆盖原文
+        setTranslation(result);
+        showTranslateFeedback(true, `翻译完成（→${targetName}）`);
+      } else {
+        showTranslateFeedback(false, '翻译返回为空');
+      }
     } catch (err) {
       console.error('translate error:', err);
+      showTranslateFeedback(false, `翻译失败：${err}`);
     }
   };
+
+  // 供快捷键调用最新版本的 handler
+  translateRef.current = handleTranslate;
+  copyRef.current = handleCopy;
 
   const handleExit = async () => {
     try {
@@ -148,7 +201,7 @@ function App() {
       if (!resp.ok) throw new Error('无可用更新');
       const data = await resp.json();
       const latestVersion = (data.tag_name || '').replace(/^v/, '');
-      const currentVersion = '0.1.0';
+      const currentVersion = '0.2.0';
       if (latestVersion && latestVersion !== currentVersion) {
         await invoke<string>('plugin:shell|open', { url: data.html_url });
       } else {
@@ -219,7 +272,27 @@ function App() {
               <ScreenshotTool />
             </div>
           )}
-          <OcrResult onTextChange={setOcrText} />
+          {translateFeedback && (
+            <div style={{
+              padding: '8px 16px',
+              fontSize: 12,
+              color: translateFeedback.ok ? '#34C759' : '#FF3B30',
+              background: translateFeedback.ok ? 'rgba(52,199,89,0.08)' : 'rgba(255,59,48,0.08)',
+              borderBottom: `0.5px solid ${translateFeedback.ok ? 'rgba(52,199,89,0.25)' : 'rgba(255,59,48,0.25)'}`,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+            }}>
+              <span>{translateFeedback.ok ? '✓' : '⚠'}</span>
+              <span>{translateFeedback.msg}</span>
+            </div>
+          )}
+          <OcrResult
+            onTextChange={setOcrText}
+            translation={translation}
+            translationLayout={language.translateLayout || '下方'}
+            translationTarget={language.translateTarget || '中文'}
+          />
         </div>
       </main>
 

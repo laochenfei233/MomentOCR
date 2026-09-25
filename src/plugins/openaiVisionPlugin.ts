@@ -4,10 +4,10 @@ import { invoke } from '@tauri-apps/api/core';
 export class OpenaiVisionPlugin implements Plugin {
   metadata: PluginMetadata = {
     id: 'openai-vision',
-    name: 'OpenAI GPT-4V',
+    name: 'OpenAI GPT',
     version: '0.1.0',
     type: 'ocr',
-    description: 'OpenAI GPT-4V Vision plugin for OCR via API',
+    description: 'OpenAI GPT Vision plugin for OCR via API',
     author: 'MomentOCR',
   };
 

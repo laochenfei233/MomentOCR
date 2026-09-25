@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>MomentOCR Logo 预览</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { padding: 48px; background: #f0f0f5; font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif; color: #1c1c1e; }
+  h1 { text-align: center; font-size: 28px; font-weight: 700; margin-bottom: 6px; }
+  .sub { text-align: center; font-size: 14px; color: #8E8E93; margin-bottom: 48px; }
+  .row { display: flex; gap: 40px; justify-content: center; flex-wrap: wrap; align-items: flex-start; }
+  .card {
+    background: #fff; border-radius: 24px; padding: 36px 28px 28px; text-align: center;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.06); width: 340px;
+  }
+  .card h2 { font-size: 17px; font-weight: 600; margin: 20px 0 4px; }
+  .card .desc { font-size: 12px; color: #8E8E93; margin-bottom: 16px; line-height: 1.5; }
+  .logo-display { display: flex; align-items: center; justify-content: center; height: 160px; }
+  .note { text-align: center; margin-top: 32px; padding: 16px 24px; background: #fff; border-radius: 16px; display: inline-block; font-size: 13px; color: #636366; line-height: 1.6; }
+  .center-wrap { display: flex; justify-content: center; }
+  .size-item { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+  .size-item span { font-size: 10px; color: #AEAEB2; }
+</style>
+</head>
+<body>
+<h1>MomentOCR Logo</h1>
+<p class="sub">软件真实图标（src-tauri/icons/icon.png）</p>
+
+<div class="row">
+
+<!-- 亮色 -->
+<div class="card">
+  <div class="logo-display">
+    <img src="../src-tauri/icons/icon.png" width="120" height="120" alt="MomentOCR logo">
+  </div>
+  <h2>亮色 / 白底</h2>
+  <p class="desc">真实应用图标，与安装包、窗口图标完全一致</p>
+</div>
+
+<!-- 深色 -->
+<div class="card">
+  <div class="logo-display" style="background:#1c1c1e;border-radius:16px;">
+    <img src="../src-tauri/icons/icon.png" width="120" height="120" alt="MomentOCR logo">
+  </div>
+  <h2>暗色 / 深色底</h2>
+  <p class="desc">浅色底板在深色背景下依然清晰</p>
+</div>
+
+<!-- 纯黑 -->
+<div class="card">
+  <div class="logo-display" style="background:#000;border-radius:16px;">
+    <img src="../src-tauri/icons/icon.png" width="120" height="120" alt="MomentOCR logo">
+  </div>
+  <h2>纯黑底 / 托盘</h2>
+  <p class="desc">系统托盘 16px 场景验证</p>
+</div>
+
+</div>
+
+<!-- 尺寸对比 -->
+<div class="center-wrap" style="margin-top:24px;">
+  <div style="background:#fff;border-radius:20px;padding:28px 36px;box-shadow:0 4px 24px rgba(0,0,0,0.06);display:flex;gap:24px;align-items:end;">
+    <div class="size-item">
+      <img src="../src-tauri/icons/32x32.png" width="16" height="16" alt="16px">
+      <span>16px</span>
+    </div>
+    <div class="size-item">
+      <img src="../src-tauri/icons/32x32.png" width="32" height="32" alt="32px">
+      <span>32px</span>
+    </div>
+    <div class="size-item">
+      <img src="../src-tauri/icons/128x128.png" width="48" height="48" alt="48px">
+      <span>48px</span>
+    </div>
+    <div class="size-item">
+      <img src="../src-tauri/icons/128x128.png" width="64" height="64" alt="64px">
+      <span>64px</span>
+    </div>
+    <div class="size-item">
+      <img src="../src-tauri/icons/128x128@2x.png" width="128" height="128" alt="128px">
+      <span>128px</span>
+    </div>
+  </div>
+</div>
+
+<div class="center-wrap" style="margin-top:36px;">
+  <div class="note">
+    直接引用软件真实图标文件，不再手绘 SVG<br>
+    与窗口图标、安装包图标、应用内 logo 完全一致
+  </div>
+</div>
+</body>
+</html>

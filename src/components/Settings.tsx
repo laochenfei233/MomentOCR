@@ -18,9 +18,9 @@ const SETTINGS_TABS: { key: SettingsTab; label: string }[] = [
 
 function Settings() {
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
-  const [paddleocrInstalled, setPaddleocrInstalled] = useState<boolean | null>(null);
-  const [installing, setInstalling] = useState(false);
-  const [installMsg, setInstallMsg] = useState<string | null>(null);
+  const [localOcrStatus, setLocalOcrStatus] = useState<Record<string, boolean | null>>({ 'paddle-ocr': null, 'rapid-ocr': null });
+  const [installing, setInstalling] = useState<string | null>(null);
+  const [installMsg, setInstallMsg] = useState<Record<string, string | null>>({});
   const [clearCacheMsg, setClearCacheMsg] = useState<string | null>(null);
   const [clearCacheOk, setClearCacheOk] = useState(false);
   const [updateChecking, setUpdateChecking] = useState(false);
@@ -57,27 +57,27 @@ function Settings() {
   const ocrPlugins = builtinPlugins.filter((p) => p.metadata.type === 'ocr');
   const translationPlugins = builtinPlugins.filter((p) => p.metadata.type === 'translation');
 
-  const checkPaddleOcr = async () => {
+  const checkLocalOcr = async (engineId: string) => {
     try {
-      const installed = await invoke<boolean>('check_paddleocr');
-      setPaddleocrInstalled(installed);
+      const installed = await invoke<boolean>(engineId === 'rapid-ocr' ? 'check_rapidocr' : 'check_paddleocr');
+      setLocalOcrStatus((s) => ({ ...s, [engineId]: installed }));
     } catch {
-      setPaddleocrInstalled(false);
+      setLocalOcrStatus((s) => ({ ...s, [engineId]: false }));
     }
   };
 
-  const handleInstallPaddleOcr = async () => {
-    setInstalling(true);
-    setInstallMsg(null);
+  const handleInstallLocalOcr = async (engineId: string) => {
+    setInstalling(engineId);
+    setInstallMsg((m) => ({ ...m, [engineId]: null }));
     try {
-      const msg = await invoke<string>('install_paddleocr');
-      setInstallMsg(msg);
-      setPaddleocrInstalled(true);
+      const msg = await invoke<string>(engineId === 'rapid-ocr' ? 'install_rapidocr' : 'install_paddleocr');
+      setInstallMsg((m) => ({ ...m, [engineId]: msg }));
+      setLocalOcrStatus((s) => ({ ...s, [engineId]: true }));
     } catch (err) {
-      setInstallMsg(`安装失败: ${err}`);
-      setPaddleocrInstalled(false);
+      setInstallMsg((m) => ({ ...m, [engineId]: `安装失败: ${err}` }));
+      setLocalOcrStatus((s) => ({ ...s, [engineId]: false }));
     } finally {
-      setInstalling(false);
+      setInstalling(null);
     }
   };
 
@@ -163,6 +163,8 @@ function Settings() {
             <SettingsCard title="语言设置">
               <SelectItem label="识别语言" value={language.ocrLang} options={['自动检测', '中文', '英文', '日文', '韩文']} onChange={(v) => setLanguage({ ocrLang: v })} />
               <SelectItem label="翻译目标" value={language.translateTarget} options={['中文', '英文', '日文', '韩文']} onChange={(v) => setLanguage({ translateTarget: v })} />
+              <SelectItem label="翻译结果显示" value={language.translateLayout || '下方'} options={['下方', '右侧']} onChange={(v) => setLanguage({ translateLayout: v })} />
+              <p style={{ fontSize: 11, color: '#AEAEB2', marginTop: 4 }}>翻译结果独立成框，显示在识别原文的下方或右侧</p>
             </SettingsCard>
           </div>
         )}
@@ -266,51 +268,40 @@ function Settings() {
               <p style={{ fontSize: 12, color: '#8E8E93', marginTop: 8 }}>
                 {ocrPlugins.find((p) => p.metadata.id === activeOcrPlugin)?.metadata.description}
               </p>
-              {activeOcrPlugin === 'paddle-ocr' && (
-                <div style={{ marginTop: 12, padding: 12, background: '#F2F2F7', borderRadius: 12 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <span style={{ fontSize: 13, color: '#1c1c1e' }}>
-                      PaddleOCR: {paddleocrInstalled === null ? '未检测' : paddleocrInstalled ? '已安装' : '未安装'}
-                    </span>
-                    <div style={{ display: 'flex', gap: 8 }}>
-                      <button onClick={checkPaddleOcr}
-                        style={{ padding: '6px 12px', background: '#E5E5EA', color: '#1c1c1e', border: 'none', borderRadius: 12, fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
-                        检测
-                      </button>
-                      {!paddleocrInstalled && (
-                        <button onClick={handleInstallPaddleOcr} disabled={installing}
-                          style={{ padding: '6px 12px', background: '#007AFF', color: 'white', border: 'none', borderRadius: 12, fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
-                          {installing ? '安装中...' : '安装'}
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                  {installMsg && <p style={{ fontSize: 12, color: '#8E8E93', marginTop: 8 }}>{installMsg}</p>}
-                </div>
+              {(activeOcrPlugin === 'paddle-ocr' || activeOcrPlugin === 'rapid-ocr') && (
+                <LocalOcrPanel
+                  engineId={activeOcrPlugin}
+                  engineName={activeOcrPlugin === 'rapid-ocr' ? 'RapidOCR' : 'PaddleOCR'}
+                  status={localOcrStatus[activeOcrPlugin] ?? null}
+                  msg={installMsg[activeOcrPlugin] ?? null}
+                  installing={installing === activeOcrPlugin}
+                  onCheck={() => checkLocalOcr(activeOcrPlugin)}
+                  onInstall={() => handleInstallLocalOcr(activeOcrPlugin)}
+                />
               )}
               {activeOcrPlugin === 'openai-vision' && (
-                <PluginApiKeyConfig pluginId="openai-vision" fields={[
+                <PluginApiKeyConfig pluginId="openai-vision" listProvider="openai" defaultBaseUrl="https://api.openai.com/v1" fields={[
                   { key: 'apiKey', label: 'API Key', required: true },
                   { key: 'model', label: '模型', default: 'gpt-4o' },
                   { key: 'maxTokens', label: '最大Token数', default: '1024' },
                 ]} />
               )}
               {activeOcrPlugin === 'local-llm' && (
-                <PluginApiKeyConfig pluginId="local-llm" fields={[
+                <PluginApiKeyConfig pluginId="local-llm" listProvider="ollama" defaultBaseUrl="http://localhost:11434" endpointKey="endpoint" fields={[
                   { key: 'endpoint', label: 'Ollama 地址', default: 'http://localhost:11434' },
                   { key: 'model', label: '模型名称', default: 'llava' },
                 ]} />
               )}
               {activeOcrPlugin === 'qwen-vision' && (
-                <PluginApiKeyConfig pluginId="qwen-vision" fields={[
-                  { key: 'apiKey', label: 'API Key (阿里云 DashScope)', required: true },
+                <PluginApiKeyConfig pluginId="qwen-vision" listProvider="openai" defaultBaseUrl="https://trial.cn-beijing.maas.aliyuncs.com/compatible-mode/v1" fields={[
+                  { key: 'apiKey', label: 'API Key (阿里云百炼)', required: true },
                   { key: 'model', label: '模型', default: 'qwen-vl-max' },
-                  { key: 'baseUrl', label: 'Base URL', default: 'https://dashscope.aliyuncs.com/compatible-mode/v1' },
+                  { key: 'baseUrl', label: 'Base URL（开箱即用；生产环境建议换成控制台复制的专属 API Host）', default: 'https://trial.cn-beijing.maas.aliyuncs.com/compatible-mode/v1' },
                   { key: 'maxTokens', label: '最大Token数', default: '1024' },
                 ]} />
               )}
               {activeOcrPlugin === 'zhipu-vision' && (
-                <PluginApiKeyConfig pluginId="zhipu-vision" fields={[
+                <PluginApiKeyConfig pluginId="zhipu-vision" listProvider="openai" defaultBaseUrl="https://open.bigmodel.cn/api/paas/v4" fields={[
                   { key: 'apiKey', label: 'API Key (智谱)', required: true },
                   { key: 'model', label: '模型', default: 'glm-4v' },
                   { key: 'baseUrl', label: 'Base URL', default: 'https://open.bigmodel.cn/api/paas/v4' },
@@ -318,7 +309,7 @@ function Settings() {
                 ]} />
               )}
               {activeOcrPlugin === 'doubao-vision' && (
-                <PluginApiKeyConfig pluginId="doubao-vision" fields={[
+                <PluginApiKeyConfig pluginId="doubao-vision" listProvider="openai" defaultBaseUrl="https://ark.cn-beijing.volces.com/api/v3" fields={[
                   { key: 'apiKey', label: 'API Key (火山引擎)', required: true },
                   { key: 'model', label: '模型 ID', default: 'doubao-vision-pro-32k' },
                   { key: 'baseUrl', label: 'Base URL', default: 'https://ark.cn-beijing.volces.com/api/v3' },
@@ -326,10 +317,26 @@ function Settings() {
                 ]} />
               )}
               {activeOcrPlugin === 'gemini-vision' && (
-                <PluginApiKeyConfig pluginId="gemini-vision" fields={[
+                <PluginApiKeyConfig pluginId="gemini-vision" listProvider="openai" defaultBaseUrl="https://generativelanguage.googleapis.com/v1beta/openai" fields={[
                   { key: 'apiKey', label: 'API Key (Google)', required: true },
                   { key: 'model', label: '模型', default: 'gemini-1.5-flash' },
                   { key: 'baseUrl', label: 'Base URL', default: 'https://generativelanguage.googleapis.com/v1beta/openai' },
+                  { key: 'maxTokens', label: '最大Token数', default: '1024' },
+                ]} />
+              )}
+              {activeOcrPlugin === 'mimo-vision' && (
+                <PluginApiKeyConfig pluginId="mimo-vision" listProvider="openai" defaultBaseUrl="https://api.xiaomimimo.com/v1" fields={[
+                  { key: 'apiKey', label: 'API Key (MiMo)', required: true },
+                  { key: 'model', label: '模型', default: '' },
+                  { key: 'baseUrl', label: 'Base URL', default: 'https://api.xiaomimimo.com/v1' },
+                  { key: 'maxTokens', label: '最大Token数', default: '1024' },
+                ]} />
+              )}
+              {activeOcrPlugin === 'claude-vision' && (
+                <PluginApiKeyConfig pluginId="claude-vision" listProvider="anthropic" defaultBaseUrl="https://api.anthropic.com/v1" fields={[
+                  { key: 'apiKey', label: 'API Key (Anthropic)', required: true },
+                  { key: 'model', label: '模型', default: 'claude-sonnet-4-5' },
+                  { key: 'baseUrl', label: 'Base URL', default: 'https://api.anthropic.com/v1' },
                   { key: 'maxTokens', label: '最大Token数', default: '1024' },
                 ]} />
               )}
@@ -350,45 +357,60 @@ function Settings() {
               <p style={{ fontSize: 12, color: '#8E8E93', marginTop: 8 }}>
                 {translationPlugins.find((p) => p.metadata.id === activeTranslationPlugin)?.metadata.description}
               </p>
-              {activeTranslationPlugin === 'ai-translate' && (
-                <PluginApiKeyConfig pluginId="ai-translate" fields={[
-                  { key: 'apiKey', label: 'API Key', required: true },
-                  { key: 'model', label: '模型', default: 'gpt-4o' },
-                ]} />
-              )}
               {activeTranslationPlugin === 'openai-translate' && (
-                <PluginApiKeyConfig pluginId="openai-translate" fields={[
+                <PluginApiKeyConfig pluginId="openai-translate" listProvider="openai" defaultBaseUrl="https://api.openai.com/v1" fields={[
                   { key: 'apiKey', label: 'API Key', required: true },
                   { key: 'model', label: '模型', default: 'gpt-4o' },
                   { key: 'baseUrl', label: 'Base URL', default: 'https://api.openai.com/v1' },
                 ]} />
               )}
               {activeTranslationPlugin === 'qwen-translate' && (
-                <PluginApiKeyConfig pluginId="qwen-translate" fields={[
-                  { key: 'apiKey', label: 'API Key (阿里云 DashScope)', required: true },
+                <PluginApiKeyConfig pluginId="qwen-translate" listProvider="openai" defaultBaseUrl="https://trial.cn-beijing.maas.aliyuncs.com/compatible-mode/v1" fields={[
+                  { key: 'apiKey', label: 'API Key (阿里云百炼)', required: true },
                   { key: 'model', label: '模型', default: 'qwen-turbo' },
-                  { key: 'baseUrl', label: 'Base URL', default: 'https://dashscope.aliyuncs.com/compatible-mode/v1' },
+                  { key: 'baseUrl', label: 'Base URL（开箱即用；生产环境建议换成控制台复制的专属 API Host）', default: 'https://trial.cn-beijing.maas.aliyuncs.com/compatible-mode/v1' },
                 ]} />
               )}
               {activeTranslationPlugin === 'zhipu-translate' && (
-                <PluginApiKeyConfig pluginId="zhipu-translate" fields={[
+                <PluginApiKeyConfig pluginId="zhipu-translate" listProvider="openai" defaultBaseUrl="https://open.bigmodel.cn/api/paas/v4" fields={[
                   { key: 'apiKey', label: 'API Key (智谱)', required: true },
                   { key: 'model', label: '模型', default: 'glm-4-flash' },
                   { key: 'baseUrl', label: 'Base URL', default: 'https://open.bigmodel.cn/api/paas/v4' },
                 ]} />
               )}
               {activeTranslationPlugin === 'doubao-translate' && (
-                <PluginApiKeyConfig pluginId="doubao-translate" fields={[
+                <PluginApiKeyConfig pluginId="doubao-translate" listProvider="openai" defaultBaseUrl="https://ark.cn-beijing.volces.com/api/v3" fields={[
                   { key: 'apiKey', label: 'API Key (火山引擎)', required: true },
                   { key: 'model', label: '模型 ID', default: 'doubao-pro-32k' },
                   { key: 'baseUrl', label: 'Base URL', default: 'https://ark.cn-beijing.volces.com/api/v3' },
                 ]} />
               )}
               {activeTranslationPlugin === 'gemini-translate' && (
-                <PluginApiKeyConfig pluginId="gemini-translate" fields={[
+                <PluginApiKeyConfig pluginId="gemini-translate" listProvider="openai" defaultBaseUrl="https://generativelanguage.googleapis.com/v1beta/openai" fields={[
                   { key: 'apiKey', label: 'API Key (Google)', required: true },
                   { key: 'model', label: '模型', default: 'gemini-1.5-flash' },
                   { key: 'baseUrl', label: 'Base URL', default: 'https://generativelanguage.googleapis.com/v1beta/openai' },
+                ]} />
+              )}
+              {activeTranslationPlugin === 'mimo-translate' && (
+                <PluginApiKeyConfig pluginId="mimo-translate" listProvider="openai" defaultBaseUrl="https://api.xiaomimimo.com/v1" fields={[
+                  { key: 'apiKey', label: 'API Key (MiMo)', required: true },
+                  { key: 'model', label: '模型', default: '' },
+                  { key: 'baseUrl', label: 'Base URL', default: 'https://api.xiaomimimo.com/v1' },
+                ]} />
+              )}
+              {activeTranslationPlugin === 'deepseek-translate' && (
+                <PluginApiKeyConfig pluginId="deepseek-translate" listProvider="openai" defaultBaseUrl="https://api.deepseek.com/v1" fields={[
+                  { key: 'apiKey', label: 'API Key (DeepSeek)', required: true },
+                  { key: 'model', label: '模型', default: 'deepseek-chat' },
+                  { key: 'baseUrl', label: 'Base URL', default: 'https://api.deepseek.com/v1' },
+                ]} />
+              )}
+              {activeTranslationPlugin === 'claude-translate' && (
+                <PluginApiKeyConfig pluginId="claude-translate" listProvider="anthropic" defaultBaseUrl="https://api.anthropic.com/v1" fields={[
+                  { key: 'apiKey', label: 'API Key (Anthropic)', required: true },
+                  { key: 'model', label: '模型', default: 'claude-sonnet-4-5' },
+                  { key: 'baseUrl', label: 'Base URL', default: 'https://api.anthropic.com/v1' },
                 ]} />
               )}
             </SettingsCard>
@@ -413,7 +435,7 @@ function Settings() {
         {activeTab === 'update' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
             <SettingsCard title="版本更新">
-              <p style={{ fontSize: 13, color: '#1c1c1e', marginBottom: 8 }}>当前版本: 0.1.0</p>
+              <p style={{ fontSize: 13, color: '#1c1c1e', marginBottom: 8 }}>当前版本: 0.2.0</p>
               <button onClick={() => { setUpdateChecking(true); setTimeout(() => { setUpdateChecking(false); setUpdateChecked(true); }, 1500); }} disabled={updateChecking}
                 style={{ padding: '8px 16px', background: '#007AFF', color: 'white', border: 'none', borderRadius: 12, fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
                 {updateChecking ? '检查中...' : '检查更新'}
@@ -428,10 +450,10 @@ function Settings() {
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>
             <Logo size={80} />
             <h2 style={{ fontSize: 20, fontWeight: 700, color: '#1c1c1e' }}>须臾OCR</h2>
-            <p style={{ fontSize: 13, color: '#8E8E93' }}>版本 0.1.0</p>
+            <p style={{ fontSize: 13, color: '#8E8E93' }}>版本 0.2.0</p>
             <p style={{ fontSize: 12, color: '#AEAEB2', textAlign: 'center', lineHeight: 1.6 }}>
               智能OCR桌面软件<br/>
-              支持 PaddleOCR / OpenAI / 通义千问 / 智谱 / 豆包 / Gemini / 本地LLM
+              支持 PaddleOCR / RapidOCR / OpenAI / 通义千问 / 智谱 / 豆包 / Gemini / MiMo / DeepSeek / Claude / 本地LLM
             </p>
           </div>
         )}
@@ -565,9 +587,24 @@ function ShortcutEditor({ label, value, onChange }: {
   );
 }
 
-function PluginApiKeyConfig({ pluginId, fields }: { pluginId: string; fields: { key: string; label: string; required?: boolean; default?: string }[] }) {
+function PluginApiKeyConfig({ pluginId, fields, listProvider, defaultBaseUrl, endpointKey }: {
+  pluginId: string;
+  fields: { key: string; label: string; required?: boolean; default?: string }[];
+  listProvider?: 'openai' | 'anthropic' | 'ollama';
+  defaultBaseUrl?: string;
+  endpointKey?: string;
+}) {
   const { pluginSettings, setPluginSetting } = useSettingsStore();
   const settings = pluginSettings[pluginId] || {};
+  const [models, setModels] = useState<string[]>([]);
+  const [fetching, setFetching] = useState(false);
+  const [fetchError, setFetchError] = useState<string | null>(null);
+  const [manualModel, setManualModel] = useState(false);
+
+  const modelField = fields.find((f) => f.key === 'model');
+  const apiKeyField = fields.find((f) => f.key === 'apiKey');
+  const baseUrlField = fields.find((f) => f.key === 'baseUrl');
+  const endpointField = endpointKey ? fields.find((f) => f.key === endpointKey) : undefined;
 
   // 挂载时把默认值写入 store，确保后续读取不落空
   useEffect(() => {
@@ -579,6 +616,32 @@ function PluginApiKeyConfig({ pluginId, fields }: { pluginId: string; fields: { 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pluginId]);
 
+  const handleFetchModels = async () => {
+    if (!listProvider) return;
+    const apiKey = (settings[apiKeyField?.key || 'apiKey'] as string) || '';
+    const effectiveBaseUrl = endpointKey
+      ? ((settings[endpointKey] as string) || endpointField?.default || defaultBaseUrl || '')
+      : ((settings[baseUrlField?.key || 'baseUrl'] as string) || defaultBaseUrl || '');
+
+    setFetching(true);
+    setFetchError(null);
+    try {
+      const list = await invoke<string[]>('list_models', {
+        baseUrl: effectiveBaseUrl,
+        apiKey,
+        provider: listProvider,
+      });
+      setModels(list);
+      if (list.length === 0) setFetchError('接口返回了空模型列表');
+    } catch (err) {
+      setFetchError(String(err));
+    } finally {
+      setFetching(false);
+    }
+  };
+
+  const currentModel = (settings['model'] as string) || modelField?.default || '';
+
   return (
     <div style={{ marginTop: 12, padding: 12, background: '#F2F2F7', borderRadius: 12 }}>
       {fields.map((field) => (
@@ -586,15 +649,109 @@ function PluginApiKeyConfig({ pluginId, fields }: { pluginId: string; fields: { 
           <label style={{ fontSize: 12, color: '#636366', marginBottom: 4, display: 'block' }}>
             {field.label} {field.required && <span style={{ color: '#FF3B30' }}>*</span>}
           </label>
-          <input
-            type={field.key === 'maxTokens' ? 'number' : 'text'}
-            value={(settings[field.key] as string) || field.default || ''}
-            onChange={(e) => setPluginSetting(pluginId, field.key, e.target.value)}
-            placeholder={field.default || ''}
-            style={{ width: '100%', padding: '6px 10px', fontSize: 13, border: '0.5px solid #D1D1D6', borderRadius: 12, background: '#FFFFFF', outline: 'none' }}
-          />
+          {field.key === 'model' && listProvider && !manualModel ? (
+            <div style={{ display: 'flex', gap: 6 }}>
+              <select
+                value={currentModel}
+                onChange={(e) => setPluginSetting(pluginId, 'model', e.target.value)}
+                style={{ flex: 1, padding: '6px 10px', fontSize: 13, border: '0.5px solid #D1D1D6', borderRadius: 12, background: '#FFFFFF', outline: 'none' }}
+              >
+                {models.length === 0 && (
+                  <option value="" disabled>{currentModel || '点击"拉取模型列表"后选择'}</option>
+                )}
+                {currentModel && !models.includes(currentModel) && (
+                  <option value={currentModel}>{currentModel}</option>
+                )}
+                {models.map((m) => <option key={m} value={m}>{m}</option>)}
+              </select>
+              <button
+                onClick={handleFetchModels}
+                disabled={fetching}
+                style={{ padding: '6px 10px', fontSize: 12, fontWeight: 600, background: fetching ? '#AEAEB2' : '#007AFF', color: 'white', border: 'none', borderRadius: 12, cursor: 'pointer', whiteSpace: 'nowrap' }}
+              >
+                {fetching ? '拉取中...' : '拉取模型列表'}
+              </button>
+              <button
+                onClick={() => setManualModel(true)}
+                title="手动输入模型名称"
+                style={{ padding: '6px 10px', fontSize: 12, background: '#E5E5EA', color: '#1c1c1e', border: 'none', borderRadius: 12, cursor: 'pointer', whiteSpace: 'nowrap' }}
+              >
+                手动
+              </button>
+            </div>
+          ) : field.key === 'model' && manualModel ? (
+            <div style={{ display: 'flex', gap: 6 }}>
+              <input
+                type="text"
+                value={currentModel}
+                onChange={(e) => setPluginSetting(pluginId, 'model', e.target.value)}
+                placeholder={field.default || ''}
+                style={{ flex: 1, padding: '6px 10px', fontSize: 13, border: '0.5px solid #D1D1D6', borderRadius: 12, background: '#FFFFFF', outline: 'none' }}
+              />
+              {listProvider && (
+                <button
+                  onClick={() => setManualModel(false)}
+                  style={{ padding: '6px 10px', fontSize: 12, background: '#E5E5EA', color: '#1c1c1e', border: 'none', borderRadius: 12, cursor: 'pointer', whiteSpace: 'nowrap' }}
+                >
+                  下拉
+                </button>
+              )}
+            </div>
+          ) : (
+            <input
+              type={field.key === 'maxTokens' ? 'number' : 'text'}
+              value={(settings[field.key] as string) || field.default || ''}
+              onChange={(e) => setPluginSetting(pluginId, field.key, e.target.value)}
+              placeholder={field.default || ''}
+              style={{ width: '100%', padding: '6px 10px', fontSize: 13, border: '0.5px solid #D1D1D6', borderRadius: 12, background: '#FFFFFF', outline: 'none' }}
+            />
+          )}
         </div>
       ))}
+      {fetchError && <p style={{ fontSize: 11, color: '#FF3B30', marginTop: 0 }}>{fetchError}</p>}
+      {!fetchError && models.length > 0 && (
+        <p style={{ fontSize: 11, color: '#34C759', marginTop: 0 }}>已拉取 {models.length} 个模型</p>
+      )}
+    </div>
+  );
+}
+
+function LocalOcrPanel({ engineId, engineName, status, msg, installing, onCheck, onInstall }: {
+  engineId: string;
+  engineName: string;
+  status: boolean | null;
+  msg: string | null;
+  installing: boolean;
+  onCheck: () => void;
+  onInstall: () => void;
+}) {
+  return (
+    <div style={{ marginTop: 12, padding: 12, background: '#F2F2F7', borderRadius: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <span style={{ fontSize: 13, color: '#1c1c1e' }}>
+          {engineName}: {status === null ? '未检测' : status ? '已安装' : '未安装'}
+        </span>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button onClick={onCheck}
+            style={{ padding: '6px 12px', background: '#E5E5EA', color: '#1c1c1e', border: 'none', borderRadius: 12, fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+            检测
+          </button>
+          {!status && (
+            <button onClick={onInstall} disabled={installing}
+              style={{ padding: '6px 12px', background: '#007AFF', color: 'white', border: 'none', borderRadius: 12, fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+              {installing ? '安装中...' : '安装'}
+            </button>
+          )}
+        </div>
+      </div>
+      {msg && <p style={{ fontSize: 12, color: '#8E8E93', marginTop: 8 }}>{msg}</p>}
+      {!msg && (
+        <p style={{ fontSize: 11, color: '#AEAEB2', marginTop: 8 }}>
+          {engineId === 'rapid-ocr'
+            ? '首次识别会自动下载 ONNX 模型文件'
+            : '首次识别会自动下载 PaddleOCR 模型文件'}
+        </p>
+      )}
     </div>
   );
 }

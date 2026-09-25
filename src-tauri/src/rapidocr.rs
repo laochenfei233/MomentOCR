@@ -2,9 +2,9 @@ use std::process::{Command, Stdio};
 use std::io::{BufRead, BufReader};
 use anyhow::Result;
 
-/// PaddleOCR 识别
+/// RapidOCR 识别
 pub fn recognize(image_path: &str) -> Result<String> {
-    let script_path = super::overlay::find_script("paddleocr_recognize.py");
+    let script_path = super::overlay::find_script("rapidocr_recognize.py");
 
     let mut cmd = Command::new("python");
     cmd.arg(&script_path);
@@ -33,7 +33,7 @@ pub fn recognize(image_path: &str) -> Result<String> {
     let _ = child.wait();
 
     if result.is_empty() {
-        return Err(anyhow::anyhow!("PaddleOCR returned empty result"));
+        return Err(anyhow::anyhow!("RapidOCR returned empty result"));
     }
 
     if let Ok(json_result) = serde_json::from_str::<serde_json::Value>(&result) {
@@ -51,11 +51,11 @@ pub fn recognize(image_path: &str) -> Result<String> {
     Ok(result)
 }
 
-/// 检查PaddleOCR是否已安装
+/// 检查RapidOCR是否已安装（rapidocr_onnxruntime 或 rapidocr）
 pub fn check_installed() -> bool {
     let mut cmd = Command::new("python");
     cmd.arg("-c");
-    cmd.arg("import paddleocr; print('installed')");
+    cmd.arg("try:\n import rapidocr_onnxruntime\nexcept ImportError:\n import rapidocr\nprint('installed')");
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::null());
     #[cfg(windows)]
@@ -72,12 +72,11 @@ pub fn check_installed() -> bool {
     false
 }
 
-/// 安装PaddleOCR
+/// 安装RapidOCR
 pub fn install() -> Result<String> {
     let mut cmd = Command::new("pip");
     cmd.arg("install");
-    cmd.arg("paddlepaddle");
-    cmd.arg("paddleocr");
+    cmd.arg("rapidocr_onnxruntime");
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
     #[cfg(windows)]
@@ -89,11 +88,10 @@ pub fn install() -> Result<String> {
     let child = cmd.spawn()?;
     let output = child.wait_with_output()?;
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
 
     if output.status.success() {
-        Ok("PaddleOCR安装成功".to_string())
+        Ok("RapidOCR安装成功".to_string())
     } else {
         Err(anyhow::anyhow!("安装失败: {}", stderr))
     }

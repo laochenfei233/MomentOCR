@@ -1,14 +1,44 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { useOcrStore } from '../stores/ocrStore';
+import { useSettingsStore } from '../stores/settingsStore';
+import { Logo } from './Logo';
 
 interface OcrResultProps {
   onTextChange?: (text: string) => void;
+  /** 译文内容（独立翻译框显示） */
+  translation?: string;
+  /** 翻译框位置：'下方' | '右侧' */
+  translationLayout?: string;
+  /** 翻译目标语言（标签展示） */
+  translationTarget?: string;
 }
 
-function OcrResult({ onTextChange }: OcrResultProps) {
-  const { isProcessing, result, history } = useOcrStore();
+const FONT_SIZE_MAP: Record<string, string> = { '小四': '16px', '小三': '19px', '四号': '18px', '五号': '14px' };
+const FONT_FAMILY_MAP: Record<string, string> = { '新罗马': '"Times New Roman", serif', '宋体': '"SimSun", serif', '微软雅黑': '"Microsoft YaHei", sans-serif', '黑体': '"SimHei", sans-serif' };
+
+function OcrResult({ onTextChange, translation, translationLayout, translationTarget }: OcrResultProps) {
+  const { isProcessing, result } = useOcrStore();
+  const { style, translateSplit, setTranslateSplit } = useSettingsStore();
   const [copied, setCopied] = useState(false);
+  const [translationCopied, setTranslationCopied] = useState(false);
   const [editableText, setEditableText] = useState('');
+  const splitAreaRef = useRef<HTMLDivElement>(null);
+  const draggingRef = useRef(false);
+  const [dragging, setDragging] = useState(false);
+
+  // 分割线拖动：按指针位置换算翻译区占比
+  const handleDividerPointerMove = useCallback((e: React.PointerEvent) => {
+    if (!draggingRef.current || !splitAreaRef.current) return;
+    const rect = splitAreaRef.current.getBoundingClientRect();
+    const isRight = translationLayout === '右侧';
+    const pct = isRight
+      ? ((rect.right - e.clientX) / rect.width) * 100
+      : ((rect.bottom - e.clientY) / rect.height) * 100;
+    setTranslateSplit(Math.round(pct));
+  }, [translationLayout, setTranslateSplit]);
+
+  const handleDividerPointerUp = useCallback(() => { draggingRef.current = false; setDragging(false); }, []);
+  const handleDividerReset = useCallback(() => setTranslateSplit(42), [setTranslateSplit]);
 
   // 当结果变化时更新可编辑文本
   useEffect(() => {
@@ -45,18 +75,14 @@ function OcrResult({ onTextChange }: OcrResultProps) {
     }
   }, [editableText, result?.data]);
 
-  const handleCopyHistory = useCallback(async (text: string) => {
+  const handleCopyTranslation = useCallback(async () => {
+    if (!translation) return;
     try {
-      await navigator.clipboard.writeText(text);
-    } catch {
-      const textarea = document.createElement('textarea');
-      textarea.value = text;
-      document.body.appendChild(textarea);
-      textarea.select();
-      document.execCommand('copy');
-      document.body.removeChild(textarea);
-    }
-  }, []);
+      await navigator.clipboard.writeText(translation);
+      setTranslationCopied(true);
+      setTimeout(() => setTranslationCopied(false), 1200);
+    } catch {}
+  }, [translation]);
 
   if (isProcessing) {
     return (
@@ -84,53 +110,109 @@ function OcrResult({ onTextChange }: OcrResultProps) {
           </button>
         </div>
 
-        {/* 可编辑的识别结果 */}
-        <div style={{ flex: 1, overflow: 'auto', padding: 16 }}>
-          <textarea
-            value={editableText}
-            onChange={handleTextChange}
-            style={{
-              width: '100%',
-              height: '100%',
-              minHeight: 200,
-              fontSize: 13,
-              color: '#1c1c1e',
-              fontFamily: 'SF Mono, Menlo, monospace',
-              lineHeight: 1.6,
-              border: 'none',
-              outline: 'none',
-              resize: 'none',
-              background: 'transparent',
-            }}
-            placeholder="识别结果将显示在这里..."
-          />
-        </div>
+        {/* 原文 + 翻译框 */}
+        {(() => {
+          const showTranslation = !!translation && translation.trim().length > 0;
+          const isRight = showTranslation && translationLayout === '右侧';
+          const textareaStyle: React.CSSProperties = {
+            width: '100%',
+            height: '100%',
+            minHeight: showTranslation ? 80 : 200,
+            fontSize: FONT_SIZE_MAP[style.fontSize] || '13px',
+            color: '#1c1c1e',
+            fontFamily: FONT_FAMILY_MAP[style.fontStyle] || 'inherit',
+            lineHeight: 1.8,
+            padding: '4px 0',
+            textAlign: style.paragraphAlign === '左对齐' ? 'left' : style.paragraphAlign === '居中' ? 'center' : style.paragraphAlign === '右对齐' ? 'right' : 'justify',
+            textIndent: style.firstLineIndent ? '2em' : 0,
+            border: 'none',
+            outline: 'none',
+            resize: 'none',
+            background: 'transparent',
+            overflow: 'auto',
+          };
+          return (
+            <div ref={splitAreaRef} style={{ flex: 1, display: 'flex', flexDirection: isRight ? 'row' : 'column', overflow: 'hidden', minHeight: 0 }}>
+              {/* 原文区 */}
+              <div style={{
+                flex: '1 1 auto',
+                display: 'flex',
+                flexDirection: 'column',
+                minHeight: 0,
+                overflow: 'auto',
+                padding: '16px 20px',
+              }}>
+                <textarea
+                  value={editableText}
+                  onChange={handleTextChange}
+                  style={textareaStyle}
+                  placeholder="识别结果将显示在这里..."
+                />
+              </div>
+
+              {/* 可拖动分割线 */}
+              {showTranslation && (
+                <div
+                  onPointerDown={(e) => { e.preventDefault(); e.currentTarget.setPointerCapture(e.pointerId); draggingRef.current = true; setDragging(true); }}
+                  onPointerMove={handleDividerPointerMove}
+                  onPointerUp={handleDividerPointerUp}
+                  onPointerCancel={handleDividerPointerUp}
+                  onDoubleClick={handleDividerReset}
+                  title="拖动调整原文/翻译区域大小（双击复位）"
+                  style={{
+                    flex: isRight ? '0 0 6px' : '0 0 6px',
+                    cursor: isRight ? 'col-resize' : 'row-resize',
+                    background: dragging ? '#007AFF' : '#E5E5EA',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    touchAction: 'none',
+                    userSelect: 'none',
+                    transition: dragging ? 'none' : 'background 100ms ease-out',
+                  }}
+                >
+                  <span style={{
+                    display: 'block',
+                    background: dragging ? '#FFFFFF' : '#C7C7CC',
+                    borderRadius: 2,
+                    ...(isRight ? { width: 2, height: 20 } : { width: 20, height: 2 }),
+                  }} />
+                </div>
+              )}
+
+              {/* 独立翻译框 */}
+              {showTranslation && (
+                <div style={{
+                  flex: `0 0 ${translateSplit}%`,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  minHeight: 0,
+                  background: '#FAFAFA',
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 16px', borderBottom: '0.5px solid #E5E5EA' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span style={{ fontSize: 13, fontWeight: 600, color: '#1c1c1e' }}>翻译结果</span>
+                      <span style={{ padding: '2px 6px', fontSize: 10, background: '#E8F0FE', color: '#007AFF', borderRadius: 6 }}>→ {translationTarget}</span>
+                    </div>
+                    <button onClick={handleCopyTranslation} style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '4px 8px', fontSize: 12, color: '#007AFF', background: 'none', border: 'none', borderRadius: 6, cursor: 'pointer' }}>
+                      {translationCopied ? '✓ 已复制' : '复制'}
+                    </button>
+                  </div>
+                  <textarea
+                    value={translation}
+                    readOnly
+                    style={{ ...textareaStyle, padding: '12px 16px', textIndent: 0, textAlign: 'left' }}
+                  />
+                </div>
+              )}
+            </div>
+          );
+        })()}
 
         {!result.success && result.error && (
           <div style={{ padding: '8px 16px', background: 'rgba(255,59,48,0.08)', borderTop: '0.5px solid rgba(255,59,48,0.2)', display: 'flex', alignItems: 'center', gap: 8 }}>
             <span style={{ color: '#FF3B30' }}>⚠</span>
             <span style={{ fontSize: 12, color: '#FF3B30' }}>{result.error}</span>
-          </div>
-        )}
-
-        {history.length > 0 && (
-          <div style={{ borderTop: '0.5px solid #E5E5EA' }}>
-            <div style={{ padding: '4px 16px', display: 'flex', justifyContent: 'space-between' }}>
-              <span style={{ fontSize: 10, color: '#AEAEB2', textTransform: 'uppercase' }}>历史</span>
-              <span style={{ fontSize: 10, color: '#C7C7CC' }}>{history.length}</span>
-            </div>
-            <div style={{ maxHeight: 80, overflowY: 'auto' }}>
-              {history.slice(0, 3).map((entry) => (
-                <button key={entry.timestamp} onClick={() => handleCopyHistory(entry.result.data)}
-                  style={{ width: '100%', textAlign: 'left', padding: '6px 16px', background: 'none', border: 'none', cursor: 'pointer' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <span style={{ fontSize: 10, color: '#AEAEB2' }}>{new Date(entry.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                    <span style={{ fontSize: 10, color: '#C7C7CC' }}>点击复制</span>
-                  </div>
-                  <p style={{ fontSize: 12, color: '#636366', margin: '2px 0 0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{entry.result.data}</p>
-                </button>
-              ))}
-            </div>
           </div>
         )}
       </div>
@@ -139,8 +221,8 @@ function OcrResult({ onTextChange }: OcrResultProps) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#C7C7CC' }}>
-      <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-      <p style={{ fontSize: 12, marginTop: 8 }}>截图后显示识别结果</p>
+      <Logo size={64} />
+      <p style={{ fontSize: 13, color: '#AEAEB2', marginTop: 12 }}>截图后显示识别结果</p>
     </div>
   );
 }

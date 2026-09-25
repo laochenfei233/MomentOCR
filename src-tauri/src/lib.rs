@@ -2,6 +2,7 @@ mod api;
 mod screenshot;
 mod overlay;
 mod paddleocr;
+mod rapidocr;
 
 use screenshot::ScreenshotManager;
 use overlay::{OverlayManager, OverlayResult};
@@ -83,6 +84,18 @@ async fn install_paddleocr() -> Result<String, String> {
     match r { Ok(Ok(m)) => Ok(m), Ok(Err(e)) => Err(e.to_string()), Err(e) => Err(e.to_string()) }
 }
 #[tauri::command]
+async fn ocr_rapidocr(image_path: String) -> Result<String, String> {
+    let r = tokio::task::spawn_blocking(move || rapidocr::recognize(&image_path)).await;
+    match r { Ok(Ok(t)) => Ok(t), Ok(Err(e)) => Err(e.to_string()), Err(e) => Err(e.to_string()) }
+}
+#[tauri::command]
+fn check_rapidocr() -> bool { rapidocr::check_installed() }
+#[tauri::command]
+async fn install_rapidocr() -> Result<String, String> {
+    let r = tokio::task::spawn_blocking(|| rapidocr::install()).await;
+    match r { Ok(Ok(m)) => Ok(m), Ok(Err(e)) => Err(e.to_string()), Err(e) => Err(e.to_string()) }
+}
+#[tauri::command]
 async fn ocr_openai(api_key: String, image_path: String, model: String, max_tokens: u32) -> Result<String, String> {
     let b64 = ScreenshotManager::image_to_base64(&image_path).map_err(|e| e.to_string())?;
     api::call_openai_vision(&api_key, &b64, &model, max_tokens).await.map_err(|e| e.to_string())
@@ -102,8 +115,17 @@ async fn translate_google(text: String, target_lang: String) -> Result<String, S
     api::call_google_translate(&text, &target_lang).await.map_err(|e| e.to_string())
 }
 #[tauri::command]
-async fn translate_ai(api_key: String, text: String, target_lang: String, model: String, provider: String) -> Result<String, String> {
-    api::call_ai_translate(&api_key, &text, &target_lang, &model, &provider).await.map_err(|e| e.to_string())
+async fn translate_claude(base_url: String, api_key: String, model: String, text: String, target_lang: String) -> Result<String, String> {
+    api::call_claude_translate(&base_url, &api_key, &model, &text, &target_lang).await.map_err(|e| e.to_string())
+}
+#[tauri::command]
+async fn list_models(base_url: String, api_key: String, provider: String) -> Result<Vec<String>, String> {
+    api::list_models(&base_url, &api_key, &provider).await.map_err(|e| e.to_string())
+}
+#[tauri::command]
+async fn ocr_claude(base_url: String, api_key: String, model: String, image_path: String, max_tokens: u32) -> Result<String, String> {
+    let b64 = ScreenshotManager::image_to_base64(&image_path).map_err(|e| e.to_string())?;
+    api::call_claude_vision(&base_url, &api_key, &model, &b64, max_tokens).await.map_err(|e| e.to_string())
 }
 #[tauri::command]
 async fn translate_custom(base_url: String, api_key: String, model: String, text: String, target_lang: String) -> Result<String, String> {
@@ -172,8 +194,9 @@ pub fn run() {
             start_screenshot_overlay, get_screenshot_base64, copy_image_to_clipboard,
             save_screenshot_dialog, select_image_files, save_temp_files,
             ocr_paddleocr, check_paddleocr, install_paddleocr,
-            ocr_openai, ocr_ollama, translate_google, translate_ai, translate_custom,
-            ocr_custom_vision, set_autostart, get_autostart, clear_temp_cache,
+            ocr_rapidocr, check_rapidocr, install_rapidocr,
+            ocr_openai, ocr_ollama, translate_google, translate_custom, translate_claude,
+            ocr_custom_vision, ocr_claude, list_models, set_autostart, get_autostart, clear_temp_cache,
             register_shortcuts, unregister_all_shortcuts
         ])
         .setup(|app| {

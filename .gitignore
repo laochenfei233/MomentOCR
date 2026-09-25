@@ -26,3 +26,11 @@ dist-ssr/
 
 # Tauri
 src-tauri/target/
+
+# Worktrees
+.worktrees/
+# Python build artifacts
+src-tauri/scripts/build/
+src-tauri/scripts/dist/
+__pycache__/
+*.pyc

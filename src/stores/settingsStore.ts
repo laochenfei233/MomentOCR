@@ -28,6 +28,8 @@ interface SettingsState {
   language: {
     ocrLang: string;
     translateTarget: string;
+    /** 翻译结果显示位置：'下方' | '右侧' */
+    translateLayout: string;
   };
 
   // 识别后功能
@@ -94,6 +96,9 @@ interface SettingsState {
     saveFormat: string;
   };
 
+  /** 原文/翻译分割线位置：翻译区域所占百分比（15~80） */
+  translateSplit: number;
+
   // Actions
   setActiveOcrPlugin: (id: string) => void;
   setActiveTranslationPlugin: (id: string) => void;
@@ -109,6 +114,7 @@ interface SettingsState {
   setShortcuts: (patch: Partial<SettingsState['shortcuts']>) => void;
   setProxy: (patch: Partial<SettingsState['proxy']>) => void;
   setScreenshot: (patch: Partial<SettingsState['screenshot']>) => void;
+  setTranslateSplit: (v: number) => void;
 }
 
 export const useSettingsStore = create<SettingsState>()(
@@ -118,6 +124,7 @@ export const useSettingsStore = create<SettingsState>()(
       activeTranslationPlugin: 'google-translate',
       pluginSettings: {},
       theme: 'light',
+      translateSplit: 42,
 
       afterRecognize: {
         textOverlay: false,
@@ -143,6 +150,7 @@ export const useSettingsStore = create<SettingsState>()(
       language: {
         ocrLang: '自动检测',
         translateTarget: '中文',
+        translateLayout: '下方',
       },
 
       style: {
@@ -227,6 +235,7 @@ export const useSettingsStore = create<SettingsState>()(
         set((state) => ({ proxy: { ...state.proxy, ...patch } })),
       setScreenshot: (patch) =>
         set((state) => ({ screenshot: { ...state.screenshot, ...patch } })),
+      setTranslateSplit: (v) => set({ translateSplit: Math.min(80, Math.max(15, v)) }),
     }),
     {
       name: 'moment-ocr-settings',

@@ -1,11 +1,11 @@
 {
   "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/dev/crates/tauri-config-schema/schema.json",
   "productName": "MomentOCR",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "identifier": "com.momentocr.app",
   "build": {
     "beforeDevCommand": "npm run dev",
-    "devUrl": "http://localhost:1420",
+    "devUrl": "http://localhost:1421",
     "beforeBuildCommand": "npm run build",
     "frontendDist": "../dist"
   },
@@ -19,11 +19,12 @@
         "height": 550,
         "minWidth": 500,
         "minHeight": 400,
-        "decorations": false,
+        "decorations": true,
         "transparent": false,
         "alwaysOnTop": false,
         "skipTaskbar": false,
-        "visible": true
+        "visible": true,
+        "devtools": true
       }
     ],
     "security": {

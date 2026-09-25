@@ -7,7 +7,7 @@ import { useSettingsStore } from '../stores/settingsStore';
 function FileUploader() {
   const { files, addFiles, removeFile, clearFiles } = useFileStore();
   const { setProcessing, setResult, addToHistory } = useOcrStore();
-  const { activeOcrPlugin, pluginSettings } = useSettingsStore();
+  const { activeOcrPlugin, pluginSettings, afterRecognize } = useSettingsStore();
   const [isDragging, setIsDragging] = useState(false);
   const [processingFile, setProcessingFile] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -18,12 +18,31 @@ function FileUploader() {
     setProcessingFile(imagePath.split(/[/\\]/).pop() || imagePath);
     try {
       let ocrResult = '';
+      const customVisionPlugins = ['qwen-vision', 'zhipu-vision', 'doubao-vision', 'gemini-vision', 'mimo-vision'];
       if (activeOcrPlugin === 'openai-vision') {
         const apiKey = (pluginSettings['openai-vision']?.apiKey as string) || '';
         const model = (pluginSettings['openai-vision']?.model as string) || 'gpt-4o';
-        const maxTokens = (pluginSettings['openai-vision']?.maxTokens as number) || 1024;
+        const maxTokens = Number(pluginSettings['openai-vision']?.maxTokens) || 1024;
         if (!apiKey) { ocrResult = '错误：未配置OpenAI API Key'; } else {
           ocrResult = await invoke<string>('ocr_openai', { apiKey, imagePath, model, maxTokens });
+        }
+      } else if (customVisionPlugins.includes(activeOcrPlugin)) {
+        const cfg = pluginSettings[activeOcrPlugin] || {};
+        const apiKey = (cfg.apiKey as string) || '';
+        const model = (cfg.model as string) || '';
+        const baseUrl = (cfg.baseUrl as string) || '';
+        const maxTokens = Number(cfg.maxTokens) || 1024;
+        if (!apiKey) { ocrResult = `错误：未配置${activeOcrPlugin} API Key`; } else {
+          ocrResult = await invoke<string>('ocr_custom_vision', { baseUrl, apiKey, model, imagePath, maxTokens });
+        }
+      } else if (activeOcrPlugin === 'claude-vision') {
+        const cfg = pluginSettings['claude-vision'] || {};
+        const apiKey = (cfg.apiKey as string) || '';
+        const model = (cfg.model as string) || 'claude-sonnet-4-5';
+        const baseUrl = (cfg.baseUrl as string) || 'https://api.anthropic.com/v1';
+        const maxTokens = Number(cfg.maxTokens) || 1024;
+        if (!apiKey) { ocrResult = '错误：未配置 Claude API Key'; } else {
+          ocrResult = await invoke<string>('ocr_claude', { baseUrl, apiKey, model, imagePath, maxTokens });
         }
       } else if (activeOcrPlugin === 'local-llm') {
         const endpoint = (pluginSettings['local-llm']?.endpoint as string) || 'http://localhost:11434';
@@ -31,19 +50,25 @@ function FileUploader() {
         ocrResult = await invoke<string>('ocr_ollama', { endpoint, model, imagePath });
       } else if (activeOcrPlugin === 'paddle-ocr') {
         ocrResult = await invoke<string>('ocr_paddleocr', { imagePath });
+      } else if (activeOcrPlugin === 'rapid-ocr') {
+        ocrResult = await invoke<string>('ocr_rapidocr', { imagePath });
       } else {
         ocrResult = `未知引擎: ${activeOcrPlugin}`;
       }
       const result = { success: !ocrResult.startsWith('错误'), data: ocrResult, confidence: 0, language: 'auto' };
       setResult(result);
       addToHistory(result);
+      // 自动复制
+      if (afterRecognize.autoCopy && result.success) {
+        try { await navigator.clipboard.writeText(result.data); } catch {}
+      }
     } catch (err) {
       setResult({ success: false, data: '', error: String(err) });
     } finally {
       setProcessing(false);
       setProcessingFile(null);
     }
-  }, [activeOcrPlugin, pluginSettings, setProcessing, setResult, addToHistory]);
+  }, [activeOcrPlugin, pluginSettings, setProcessing, setResult, addToHistory, afterRecognize.autoCopy]);
 
   // 使用 Tauri 文件对话框选择文件
   const handleSelectFiles = useCallback(async () => {
@@ -108,7 +133,7 @@ function FileUploader() {
         style={{
           display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
           padding: 24, border: `1.5px dashed ${isDragging ? '#007AFF' : '#D1D1D6'}`,
-          borderRadius: 10, background: isDragging ? 'rgba(0,122,255,0.05)' : '#F2F2F7',
+          borderRadius: 12, background: isDragging ? 'rgba(0,122,255,0.05)' : '#F2F2F7',
           cursor: 'pointer', transition: 'all 200ms ease-out',
         }}
       >
@@ -125,14 +150,14 @@ function FileUploader() {
 
       {/* 错误提示 */}
       {error && (
-        <div style={{ marginTop: 8, padding: 8, background: 'rgba(255,59,48,0.08)', borderRadius: 8, fontSize: 11, color: '#FF3B30' }}>
+        <div style={{ marginTop: 8, padding: 8, background: 'rgba(255,59,48,0.08)', borderRadius: 12, fontSize: 11, color: '#FF3B30' }}>
           {error}
         </div>
       )}
 
       {/* 识别进度 */}
       {processingFile && (
-        <div style={{ marginTop: 8, padding: 8, background: 'rgba(0,122,255,0.08)', borderRadius: 8, fontSize: 11, color: '#007AFF', display: 'flex', alignItems: 'center', gap: 6 }}>
+        <div style={{ marginTop: 8, padding: 8, background: 'rgba(0,122,255,0.08)', borderRadius: 12, fontSize: 11, color: '#007AFF', display: 'flex', alignItems: 'center', gap: 6 }}>
           <span className="spinner-sm"></span>
           正在识别: {processingFile}
         </div>

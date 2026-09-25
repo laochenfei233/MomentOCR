@@ -58,7 +58,12 @@ impl OverlayManager {
         let mut cmd = Command::new("python");
         cmd.arg(&self.python_script);
         cmd.stdout(Stdio::piped());
-        cmd.stderr(Stdio::inherit());
+        cmd.stderr(Stdio::piped());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        }
         
         let mut child = cmd.spawn()?;
         let stdout = child.stdout.take().unwrap();

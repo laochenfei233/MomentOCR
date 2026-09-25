@@ -1,0 +1,389 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="1200" height="380" viewBox="0 0 1200 380"
+     role="img" aria-labelledby="hero-title hero-desc">
+  <title id="hero-title">MomentOCR — Screenshot, recognize, translate</title>
+  <desc id="hero-desc">Desktop OCR application with 7 recognition engines and 7 translation services, built with Tauri 2.0.</desc>
+
+  <defs>
+    <linearGradient id="arc-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#5856D6"/>
+      <stop offset="50%" stop-color="#007AFF"/>
+      <stop offset="100%" stop-color="#34C759"/>
+    </linearGradient>
+    <linearGradient id="flow-grad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#007AFF" stop-opacity="0.7"/>
+      <stop offset="100%" stop-color="#34C759" stop-opacity="0.7"/>
+    </linearGradient>
+    <clipPath id="hero-clip">
+      <rect width="1200" height="380" rx="16"/>
+    </clipPath>
+  </defs>
+
+  <g clip-path="url(#hero-clip)">
+    <!-- White background -->
+    <rect width="1200" height="380" fill="#FFFFFF"/>
+
+    <!-- Subtle dot grid pattern -->
+    <g opacity="0.08" fill="#B0B0B0">
+      <circle cx="40" cy="40" r="1.5"/>
+      <circle cx="80" cy="40" r="1.5"/>
+      <circle cx="120" cy="40" r="1.5"/>
+      <circle cx="160" cy="40" r="1.5"/>
+      <circle cx="200" cy="40" r="1.5"/>
+      <circle cx="240" cy="40" r="1.5"/>
+      <circle cx="280" cy="40" r="1.5"/>
+      <circle cx="320" cy="40" r="1.5"/>
+      <circle cx="360" cy="40" r="1.5"/>
+      <circle cx="400" cy="40" r="1.5"/>
+      <circle cx="440" cy="40" r="1.5"/>
+      <circle cx="480" cy="40" r="1.5"/>
+      <circle cx="520" cy="40" r="1.5"/>
+      <circle cx="560" cy="40" r="1.5"/>
+      <circle cx="600" cy="40" r="1.5"/>
+      <circle cx="640" cy="40" r="1.5"/>
+      <circle cx="680" cy="40" r="1.5"/>
+      <circle cx="720" cy="40" r="1.5"/>
+      <circle cx="760" cy="40" r="1.5"/>
+      <circle cx="800" cy="40" r="1.5"/>
+      <circle cx="840" cy="40" r="1.5"/>
+      <circle cx="880" cy="40" r="1.5"/>
+      <circle cx="920" cy="40" r="1.5"/>
+      <circle cx="960" cy="40" r="1.5"/>
+      <circle cx="1000" cy="40" r="1.5"/>
+      <circle cx="1040" cy="40" r="1.5"/>
+      <circle cx="1080" cy="40" r="1.5"/>
+      <circle cx="1120" cy="40" r="1.5"/>
+      <circle cx="1160" cy="40" r="1.5"/>
+      <circle cx="40" cy="80" r="1.5"/>
+      <circle cx="80" cy="80" r="1.5"/>
+      <circle cx="120" cy="80" r="1.5"/>
+      <circle cx="160" cy="80" r="1.5"/>
+      <circle cx="200" cy="80" r="1.5"/>
+      <circle cx="240" cy="80" r="1.5"/>
+      <circle cx="280" cy="80" r="1.5"/>
+      <circle cx="320" cy="80" r="1.5"/>
+      <circle cx="360" cy="80" r="1.5"/>
+      <circle cx="400" cy="80" r="1.5"/>
+      <circle cx="440" cy="80" r="1.5"/>
+      <circle cx="480" cy="80" r="1.5"/>
+      <circle cx="520" cy="80" r="1.5"/>
+      <circle cx="560" cy="80" r="1.5"/>
+      <circle cx="600" cy="80" r="1.5"/>
+      <circle cx="640" cy="80" r="1.5"/>
+      <circle cx="680" cy="80" r="1.5"/>
+      <circle cx="720" cy="80" r="1.5"/>
+      <circle cx="760" cy="80" r="1.5"/>
+      <circle cx="800" cy="80" r="1.5"/>
+      <circle cx="840" cy="80" r="1.5"/>
+      <circle cx="880" cy="80" r="1.5"/>
+      <circle cx="920" cy="80" r="1.5"/>
+      <circle cx="960" cy="80" r="1.5"/>
+      <circle cx="1000" cy="80" r="1.5"/>
+      <circle cx="1040" cy="80" r="1.5"/>
+      <circle cx="1080" cy="80" r="1.5"/>
+      <circle cx="1120" cy="80" r="1.5"/>
+      <circle cx="1160" cy="80" r="1.5"/>
+      <circle cx="40" cy="120" r="1.5"/>
+      <circle cx="80" cy="120" r="1.5"/>
+      <circle cx="120" cy="120" r="1.5"/>
+      <circle cx="160" cy="120" r="1.5"/>
+      <circle cx="200" cy="120" r="1.5"/>
+      <circle cx="240" cy="120" r="1.5"/>
+      <circle cx="280" cy="120" r="1.5"/>
+      <circle cx="320" cy="120" r="1.5"/>
+      <circle cx="360" cy="120" r="1.5"/>
+      <circle cx="400" cy="120" r="1.5"/>
+      <circle cx="440" cy="120" r="1.5"/>
+      <circle cx="480" cy="120" r="1.5"/>
+      <circle cx="520" cy="120" r="1.5"/>
+      <circle cx="560" cy="120" r="1.5"/>
+      <circle cx="600" cy="120" r="1.5"/>
+      <circle cx="640" cy="120" r="1.5"/>
+      <circle cx="680" cy="120" r="1.5"/>
+      <circle cx="720" cy="120" r="1.5"/>
+      <circle cx="760" cy="120" r="1.5"/>
+      <circle cx="800" cy="120" r="1.5"/>
+      <circle cx="840" cy="120" r="1.5"/>
+      <circle cx="880" cy="120" r="1.5"/>
+      <circle cx="920" cy="120" r="1.5"/>
+      <circle cx="960" cy="120" r="1.5"/>
+      <circle cx="1000" cy="120" r="1.5"/>
+      <circle cx="1040" cy="120" r="1.5"/>
+      <circle cx="1080" cy="120" r="1.5"/>
+      <circle cx="1120" cy="120" r="1.5"/>
+      <circle cx="1160" cy="120" r="1.5"/>
+      <circle cx="40" cy="160" r="1.5"/>
+      <circle cx="80" cy="160" r="1.5"/>
+      <circle cx="120" cy="160" r="1.5"/>
+      <circle cx="160" cy="160" r="1.5"/>
+      <circle cx="200" cy="160" r="1.5"/>
+      <circle cx="240" cy="160" r="1.5"/>
+      <circle cx="280" cy="160" r="1.5"/>
+      <circle cx="320" cy="160" r="1.5"/>
+      <circle cx="360" cy="160" r="1.5"/>
+      <circle cx="400" cy="160" r="1.5"/>
+      <circle cx="440" cy="160" r="1.5"/>
+      <circle cx="480" cy="160" r="1.5"/>
+      <circle cx="520" cy="160" r="1.5"/>
+      <circle cx="560" cy="160" r="1.5"/>
+      <circle cx="600" cy="160" r="1.5"/>
+      <circle cx="640" cy="160" r="1.5"/>
+      <circle cx="680" cy="160" r="1.5"/>
+      <circle cx="720" cy="160" r="1.5"/>
+      <circle cx="760" cy="160" r="1.5"/>
+      <circle cx="800" cy="160" r="1.5"/>
+      <circle cx="840" cy="160" r="1.5"/>
+      <circle cx="880" cy="160" r="1.5"/>
+      <circle cx="920" cy="160" r="1.5"/>
+      <circle cx="960" cy="160" r="1.5"/>
+      <circle cx="1000" cy="160" r="1.5"/>
+      <circle cx="1040" cy="160" r="1.5"/>
+      <circle cx="1080" cy="160" r="1.5"/>
+      <circle cx="1120" cy="160" r="1.5"/>
+      <circle cx="1160" cy="160" r="1.5"/>
+      <circle cx="40" cy="200" r="1.5"/>
+      <circle cx="80" cy="200" r="1.5"/>
+      <circle cx="120" cy="200" r="1.5"/>
+      <circle cx="160" cy="200" r="1.5"/>
+      <circle cx="200" cy="200" r="1.5"/>
+      <circle cx="240" cy="200" r="1.5"/>
+      <circle cx="280" cy="200" r="1.5"/>
+      <circle cx="320" cy="200" r="1.5"/>
+      <circle cx="360" cy="200" r="1.5"/>
+      <circle cx="400" cy="200" r="1.5"/>
+      <circle cx="440" cy="200" r="1.5"/>
+      <circle cx="480" cy="200" r="1.5"/>
+      <circle cx="520" cy="200" r="1.5"/>
+      <circle cx="560" cy="200" r="1.5"/>
+      <circle cx="600" cy="200" r="1.5"/>
+      <circle cx="640" cy="200" r="1.5"/>
+      <circle cx="680" cy="200" r="1.5"/>
+      <circle cx="720" cy="200" r="1.5"/>
+      <circle cx="760" cy="200" r="1.5"/>
+      <circle cx="800" cy="200" r="1.5"/>
+      <circle cx="840" cy="200" r="1.5"/>
+      <circle cx="880" cy="200" r="1.5"/>
+      <circle cx="920" cy="200" r="1.5"/>
+      <circle cx="960" cy="200" r="1.5"/>
+      <circle cx="1000" cy="200" r="1.5"/>
+      <circle cx="1040" cy="200" r="1.5"/>
+      <circle cx="1080" cy="200" r="1.5"/>
+      <circle cx="1120" cy="200" r="1.5"/>
+      <circle cx="1160" cy="200" r="1.5"/>
+      <circle cx="40" cy="240" r="1.5"/>
+      <circle cx="80" cy="240" r="1.5"/>
+      <circle cx="120" cy="240" r="1.5"/>
+      <circle cx="160" cy="240" r="1.5"/>
+      <circle cx="200" cy="240" r="1.5"/>
+      <circle cx="240" cy="240" r="1.5"/>
+      <circle cx="280" cy="240" r="1.5"/>
+      <circle cx="320" cy="240" r="1.5"/>
+      <circle cx="360" cy="240" r="1.5"/>
+      <circle cx="400" cy="240" r="1.5"/>
+      <circle cx="440" cy="240" r="1.5"/>
+      <circle cx="480" cy="240" r="1.5"/>
+      <circle cx="520" cy="240" r="1.5"/>
+      <circle cx="560" cy="240" r="1.5"/>
+      <circle cx="600" cy="240" r="1.5"/>
+      <circle cx="640" cy="240" r="1.5"/>
+      <circle cx="680" cy="240" r="1.5"/>
+      <circle cx="720" cy="240" r="1.5"/>
+      <circle cx="760" cy="240" r="1.5"/>
+      <circle cx="800" cy="240" r="1.5"/>
+      <circle cx="840" cy="240" r="1.5"/>
+      <circle cx="880" cy="240" r="1.5"/>
+      <circle cx="920" cy="240" r="1.5"/>
+      <circle cx="960" cy="240" r="1.5"/>
+      <circle cx="1000" cy="240" r="1.5"/>
+      <circle cx="1040" cy="240" r="1.5"/>
+      <circle cx="1080" cy="240" r="1.5"/>
+      <circle cx="1120" cy="240" r="1.5"/>
+      <circle cx="1160" cy="240" r="1.5"/>
+      <circle cx="40" cy="280" r="1.5"/>
+      <circle cx="80" cy="280" r="1.5"/>
+      <circle cx="120" cy="280" r="1.5"/>
+      <circle cx="160" cy="280" r="1.5"/>
+      <circle cx="200" cy="280" r="1.5"/>
+      <circle cx="240" cy="280" r="1.5"/>
+      <circle cx="280" cy="280" r="1.5"/>
+      <circle cx="320" cy="280" r="1.5"/>
+      <circle cx="360" cy="280" r="1.5"/>
+      <circle cx="400" cy="280" r="1.5"/>
+      <circle cx="440" cy="280" r="1.5"/>
+      <circle cx="480" cy="280" r="1.5"/>
+      <circle cx="520" cy="280" r="1.5"/>
+      <circle cx="560" cy="280" r="1.5"/>
+      <circle cx="600" cy="280" r="1.5"/>
+      <circle cx="640" cy="280" r="1.5"/>
+      <circle cx="680" cy="280" r="1.5"/>
+      <circle cx="720" cy="280" r="1.5"/>
+      <circle cx="760" cy="280" r="1.5"/>
+      <circle cx="800" cy="280" r="1.5"/>
+      <circle cx="840" cy="280" r="1.5"/>
+      <circle cx="880" cy="280" r="1.5"/>
+      <circle cx="920" cy="280" r="1.5"/>
+      <circle cx="960" cy="280" r="1.5"/>
+      <circle cx="1000" cy="280" r="1.5"/>
+      <circle cx="1040" cy="280" r="1.5"/>
+      <circle cx="1080" cy="280" r="1.5"/>
+      <circle cx="1120" cy="280" r="1.5"/>
+      <circle cx="1160" cy="280" r="1.5"/>
+      <circle cx="40" cy="320" r="1.5"/>
+      <circle cx="80" cy="320" r="1.5"/>
+      <circle cx="120" cy="320" r="1.5"/>
+      <circle cx="160" cy="320" r="1.5"/>
+      <circle cx="200" cy="320" r="1.5"/>
+      <circle cx="240" cy="320" r="1.5"/>
+      <circle cx="280" cy="320" r="1.5"/>
+      <circle cx="320" cy="320" r="1.5"/>
+      <circle cx="360" cy="320" r="1.5"/>
+      <circle cx="400" cy="320" r="1.5"/>
+      <circle cx="440" cy="320" r="1.5"/>
+      <circle cx="480" cy="320" r="1.5"/>
+      <circle cx="520" cy="320" r="1.5"/>
+      <circle cx="560" cy="320" r="1.5"/>
+      <circle cx="600" cy="320" r="1.5"/>
+      <circle cx="640" cy="320" r="1.5"/>
+      <circle cx="680" cy="320" r="1.5"/>
+      <circle cx="720" cy="320" r="1.5"/>
+      <circle cx="760" cy="320" r="1.5"/>
+      <circle cx="800" cy="320" r="1.5"/>
+      <circle cx="840" cy="320" r="1.5"/>
+      <circle cx="880" cy="320" r="1.5"/>
+      <circle cx="920" cy="320" r="1.5"/>
+      <circle cx="960" cy="320" r="1.5"/>
+      <circle cx="1000" cy="320" r="1.5"/>
+      <circle cx="1040" cy="320" r="1.5"/>
+      <circle cx="1080" cy="320" r="1.5"/>
+      <circle cx="1120" cy="320" r="1.5"/>
+      <circle cx="1160" cy="320" r="1.5"/>
+    </g>
+
+    <!-- App icon logo (left): real icon.png embedded -->
+    <image x="56" y="132" width="96" height="96" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAgAAAAIACAYAAAD0eNT6AAAfmUlEQVR4nO3dCZBlV1kH8PdmYhRkSYQO4IQtptwQUcQIKu77VpY7pSgiiggCIptGrZRlUASRVQQV0WjhXu77jgpGRBFxqxi2jMI8MGFXNN3W7ZmXef363vvufs/y+1VNhX5L5/TrId//fOfcc5cLgnP69JmDuccAMKRTpy5Z+kTD4hcyAwUe4CgBYXoCwMgUe4BuhIJxCQADU/ABxiEQDEsACLDg7+1dNPS3BJjVanXT4N9TIOhHAJip6CvyAMOFA2GgPQFg5KKv0ANMGwyEgWYEgIGLvoIPEE4gEAaqCQADFH5FHyDsMCAIHCcAdCj8Cj5AnIFAEDgv+wDQZrav8AOk0xk4lfnphNn+8Gb7AGnTFaiXXQBQ+AHyIghkHgCaFH4tfoC0NQkDpzJZGsjih9xV/BV+gLysdgSBHEJA0j+gwg9AnVXGQSDJH0zhB6CNVYZBYJlT8dfqB6BrEDiVWAhI5odR+AEYyiqDIHBikQDFH4Ah7dXcln2M28DPIeoUo/ADMLZVot2AaDsAij8AU9hLtBsQZXKp+sBt8gNgjm7AqQg7AVEN2KwfgLmtElkSiGagZv0AhGQVeTcgij0Aij8Aodmr2BsQy76A4AOA4g9AqPYiDgHBtikUfgBisopsSSDIDoDiD0Bs9iLrBgQXABR/AGK1F1EICCoAKP4AxG4vkhAQTABQ/AFIRQwhIIiNCWUfiFP9AEh1c+CpADYGzt4BUPwBSNleSTcghE7ArAFA8QcgB3sBhoDZAoDiD0BO9gILAbMEAMUfgBztBRQCJg8Aij8AOdsLJARMGgAUfwBYBBECZr8KAACY3mQBwOwfAMLpAkwSABR/AAgrBIweABR/AAgvBIwaABR/AAgzBEy6CdD5/gAQRo0cLQDMfcQhAMTu9Ii1dJQAoPUPAGEvBQweABR/AAg/BIy+B8C6PwCEVzsHDQDW/QFgHEPX2MECgNY/AMSzFDDaEoDWPwCEW0sHCQBa/wAwjaFqbu8AoPUPAPEtBQy+BKD1DwDh19ZeAUDrHwDm0bcGD9oBMPsHgHEMXWNPDJU8FH8AGNd2re3TBegUALT+ASAMXWvyIEsAZv8AMI2ham7rAGD2DwBh6VKbe3cAzP4BYFpD1N5WAcDsHwDC1LZG9+oAmP0DwDz61uDGAcDsHwDC1qZWd+4AmP0DwLz61OLRbgcMAISrUQBw6h8ApHU6oA4AAGRoZwCw+Q8A4tKkdrfuANj8BwBh6VKbawOA2T8AxGlXDW/VATD7B4Awta3RNgECQIYqA4D2PwDEra6WN+4AaP8DQNja1GpLAACQodIA4OQ/AEj7ZEAdAADIkAAAABk6FgDs/geAtJTV9p0dALv/ASAuTWq3JQAAyJAAAAC5BwCX/wFAHpcD6gAAQIYEAADIkAAAADkHAOv/AJDPPgAdAADIkAAAABkSAAAgQwIAAOQaANwACADysK75pR0ANwACgDRU1XRLAACQIQEAADIkAABAhgQAAMiQAAAAGRIAACBDSzcBAoD0rVY3HflaBwAAMiQAAECGBAAAyJAAAAAZEgAAIEMCAABkSAAAgAwJAACQIQEAADIkAABAhgQAAMjQBXMPAJjPg7/muiNf7y+Xpa/72Ws+aPGgB1+/eMk1l000MmBsAgDQWBEC9sszwmF4+MWfuqdPEyIhAACD+fKve21pMPjlF9/DpwyBEQCARjP/Pr70Ia87/OfBYrlYLg4EAgiAAABMqggBX/KQ1x/rEvzqT97NbwImJAAAvVVtHqx6vMwXf/0bjrzv1190V78ZGJEAAATpix76xiNfF6HgN3/i0tnGA6lxDgBQa3/RfBa/q/Xft0vwBd9ww+EfoD8dACAoZYFg+7EiBOyfm8HoCkA3AgAwijYz+87/jsVi8XkbHYHftkQAjVkCAJIJEp/zsNOjjgVSIgAAvdb/+8z0u753v+Z7FSFgHQQ++xv/o/PYIHUCAJDkssFmCBAE4Dh7AIDRC3nVFQBtv0+b1x1sPbYZAn7vxz6w03ggJQIAZOyan7l80iOBc9mcCDFYnj595mDzgb29i+YbDZCE9dn/dR2AXZf7VZ4u2GH2X/XaP3jhXUpfBylarW468rUAAIxu++z/smK86+tbHt/xfdoEgLPfb7n4oxfeufT1kBIBAAjC5tn/TWf/h89VvGdXAKgq/psEAVImAADBn/3fJwC0nf1XvfZPXnCnHSOGuAgAQDSBoLgj4ObZ/2PO/steKwSQEgEAiNL6/P8pZv/bBAFSDAAOAgKisHnTnzaX8vUt/sVjn/rwNzf+90EsXAUARGvz7P++s/8mdyH8sx+9pONIYX6WAIAkg0Cftf/KSw4rH18sXvp8YYC4CABA8tbH/g45+z//+Pn/LQQQE3sAgOQVZ/33nf038cBHnDn8AzGyCRBIUnHM766jfru0/st84iNW7QcIM7MJEMjCp3/Tm458XXvYUOmSQPlrN+9z8BfP3+szRBiVPQBA1tZBoM3sv6r4l93oqHj/X/3IHfsOEwZnDwCQteK8/6FuCVxW/Asf/y1vGeT7w5jsAQCyU3WyX9fWf5kiBAgChEwAALINAbuO+K1r/R9/bfmL7//It7YdGkxCAACytg4B2wW87bp/mfXjQgAhchUAwIZP/uYzrQJA26sJXv68O/i8mYVNgAA1ivP+28z+q1gSIHSWAAC2VB3x27b1X6boAFzxqP/ymTM7SwAANTaP+m3S+t91ieHm89c+9wN89kzGEgBAh25A03X/Otvv0wlgTjoAAC0U5/53mf1XvmexXLziuRf7HTA6HQCAHoYu/oX7PepGvxMmZxMgQAtl5/z3Kf5rQgBTEwAAOoSAJjf8aVr81+77rTf5XTAZAQCgoyIEtF0SqCr+69cLAUxFAADooexkv67Ff00IYAoCAMAAIWAdBPoW/zUhgLEJAAADKULAiYOD3sV/7aMfbU8A4xEAAAYOAZsn/HUt/gfnnhYCGIsAADCCIgT0Lf5rQgBjcBIgZOKyyy5v9Lrrr79u9LHkZPv6/rbFf/u9r3rW7YcaGplxEiDAhDaP+e1b/Av3eczbhhscWbMEADBBCOha/Iv3db35ENQRAAAm8MrnXNSp+JfRBWAIAgDAjCGgbfE/fG6xFALoTQAAmCkElBX/XS3/9ZUFVVcYQFMCAMAMIaCq+NfZLvr3fszbhx4aGREAAGbwd8++qNVGv6oZvxBAVwIAwIwhoMkO/7p2/6ufdbvFvR77joFHRg4EAIAZ7TrYp674F+FB8acrAQAg0BBQd5TwdudAEKAtAQAgwEDQ5T4CH/Zt7xxxVKRGAAAIqAtQ/LNsY9/OywPPPScE0NQFjV8JwKjKiv/OqwMcE0xHOgAAASl29Te+NLDieV0AmhAAAAIMAScODmpfsyscfMjj3jXwqEiNAAAQcCdgW5vOgBBAHQEAIFCveeZtj3zdpPDbE0BTAgBA4PrsB9AFoIoAABCwRkcF2w9ABwIAQMD++Ydv07vlf+DWwZQQAAAiDAFNC7/iTxUBACAiTWb9ZYX/gx/37pFHRmwEAIBIugDa/QxJAACIxL8+4/17tfsv/3ZdAM4TAAAiDgFNCv/+8uwf2CQAAESoa+HXBWBNAACIsAtQlP86ZvzsIgAAJLQfoEm7/7LHv2ecQREVAQAgUv/2jFu3KvzuFcAmAQAgYl0Lvy4AAgBAxK77ofNdgDLuDkgVAQAgQU3a/fd4wn9PNh7CIwAAJNQFaHrrYJ0BBACABHQt/LoA+RIAABJw/dNvVfu8GT/bBACAzDsDd3vC/0w2HsIhAAAk2AVotCSwWB7+IU8CAEBCuhZ+XYD8CAAACXnd096v9nkzftYEAIAMNGn3X/rE9042HuYnAAAk3AVoUvidC5AnAQAgQV0Lvy5APgQAgAS94WnvW/u8cwEQAAAy0qTdrwuQhwvmHgAA43UB1pf3NZ3x3/CDF/p1ZEIAAEhY18J/6kn/uzj91PcZaVSEQAAA2OHCq95n8d6r/jfKz6ko7HUt/YNzAaEo+ORFAACoKfwphIB1kYdNNgEC7Cj+uS4d6AqkTQcAoGHhj7kL0JTLA/OhAwBwrrg3mfXH2Blospmv7PJAYSBtAgCQvRiL+pAU+jxZAgCy1bXwx7oUsN0JuMuT/2/ne4rX/OcPKBUp8lsFstNnxh9j4d8u/k0Kf0HhT5sAAGSjb6s/1uLft/Df6cn/t3izLkByBAAgCznO+ssKe10I2N8o+KRPAACSpvCXF3lwFQCQ9WV9qc/6h6IrkB4dACA5Cj/sJgAAyVD4dys283WZzTsrID0CABA9hX84693+e99x84DflRAJAEDUFP9uNi/r2yz2Cn8+BAAgSgp/d0U7v0uhL96z+v6TPf7NhEQAAKKi8M/HPoC0uAwQiIbiP4xds/j1nQG3/5AWHQAgeAr/8BR0BAAgWAp/eO7wnfuLtz5F8zgFfotAkBR/GJcOABAUhX8axSy+mM23ZekgHQIAEASFPyzrNv/FVx7MPRRGIgAA0Rb+gpv29LO5nr9Z7BX+9AkAwGzM+udVtPO7FPriPTde7bLA2AkAwOQUfpifAABMRrs/LMUs/qIr5x4FcxEAgEmY9UNYBABgVAo/hEkAAEah8EPYnAQIDE7xT5vDgNKgAwAMRuFPk4KfJgEA6E3hj9dNVx/9+nbf5fr+XAgAkJkbvvb1lc9d+tN3b/39FP+4dS34xfve/n2OCY6ZAAAZOCzSNYV/MxxceFWzI3YVfoibAACJ61qoi/eVhQCFPy3FLP423911P7gOQMwEAEhU31P3Nr/HOggo/pAOAQASNETxH+r7uVsfhEkAgMQMXfy7UvghbA4CAgan+EP4dAAgIXPP/hX+OO279D9LAgAkYs7ir/BDfCwBAL0o/hAnHQCgE4Uf4qYDAAmYe+0fiI8OAEDm9hd2AeZIBwAAMiQAAECGBAAAyJA9AACZ21/aA5AjHQAAyJAAAAmY+pp8ZwBA/AQAAMiQAACQu+XB3CNgBgIAJGKqtrz2f8IhoOwPyRIAICFjF2fFP0NVwUA4iJ4AAJCxC686OfcQmIkAAIkZa5Zu9g9pEQAgQUMXa8Wf438nbvahRM5JgJCoddHuc6tghT99y+X+3ENgJjoAkLiuRVzxh7TpAEAGNot5XUdA0Yd8CACQGUWeI4olgAPN4BwJAAC5q9oHIBgkTQAAoFztBkG3EI6dvg9Apt73ex31mzMBAAAyJAAA0Mr/fI/2fwrsAQDI1HLZ9TQ/pSMFOgAAkCEBAAAyJAAAZMp9APJmIQcgY1Uh4MAhQMkTAAA4RncgfZYAADJ0q+9779xDYGYCAECOao/5JQeWAABytR0CGqz7v+e7LhxvPExKAACguitgM2CyBACAzNz6Ke9uvgJsqSBZ9gAAZLrL307/vOkAAGQ3+z9vMwTsuvb/PVe+32jjYno6AAAc6Qoo9HnQAQDIdPZf97rluTv+vvs7b334z1td/d9jDo0ZCAAA7AwN77nybBAgHZYAADKxPHHzLTN60AEAyMj7/8A7FsuNqd/B/smd7xEa0iQAAGTeFdjWJBQQPwEAIAO3eerbGq/6loUC0mMPAEAmHP7DJh0AgCxm/90O/3nXk2872riYlw4AQMbWXQGFPj86AAAZzf7rXrc+/OedT7r9LVcMkC4BAIDS0PCuJ58NAqTJEgBAypb7t8zoYZMOAEDibvODNy4W59r7h3Zs/CsIDekTAABys3EVQJtQQFoEAICEZ/7L5c2Lg4OT3UIBSRP5ABJXhIDiD2wSAAAStV30mwaBdz7x4hFHRSgEAIDMFCGgKPIKfd7sAQBI0O2efqZ2jnfbp73l8J/vfOIdj18xQBZ0AAAyvvlPEQTWYaCgK5APAQAgydl/vyBA+gQAgEzsCgHveMLR5QDSJgAAJOT2P/Sm2uebdAPIgwAAkJgmRX77NWb/+XEVAECis/91gT+oOeZXNyBfOgAACbj9M053LvJvf/wlI4yI0AkAAKkU/5pT/qz9s00AAEhJEQJaBAGz/3wJAAARq2z97zjzX0cAAQAgwXX/JiHgbd9+52EHRFQEAIBINdrBv2NJgHwJAAARa9zK3woBZv8IAAARuuiH39g+COgGsEEAAIjMxc98feVzXboB5EkAAIiw+NcV+l3dgLc97tQoYyMuAgBApHYV+rLnFX/WBACAyFv/bW/8AwUBACDydf/CrgJf3BDI7J9NAgBADBps3Kub6Sv+bBMAAGLR8DK+7RBw07fddcRBESsBACBwFz/r+tZBwLo/uwgAAAH7gGdfV/1kh24ArAkAAIEX/9oivqMbcONj7z7G0EiAAMCoHvCKh/iEYQA7W/olQUDxp44AwOjFXwiA9u7wnH8rfdx5/wzlgsG+E5yj4MMwxb8o9sX1+9uqHr/FwUmzf3bSAWCS4i8UQLeZf9WMv25JQOufJgQABrOryAsBMHzbf/u5Gx9zmY+ZRgQAeisKe5PiXrQs7/83D/WJQ4k7PvdfFm/91g+u/Gz63P0PyggA9NK08G+uVwoBcLz49w0BTZ6HTQIAo8/6t738Y1+0uP+1D/PJQ4kiBLRp+W/6r0df7jOlMQGASWb9ZcVfCIDF4o7Pe03px9A2BCj+tCUA0NrL7vfi2ucrL08q9gCY+cPx4l9xkl/XTgA0IQAwaAioK/5lBAJydWzmXxMC6i4FLJj904UAwCCqWv5nn6z/ayYEkJu9H3l1+RM1Z/qXhYBiw6DiT1cCAL27APUnku3+K3ZwcHLxcX/9cL8Jsir+lS38HSFg/b66qwWgCQGA3iGg2NjXpfgXhb/4syYEkNvMv0sIqH0ftCAAMIhjIaBB8T/+2InFFS9/hN8ISbrkR19V+niXEPCWR33oUMMiYwIAw1kX/Zrivz3rP//4+fcUIeCKlz3Sb4bkiv/yRP1mviYhQPFnKAIAg3n5FT++s/iXP17ynuW+EECSM/8hQgAMYXn69JmDzQf29i4a5BuTr7Jd/a2K/+ETRx+/9gHPG2ZwEEDbv3Cwf6Ll/ydOmv3Ty2p105GvdQAYVVXL/+xzzS8btCRAbC55wStrn2/TCXjLI++l+DM4AYBxlgJqZv1nn2t3ZkDtpYYQavHftZu/QQgoij+MwRIAoyq7tK/LgUHr9/zNxz9nuMHBwO70wleU//2uCcN1ywGrb7n3UEODxfYSgADApCGgT/G/5ev9k4tXfOIzhxsgDFT814YIAYo/Q7MHgMn99ce9YLDiX1ieuHlxv7947HADhJ6Ff7P4V2qxHKD4MwUdACZTeshPy+J/+Pj+0ZmUbgBzKQp/sV5f9ne1bjd/nTPffJ+hhgdH6AAwm2vv//yjD3TY2Ldd/Au6AcxlvVmvbOd+l+v6FX+mZGs1s4SAY2FgS+mMqqT4V70WxnKXH3/Z4s4/du3hn13ahADFn6lZAmAWddf1tyn+m6//2wc+Y6DRQXXxP//3rv5I67rHzj959nso/kzBEgBBqDrZr2vxL3zMSx830OjgeOHfLP5VWi0FHD55s+LPbHQACKobUHbJX5W6qwr+9pOePtwAydpdfuIvaw6oatYFqHr8zMPvO8AIoRnnABBsCBiq+B993cnFKz/5qcMMkjyL/9rAIUDxZ2qWAIhiSaCu+FcqKf6F+/7Zk/oNjiwL/5HiX2PZ4m5966Kv+BMC26cJxvqY313H/Zafslb/V7kIAYIATRSFv3Tdvm4tf/ulFa8tzg1Q/AmFPQAEp+66/qbFv+5GRJYEqPKBL3ppp79vVX/ntt//5m+6nw+f2dgDQLQhoO9/jDe/x999yvf3HSIJOfWTf9pqLb/p37v1+xV+QiAAEG0QOPYf45bFv+x7CAJ5Kwr/psYhoPYI66Pf403feEWfIcJgBACiDAHb/xEuDv35mD9/fKfZf9nXf/+pVw8yVuJw6Yv/uOLQnuG6AAo/oREAiNLmIT9DFP+qx4qT2f7+0763z1AJvPBvGisE/OfDHtB1iDAalwESpfUxv12O+21T/Asf9cff02WIBOzSn/rDY8V/ECW7/RV/YuEqAKIz5ux/m25A/IX/iIZ/F7p0ARR+QmcJgGSDQK+bszTYOPiqT7+q20CZpfAX1+I32TjaOwAUxf8bPqHrUGEylgBIRnHe//o/1G3/g93U9vf4yD+0PyB0d/3p36+5DW+zm/WUne5X9T0Vf2JlCYDolZ3w1+aGLE1m/2Xv/YfPsFcgBHe75ndaXfo5VBdA4Sc2lgDIIggMEQDqLhvcJAjMV/i77gHpGwIUf2IkAJB8CJiy+G++/x8+88pWY6Wbu/3Mb7U+/nmILsB/PPSB7QcLAREAyMZH/+l3dAoAjTcONnj/qz/r6Bjo7u4/+xtHfw8tQkCfLsDpr/+U1mOFGALABbONBEa2Pua3CAJt1/4baRgePuL3nrr4x892S+I27vGSX+12S+gBKfykziZAsvFRf7LVom9x5UDX7sH214JAuXv+3K8c/+xKAkCzVn6/LsAND/m0ilFC3CwBkLXDU/6KS7wqDv25zx+VX+t/vPD0WzpYP/6az3nCIkf3/PlfOlZ85w4ACj+pEwDIXtlRv3XFv2sAaNRNKPk+r/nc8/c9SMFlv/Dz5UW5wec1RQi44es+o/S1kBp7AMje+njfpmf+d539d/Xhv/3MI1//0+edvyVy6D7oF1/S+bMoPblvRAo/ubMJkKyDQBECpjzvf9fsv8yH/eazS77RyWPf91++6BGLMV3+y9e0viveJIoT+rb+/cVJfmVdgCJkvPFrP2vCwUG4BACy1rr4jzz77+NDf/35O5YkTg52GM5YhRuYjqsAoEaxL2DXrL3plQOd9hHsNzt/oMkGxCECQNMOQOMg0WEfQJsuxPrfadYPCzcDgjaKOwDectRvwLP/qVTeZCew7/+GB3/uYfEvCr/iD+V0AKCFj/yDq0eb/TfuAHS8AmGoJYAm19N37QCUvbfRlQDnvOFrPr/0cWChAwB9FOf9r8/8d/Z/OIrCr/hDO3n1L2EgbYp/12WCyvX/zJYKliduPvbYutgr/NCdqwCgh7Kb/dz798/egyBVg16vX3oJX7Pvb8YP/QgAMFIoKG4C1OcWxF2FujGx6tr8Jl7/1V84+HggdwIAjKS48c+9fvdpPt8OXvegL/a5wcgEABjR9s1+mgaCptf/p7JU8Nqv+pLRxwMcJQDAhMru/lec/T/29fVjF/d///IHHd4HYJfXfuWXjTwyoCkBAGa2fbOf7ZsBtVHcD+BDfu0FiyFd96UPPrwPQBfXf8VXDjoWYDgCAASm6u5/pTcFCkzRCQDiIABAJP75Cx7d6mZAQys6AXUUf4iLo4ABIAOr1U1Hvg7zgmEAYFQCAABkSAAAgAwJAACQIQEAADIkAABAhgQAAMiQAAAAGRIAACBDAgAAZEgAAIAMnTh16pJl3VnBAEDctmt7Uft1AAAgQwIAAGRIAACADAkAAJAhAQAAMiQAAECGSgOASwEBIA1VNf0wAGyfBQAApGld8y0BAECGBAAAyJAAAAAZEgAAIOcA4KZAAJD+TYDW/1sHAAAyJAAAQIYEAADIPQDYBwAA6a//F3QAACBDAgAAZGhnAHBjIACIS5PafSwAuDEQAKSlrLZbAgCADAkAAJCh0gDgckAASPPyvzUdAADIUOMA4GoAAAhbm1pdGQBcDQAAcaur5ZYAACBDrQKAZQAACFPbGl0bACwDAECcdtXw1ksAugAAEJYutXlnANAFAIC4NKndNgECQIYaBQAnAwJA3Cf/bdMBAIAMdQ4ANgMCwLz61OLGAcBmQAAIW5ta3WsJQBcAAObRtwa3CgC6AAAQprY1uvcmQF0AAJjWELW3dQDQBQCAsHSpzYNcBqgLAADTGKrmdgoAugAAEIauNblzB8DpgAAQx6l/o58EaCkAAMYxdI3tFQAsBQDAPPrW4MHvBaALAADh19YTYyQQIQAAhlFWU4fowA/SAbAUAADTGKrmjnY7YF0AAAi3lg4WACwFAED4rf9ROgCWAgBgHEPX2NGWANYsBQBAeLVz8ABgKQAAwm39j9oBEAIAINziP+oSgP0AABBuLR19D8Am+wEAIIwaOWoAsBQAAGG1/ifrAAgBABBW8Z9sCUAIAIBwiv+kewCEAAAIo/hPvgkQAAjDpAFAFwAAFrPP/mfpAAgBAORsFUDxn20JQAgAIEerQIr/rHsAhAAAcrIKqPjPvglQCAAgB6vAin8QVwEIAQCkbBVg8S/MPoC106fPHJQ9vrd30fSDAYCRzvYPofgH0QHY9YG4gRAAsVkFXvyDCgAFIQCA2K0iKP7BBYCCEABArFaRFP8gA0BBCAAgNquIin8hyEFtsjkQgJCtIiv8QXcANukGABCqVaTFP4oAUBACAAjNKuLiX4hikLuWAwrOCwBgCquKwh9T8S9EM9BN9gUAMIdV5LP+TdENeE03AICprBKZ9Ue3B6DtB+70QACGskqw+BeiHfgm3QAAhrZKtPBH3wHYpBsAwJBWiRf/QhI/xCbdAAC6WmVQ+NeS+mGahICCSwYBaLN3LLXiX0juB9okCABQZ5Vh4V9L9gfbJAgAsGmVceFfS/4HbBoCCpYGANLW5DLxUxkU/0IWP2TbIFAQBgDS0PRsmFOZFP61rH7YTYIAQNoU/nrZBoC2QaCgKwAQtjYnwZ7KbMa/LesffpuuAECczPbbEwB6dgUKOgMA02p7z5fcZ/tlfCADBoGCMAAwji43elP4qwkAI4aBgkAA0E3XO7sq+s0IABOGgU2CAcBwt3BX9NsTAAIIA9uEAyA1QxT5bYp+PwJABIEAAAV/aALAyAQCgG7M8MclAMxAKAA4SrGfngAQIAEBSI0CvwjO/wMJ3D5GiE+HOQAAAABJRU5ErkJggg=="/>
+
+    <!-- Left: Title block -->
+    <g transform="translate(184 70)">
+      <!-- Category label -->
+      <text x="0" y="0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', sans-serif"
+            font-size="14" fill="#8E8E93" letter-spacing="3">
+        DESKTOP OCR + TRANSLATION
+      </text>
+
+      <!-- Project name -->
+      <text x="0" y="56" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', sans-serif"
+            font-size="52" font-weight="700" fill="#1C1C1E" letter-spacing="-1">
+        须臾
+      </text>
+      <text x="130" y="56" font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
+            font-size="52" font-weight="700" fill="#007AFF" letter-spacing="-1">
+        OCR
+      </text>
+
+      <!-- Tagline -->
+      <text x="0" y="100" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', sans-serif"
+            font-size="22" fill="#3A3A3C" font-weight="400">
+        截图即识别，一键即翻译
+      </text>
+      <text x="0" y="130" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', sans-serif"
+            font-size="16" fill="#8E8E93">
+        Screenshot anything. Recognize text instantly. Translate with one click.
+      </text>
+
+      <!-- Feature pills -->
+      <g transform="translate(0 160)">
+        <rect x="0" y="0" width="110" height="30" rx="15" fill="#007AFF" fill-opacity="0.08"/>
+        <text x="55" y="20" font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
+              font-size="12" fill="#007AFF" text-anchor="middle" font-weight="500">7 OCR 引擎</text>
+
+        <rect x="122" y="0" width="130" height="30" rx="15" fill="#5856D6" fill-opacity="0.08"/>
+        <text x="187" y="20" font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
+              font-size="12" fill="#5856D6" text-anchor="middle" font-weight="500">7 翻译服务</text>
+
+        <rect x="264" y="0" width="100" height="30" rx="15" fill="#34C759" fill-opacity="0.08"/>
+        <text x="314" y="20" font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
+              font-size="12" fill="#34C759" text-anchor="middle" font-weight="500">全局快捷键</text>
+
+        <rect x="376" y="0" width="100" height="30" rx="15" fill="#FF9500" fill-opacity="0.08"/>
+        <text x="426" y="20" font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
+              font-size="12" fill="#FF9500" text-anchor="middle" font-weight="500">拖拽上传</text>
+      </g>
+
+      <!-- Tech stack line -->
+      <text x="0" y="230" font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
+            font-size="13" fill="#AEAEB2">
+        Tauri 2.0 · React 18 · TypeScript · TailwindCSS · Rust
+      </text>
+    </g>
+
+    <!-- Right: Workflow visualization -->
+    <g transform="translate(700 50)">
+      <!-- Workflow title -->
+      <text x="0" y="20" font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
+            font-size="12" fill="#AEAEB2" letter-spacing="2">WORKFLOW</text>
+
+      <!-- Step 1: Screenshot -->
+      <g transform="translate(0 45)">
+        <rect x="0" y="0" width="440" height="56" rx="12" fill="#F2F2F7" stroke="#E5E5EA" stroke-width="1"/>
+        <circle cx="28" cy="28" r="14" fill="#007AFF" fill-opacity="0.1"/>
+        <text x="28" y="33" font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
+              font-size="13" fill="#007AFF" text-anchor="middle" font-weight="700">1</text>
+        <text x="52" y="24" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', sans-serif"
+              font-size="15" fill="#1C1C1E" font-weight="600">截图 Capture</text>
+        <text x="52" y="42" font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
+              font-size="11" fill="#8E8E93">CmdOrCtrl+Shift+S → 选择区域</text>
+      </g>
+
+      <!-- Arrow 1 -->
+      <path d="M220 110 L220 128" stroke="url(#flow-grad)" stroke-width="2" stroke-dasharray="4 3" fill="none"/>
+      <polygon points="215,128 225,128 220,134" fill="#007AFF" opacity="0.6"/>
+
+      <!-- Step 2: OCR -->
+      <g transform="translate(0 138)">
+        <rect x="0" y="0" width="440" height="56" rx="12" fill="#F2F2F7" stroke="#E5E5EA" stroke-width="1"/>
+        <circle cx="28" cy="28" r="14" fill="#5856D6" fill-opacity="0.1"/>
+        <text x="28" y="33" font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
+              font-size="13" fill="#5856D6" text-anchor="middle" font-weight="700">2</text>
+        <text x="52" y="24" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', sans-serif"
+              font-size="15" fill="#1C1C1E" font-weight="600">识别 Recognize</text>
+        <text x="52" y="42" font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
+              font-size="11" fill="#8E8E93">PaddleOCR / OpenAI / Qwen / Gemini ...</text>
+      </g>
+
+      <!-- Arrow 2 -->
+      <path d="M220 203 L220 221" stroke="url(#flow-grad)" stroke-width="2" stroke-dasharray="4 3" fill="none"/>
+      <polygon points="215,221 225,221 220,227" fill="#5856D6" opacity="0.6"/>
+
+      <!-- Step 3: Translate -->
+      <g transform="translate(0 231)">
+        <rect x="0" y="0" width="440" height="56" rx="12" fill="#F2F2F7" stroke="#E5E5EA" stroke-width="1"/>
+        <circle cx="28" cy="28" r="14" fill="#34C759" fill-opacity="0.1"/>
+        <text x="28" y="33" font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
+              font-size="13" fill="#34C759" text-anchor="middle" font-weight="700">3</text>
+        <text x="52" y="24" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', sans-serif"
+              font-size="15" fill="#1C1C1E" font-weight="600">翻译 Translate</text>
+        <text x="52" y="42" font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
+              font-size="11" fill="#8E8E93">Google / OpenAI / Qwen / Doubao ...</text>
+      </g>
+
+      <!-- Arrow 3 -->
+      <path d="M220 296 L220 314" stroke="url(#flow-grad)" stroke-width="2" stroke-dasharray="4 3" fill="none"/>
+      <polygon points="215,314 225,314 220,320" fill="#34C759" opacity="0.6"/>
+
+      <!-- Step 4: Copy -->
+      <g transform="translate(0 324)">
+        <rect x="0" y="0" width="440" height="56" rx="12" fill="#F2F2F7" stroke="#E5E5EA" stroke-width="1"/>
+        <circle cx="28" cy="28" r="14" fill="#FF9500" fill-opacity="0.1"/>
+        <text x="28" y="33" font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
+              font-size="13" fill="#FF9500" text-anchor="middle" font-weight="700">4</text>
+        <text x="52" y="24" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', sans-serif"
+              font-size="15" fill="#1C1C1E" font-weight="600">复制 Copy</text>
+        <text x="52" y="42" font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
+              font-size="11" fill="#8E8E93">一键复制到剪贴板 · 可编辑 · 可导出</text>
+      </g>
+    </g>
+
+    <!-- Bottom accent line -->
+    <rect x="0" y="376" width="1200" height="4" fill="url(#flow-grad)" opacity="0.5"/>
+  </g>
+</svg>
