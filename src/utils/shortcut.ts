@@ -25,13 +25,16 @@ export interface ShortcutRegistration {
 
 export const isMacPlatform = () => navigator.platform.includes('Mac');
 
-const MODIFIER_ALIASES: Record<string, 'CmdOrCtrl' | 'Shift' | 'Alt' | 'Super'> = {
+const MODIFIER_ALIASES: Record<string, 'CmdOrCtrl' | 'Control' | 'Shift' | 'Alt' | 'Super'> = {
   CMDORCTRL: 'CmdOrCtrl',
   CMDORCONTROL: 'CmdOrCtrl',
   COMMANDORCONTROL: 'CmdOrCtrl',
   COMMANDORCTRL: 'CmdOrCtrl',
-  CONTROL: 'CmdOrCtrl',
-  CTRL: 'CmdOrCtrl',
+  // CONTROL / CTRL 是字面意义的 Control 键，不能并进 CmdOrCtrl：macOS 上 CmdOrCtrl
+  // 解析出来就是 ⌘（global-hotkey 里 `CMD_OR_CTRL = Modifiers::SUPER`），并进去会让
+  // ⌃Q 与 ⌘Q 变成同一个组合串。
+  CONTROL: 'Control',
+  CTRL: 'Control',
   SHIFT: 'Shift',
   ALT: 'Alt',
   OPTION: 'Alt',
@@ -42,7 +45,7 @@ const MODIFIER_ALIASES: Record<string, 'CmdOrCtrl' | 'Shift' | 'Alt' | 'Super'> 
   META: 'Super',
 };
 
-const MODIFIER_ORDER = ['CmdOrCtrl', 'Shift', 'Alt', 'Super'];
+const MODIFIER_ORDER = ['CmdOrCtrl', 'Control', 'Shift', 'Alt', 'Super'];
 
 /** 主键别名 → 归一化名字，两边写法不同但指向同一个键。 */
 const KEY_ALIASES: Record<string, string> = {
@@ -156,10 +159,17 @@ export function shortcutFromKeyboardEvent(
 ): { combo: string } | { error: string } {
   const mac = isMacPlatform();
   const mods: string[] = [];
-  if (e.ctrlKey || (mac && e.metaKey)) mods.push('CmdOrCtrl');
+  if (mac) {
+    // macOS 上 ⌘ 与 ⌃ 是两个物理上不同的键，必须分别记 —— CmdOrCtrl 在 mac 上就是 ⌘，
+    // 若把 ⌃ 也写成 CmdOrCtrl，用户按 Ctrl 录进去的就会变成（并显示为）⌘Q
+    if (e.metaKey) mods.push('CmdOrCtrl');
+    if (e.ctrlKey) mods.push('Control');
+  } else {
+    if (e.ctrlKey) mods.push('CmdOrCtrl');
+    if (e.metaKey) mods.push('Super');
+  }
   if (e.shiftKey) mods.push('Shift');
   if (e.altKey) mods.push('Alt');
-  if (!mac && e.metaKey) mods.push('Super');
 
   const key = keyTokenFromEvent(e);
   if (!key) return { error: '这个按键不支持作为快捷键，请换一个组合' };
@@ -210,6 +220,7 @@ export function formatShortcut(combo: string): string {
   const mac = isMacPlatform();
   const labels: Record<string, string> = {
     CMDORCTRL: mac ? '⌘' : 'Ctrl',
+    CONTROL: mac ? '⌃' : 'Ctrl',
     SHIFT: mac ? '⇧' : 'Shift',
     ALT: mac ? '⌥' : 'Alt',
     SUPER: mac ? '⌘' : 'Win',
