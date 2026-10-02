@@ -1,5 +1,8 @@
 """由各尺寸 PNG 拼装 src-tauri/icons/icon.ico 与 icon.icns。
 
+ico/各 PNG 用满版几何（Windows/Linux），icns 用 macOS 留白几何（Apple 网格）。
+
+
 由 scripts/build-icons.mjs 调用（原生尺寸帧已渲染在 docs/icon-preview/）。
 Windows 的 16/32/48px 图标直接取这些帧，而不是把 1024 缩下来；
 macOS 的 icns 用 PNG 载荷（Apple 从 10.7 起支持 icp4/icp5 等 PNG 条目）。
@@ -33,8 +36,10 @@ ICNS_ENTRIES = (
 )
 
 
-def frame(size):
-    return Image.open(os.path.join(PREVIEW, f"icon-{size}.png")).convert("RGBA")
+def frame(size, mac=False):
+    """macos 的 icns 用留白版（Apple 网格），其余用满版。"""
+    name = f"mac-{size}.png" if mac else f"icon-{size}.png"
+    return Image.open(os.path.join(PREVIEW, name)).convert("RGBA")
 
 
 def write_ico():
@@ -54,7 +59,8 @@ def write_icns():
     body = b""
     for kind, size in ICNS_ENTRIES:
         if size not in cache:
-            png_path = os.path.join(PREVIEW, f"icon-{size}.png")
+            # macOS 的 icns 用留白版，才能和系统里其他应用一样大
+            png_path = os.path.join(PREVIEW, f"mac-{size}.png")
             cache[size] = open(png_path, "rb").read()
         payload = cache[size]
         body += kind.encode("ascii") + struct.pack(">I", len(payload) + 8) + payload

@@ -225,15 +225,22 @@ function App() {
   translateRef.current = handleTranslate;
   copyRef.current = handleCopy;
 
+  // 关窗口和点托盘都发生在原生侧，那边读不到这里的 store，把开关推过去
+  useEffect(() => {
+    invoke('set_tray_behavior', {
+      closeToTray: quickAction.closeAction === '最小化到托盘',
+      showOnClick: quickAction.trayClick === '显示窗口',
+    }).catch((err) => console.error('[tray] sync behavior failed:', err));
+  }, [quickAction]);
+
+  // 菜单里的「退出」就该真退出。走 quit_app 而不是关窗口：
+  // 关窗口会按设置的驻留策略被拦下来，变成点了没反应
   const handleExit = async () => {
     try {
-      const { getCurrentWindow } = await import('@tauri-apps/api/window');
-      if (quickAction.closeAction === '最小化到托盘') {
-        await getCurrentWindow().hide();
-      } else {
-        await getCurrentWindow().close();
-      }
-    } catch {}
+      await invoke('quit_app');
+    } catch (err) {
+      console.error('[tray] quit failed:', err);
+    }
   };
 
   const handleCheckUpdate = async () => {

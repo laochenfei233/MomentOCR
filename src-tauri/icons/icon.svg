@@ -4,15 +4,19 @@
         node scripts/build-icons.mjs
 
     设计要点：
-    · 表盘：浅色圆角底板 + 细边框，白色标题栏和深色任务栏上都有轮廓
-    · 弧线：从 12 点顺时针 240° 的渐变弧，缺口留在左上，取「须臾一瞬」之意
-    · 指针：粗笔画 + 高对比墨色；只有 32px 以上才画，小尺寸糊成一团反而脏
-    改这里以后请重跑构建脚本，不要直接改导出的 PNG。
+    · 表盘：浅色圆角底板 + 细边框，几乎占满画布（Windows/Linux 用这套满版几何）
+    · 弧线：从 12 点顺时针 240° 的渐变弧，缺口留在左上，取「须臾一瞬」之意；
+      半径与线宽比旧版加大，「看得见的图形」在开始菜单那种小尺寸下也够大
+    · 指针：粗笔画 + 高对比墨色；只有 32px 以上才画（小尺寸糊成一团反而脏）
+    · macOS 另按 Apple 网格留白（图形约占 80.5%），由构建脚本换 viewBox 生成 icns
+
+    hands:start / hands:end 与 dot:start / dot:end 之间的内容会被构建脚本按尺寸改写，
+    所以标记别删。改这里以后请重跑构建脚本，不要直接改导出的 PNG。
   -->
   <defs>
     <linearGradient id="plate" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#FFFFFF"/>
-      <stop offset="1" stop-color="#EDF0F7"/>
+      <stop offset="1" stop-color="#E7ECF5"/>
     </linearGradient>
     <linearGradient id="arc" x1="0.62" y1="0.04" x2="0.12" y2="0.96">
       <stop offset="0" stop-color="#5856D6"/>
@@ -21,17 +25,18 @@
     </linearGradient>
   </defs>
 
-  <rect x="16" y="16" width="480" height="480" rx="106" fill="url(#plate)" stroke="#D7DBE4" stroke-width="3"/>
+  <rect x="12" y="12" width="488" height="488" rx="111" fill="url(#plate)" stroke="#CBD2DE" stroke-width="3"/>
 
-  <!-- 240° 渐变弧：起点在 12 点，顺时针到左下 -->
-  <path d="M256 104 A152 152 0 1 1 124.4 332" fill="none"
-        stroke="url(#arc)" stroke-width="48" stroke-linecap="round"/>
+  <!-- 240° 渐变弧（r=166）：起点在 12 点，顺时针到左下 -->
+  <path d="M256 90 A166 166 0 1 1 112.2 339" fill="none"
+        stroke="url(#arc)" stroke-width="50" stroke-linecap="round"/>
 
-  <!-- hands:start 小尺寸渲染时整段移除 -->
-  <path d="M256 256 L256 176" fill="none" stroke="#1C1C1E" stroke-width="28" stroke-linecap="round"/>
-  <path d="M256 256 L320 200" fill="none" stroke="#007AFF" stroke-width="24" stroke-linecap="round"/>
+  <!-- hands:start -->
+  <path d="M256 256 L256 170" fill="none" stroke="#1C1C1E" stroke-width="29" stroke-linecap="round"/>
+  <path d="M256 256 L330 194" fill="none" stroke="#007AFF" stroke-width="25" stroke-linecap="round"/>
   <!-- hands:end -->
 
-  <!-- 圆心：小尺寸去掉指针后由构建脚本放大到 r=30 顶住画面 -->
-  <circle cx="256" cy="256" r="24" fill="#007AFF"/>
+  <!-- dot:start -->
+  <circle cx="256" cy="256" r="26" fill="#007AFF"/>
+  <!-- dot:end -->
 </svg>

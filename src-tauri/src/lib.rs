@@ -8,14 +8,55 @@ mod recognizer;
 
 use screenshot::ScreenshotManager;
 use overlay::{OverlayManager, OverlayResult};
-use tauri::Emitter;
+use tauri::{
+    menu::{Menu, MenuItem, PredefinedMenuItem},
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    Emitter, Manager, WindowEvent,
+};
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 use chrono::Local;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 
-#[tauri::command]
-async fn start_screenshot_overlay(app: tauri::AppHandle) -> Result<String, String> {
+/// 常驻行为的开关。设置在渲染进程的 localStorage 里，但「关闭窗口」和「点托盘」
+/// 都发生在原生侧，跨 IPC 回读前端状态又要处理前端未就绪的情况，所以镜像一份。
+struct AppState {
+    close_to_tray: AtomicBool,
+    show_on_tray_click: AtomicBool,
+    /// 正在主动退出。置位后关闭请求不再被拦成「驻留托盘」，
+    /// 否则「退出」会被自己的拦截吃掉，软件再也关不掉。
+    quitting: AtomicBool,
+}
+
+impl Default for AppState {
+    fn default() -> Self {
+        Self {
+            // 与设置项的默认值（最小化到托盘）对齐：前端还没同步设置就点关闭时，
+            // 行为不该和设置里显示的反着来
+            close_to_tray: AtomicBool::new(true),
+            show_on_tray_click: AtomicBool::new(true),
+            quitting: AtomicBool::new(false),
+        }
+    }
+}
+
+fn show_main_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+
+/// 真退出。不能靠关窗口：`Window::close()` 同样会走一遍 CloseRequested，
+/// 会再被驻留逻辑拦下来，变成点了「退出」却什么都没发生。
+fn exit_now(app: &tauri::AppHandle) {
+    app.state::<AppState>().quitting.store(true, Ordering::SeqCst);
+    app.exit(0);
+}
+
+fn run_screenshot_overlay(app: &tauri::AppHandle) {
     let app_handle = app.clone();
     tauri::async_runtime::spawn(async move {
         let manager = OverlayManager::new(&app_handle);
@@ -27,7 +68,67 @@ async fn start_screenshot_overlay(app: tauri::AppHandle) -> Result<String, Strin
             Err(e) => { let _ = app_handle.emit("screenshot-error", e.to_string()); }
         }
     });
+}
+
+#[tauri::command]
+async fn start_screenshot_overlay(app: tauri::AppHandle) -> Result<String, String> {
+    run_screenshot_overlay(&app);
     Ok("started".to_string())
+}
+
+#[tauri::command]
+fn set_tray_behavior(app: tauri::AppHandle, close_to_tray: bool, show_on_click: bool) {
+    let state = app.state::<AppState>();
+    state.close_to_tray.store(close_to_tray, Ordering::SeqCst);
+    state.show_on_tray_click.store(show_on_click, Ordering::SeqCst);
+}
+
+#[tauri::command]
+fn quit_app(app: tauri::AppHandle) {
+    exit_now(&app);
+}
+
+/// 托盘图标。它是「关掉窗口后软件还在」的唯一可见凭证：没有它，
+/// 隐藏窗口就等于软件凭空消失，快捷键虽然还活着但用户没法把它叫回来。
+fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
+    let screenshot = MenuItem::with_id(app, "screenshot", "截图识别", true, None::<&str>)?;
+    let show = MenuItem::with_id(app, "show", "显示主窗口", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
+    let menu = Menu::with_items(
+        app,
+        &[&screenshot, &show, &PredefinedMenuItem::separator(app)?, &quit],
+    )?;
+
+    let mut tray = TrayIconBuilder::with_id("main")
+        .tooltip("须臾OCR")
+        .menu(&menu)
+        // 左键留给「点一下就能截图」，默认弹菜单会把单击动作吃掉
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| match event.id.as_ref() {
+            "screenshot" => run_screenshot_overlay(app),
+            "show" => show_main_window(app),
+            "quit" => exit_now(app),
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                let app = tray.app_handle();
+                if app.state::<AppState>().show_on_tray_click.load(Ordering::SeqCst) {
+                    show_main_window(app);
+                }
+            }
+        });
+
+    if let Some(icon) = app.default_window_icon() {
+        tray = tray.icon(icon.clone());
+    }
+    tray.build(app)?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -246,9 +347,25 @@ fn clear_temp_cache() -> Result<String, String> {
 
 pub fn run() {
     tauri::Builder::default()
+        // 必须最先注册：重复启动在这一步就被挡回去，不会走到抢全局快捷键那步
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            show_main_window(app);
+        }))
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, Some(vec![])))
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .manage(AppState::default())
+        .on_window_event(|window, event| {
+            let WindowEvent::CloseRequested { api, .. } = event else { return };
+            // 截图覆盖层是临时窗口，关掉它就该关掉，不要拦
+            if window.label() != "main" { return; }
+            let state = window.app_handle().state::<AppState>();
+            if state.quitting.load(Ordering::SeqCst) { return; }
+            if state.close_to_tray.load(Ordering::SeqCst) {
+                api.prevent_close();
+                let _ = window.hide();
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             start_screenshot_overlay, get_screenshot_base64, copy_image_to_clipboard,
             save_screenshot_dialog, select_image_files, save_temp_files,
@@ -256,10 +373,9 @@ pub fn run() {
             remove_local_runtime,
             ocr_openai, ocr_ollama, translate_google, translate_custom, translate_claude,
             ocr_custom_vision, ocr_claude, list_models, set_autostart, get_autostart, clear_temp_cache,
-            register_shortcuts, unregister_all_shortcuts
+            register_shortcuts, unregister_all_shortcuts, set_tray_behavior, quit_app
         ])
         .setup(|app| {
-            use tauri::Manager;
             // 注入资源目录：安装版把 OCR/截图脚本随包发布到此处（见 tauri.conf.json 的 bundle.resources）
             if let Ok(resource_dir) = app.path().resource_dir() {
                 overlay::set_resource_dir(resource_dir);
@@ -270,6 +386,7 @@ pub fn run() {
                     break;
                 }
             }
+            setup_tray(app)?;
             Ok(())
         })
         .run(tauri::generate_context!())

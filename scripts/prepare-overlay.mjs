@@ -50,11 +50,16 @@ if (!python) {
   process.exit(1);
 }
 
-console.log(`[overlay] 用 ${python.cmd} 打包截图覆盖层（${process.platform}）…`);
+// 目标架构：CI 由 workflow 显式给出；本地 tauri build 时 Tauri 会注入 TAURI_ENV_ARCH。
+// 传下去让 build-overlay.py 校验产物架构，避免「arm64 机器打出 x64 覆盖层」这类事故。
+const expectedArch = process.env.MOMENTOCR_OVERLAY_ARCH || process.env.TAURI_ENV_ARCH || '';
+
+console.log(`[overlay] 用 ${python.cmd} 打包截图覆盖层（${process.platform}，目标架构 ${expectedArch || '本机'}）…`);
 try {
   execFileSync(python.cmd, [...python.args, join(root, 'scripts', 'build-overlay.py')], {
     stdio: 'inherit',
     cwd: root,
+    env: { ...process.env, MOMENTOCR_OVERLAY_ARCH: expectedArch },
   });
 } catch {
   console.error('[overlay] 打包失败，请看上面的 PyInstaller 输出。');

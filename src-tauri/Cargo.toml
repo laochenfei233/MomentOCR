@@ -13,10 +13,11 @@ crate-type = ["cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["image-png"] }
+tauri = { version = "2", features = ["image-png", "tray-icon"] }
 tauri-plugin-shell = "2"
 tauri-plugin-autostart = "2"
 tauri-plugin-global-shortcut = "2"
+tauri-plugin-single-instance = "2"
 screenshots = "0.8"
 chrono = "0.4"
 serde = { version = "1", features = ["derive"] }

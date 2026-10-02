@@ -70,6 +70,52 @@ PRUNE_DIRS_WINDOWS = [
 
 
 
+
+def detect_arch(path: Path) -> str:
+    """读可执行文件头判断架构，返回 x86_64 / arm64 / i386 / universal / unknown:<hex>。
+
+    直接解析头部而不是调 lipo/file：CI 上（尤其是 Windows runner）不一定有这些工具。
+    """
+    header = path.open("rb").read(4096)
+    if len(header) < 64:
+        return "unknown:short"
+
+    # PE（Windows）
+    if header[:2] == b"MZ":
+        pe_offset = int.from_bytes(header[0x3C:0x40], "little")
+        if header[pe_offset:pe_offset + 4] == b"PE\x00\x00":
+            machine = int.from_bytes(header[pe_offset + 4:pe_offset + 6], "little")
+            return {0x8664: "x86_64", 0xAA64: "arm64", 0x014C: "i386"}.get(
+                machine, f"unknown:{machine:#x}"
+            )
+
+    # ELF（Linux）
+    if header[:4] == b"\x7fELF":
+        machine = int.from_bytes(header[0x12:0x14], "little")
+        return {0x3E: "x86_64", 0xB7: "arm64"}.get(machine, f"unknown:{machine:#x}")
+
+    # Mach-O（macOS）
+    magic = int.from_bytes(header[:4], "little")
+    if magic in (0xFEEDFACF, 0xFEEDFACE):
+        cputype = int.from_bytes(header[4:8], "little")
+        return {0x01000007: "x86_64", 0x0100000C: "arm64"}.get(
+            cputype, f"unknown:{cputype:#x}"
+        )
+    if header[:4] in (b"\xca\xfe\xba\xbe", b"\xbe\xba\xfe\xca"):
+        return "universal"
+
+    return "unknown:format"
+
+
+def expected_arch() -> str:
+    """目标架构：CI 用 MOMENTOCR_OVERLAY_ARCH 显式指定，本地缺省用当前机器。"""
+    explicit = os.environ.get("MOMENTOCR_OVERLAY_ARCH", "").strip()
+    if explicit:
+        return {"aarch64": "arm64", "arm64": "arm64", "x86_64": "x86_64", "amd64": "x86_64"}.get(
+            explicit, explicit
+        )
+    return {"arm64": "arm64", "aarch64": "arm64"}.get(platform.machine(), "x86_64")
+
 def use_utf8_stdout():
     """CI runner 上 stdout 可能是 cp1252/POSIX，打印中文会 UnicodeEncodeError。
 
@@ -147,6 +193,19 @@ def build(script: Path, out: Path, name: str = TARGET_NAME) -> Path:
         print(f"瘦身前 {before:.1f} MB，删掉 {removed / 1048576:.1f} MB，最终 {dir_size(out):.1f} MB")
     else:
         print(f"产物 {dir_size(out):.1f} MB（该平台暂未做文件级瘦身）")
+
+    # 架构必须和目标一致：arm64 机器上给 x64 包打出 arm64 覆盖层，
+    # 用户会看到「CPU 不匹配」，而 CI 是绿的——所以这里直接拦住
+    program = out / executable_name()
+    actual = detect_arch(program)
+    want = expected_arch()
+    print(f"架构校验：{program.name} = {actual}，目标 = {want}")
+    if actual != want:
+        raise SystemExit(
+            f"产物架构不匹配：{program} 是 {actual}，但目标是 {want}。"
+            f"检查打包用的 Python 架构（macOS 上用 setup-python 的 architecture: x64）"
+        )
+
     print(f"-> {out}")
     return out
 
