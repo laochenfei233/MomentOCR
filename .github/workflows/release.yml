@@ -136,7 +136,8 @@ jobs:
       - name: Prepare bundled overlay
         shell: bash
         run: |
-          if ! node scripts/prepare-overlay.mjs > overlay-build.log 2>&1; then
+          # 用 tee：成功时也能在日志里看到架构校验那行（否则出问题时无从判断）
+          if ! node scripts/prepare-overlay.mjs 2>&1 | tee overlay-build.log; then
             detail=$(tail -c 1500 overlay-build.log | tr '\n' ' ' | sed 's/%/%25/g; s/\r//g')
             echo "::error title=overlay packaging failed::$detail"
             tail -40 overlay-build.log
