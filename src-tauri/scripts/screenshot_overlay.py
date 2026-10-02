@@ -71,6 +71,63 @@ def capture_desktop(app, virtual_geometry):
     return canvas
 
 
+def hide_from_dock():
+    """让覆盖层以「附件（accessory）」身份运行：不在 Dock 里露图标，也不占菜单栏。
+
+    macOS 上 PyInstaller 打出来的是普通可执行文件（build-overlay.py 只给 Windows 加了
+    --noconsole），没有 .app 外壳也就没有 Info.plist 里的 LSUIElement，于是弹窗时 Dock 会
+    冒出一个通用黑色图标、还会把前台抢走。这里直接把 NSApplication 的 activation policy
+    改成 Accessory —— 对「随包二进制」和「私有/系统 Python 跑脚本」两条路径都生效，
+    不像改 .app 那样要动产物布局和查找路径。
+
+    用 ctypes 直接调 Objective-C 而不是 PyObjC：随包运行时里没有 PyObjC
+    （PyInstaller 只打进被 import 的模块）。任何一步失败都静默放过：宁可外观不变，
+    也不能让这段可选优化把截图弄坏。
+    """
+    if sys.platform != 'darwin':
+        return
+    try:
+        import ctypes
+
+        def load(paths):
+            for path in paths:
+                try:
+                    return ctypes.CDLL(path)
+                except OSError:
+                    continue
+            return None
+
+        # 注意：macOS 11 起系统库都在 dyld 共享缓存里，os.path.exists 对这些路径返回 False，
+        # 但 CDLL 仍能按路径打开 —— 所以别拿 os.path.exists 做前置判断；也不要用
+        # ctypes.util.find_library，实测它在本机返回 None（那样这段就静默失效了）。
+        objc = load(['/usr/lib/libobjc.A.dylib', '/usr/lib/libobjc.dylib'])
+        if objc is None:
+            return
+        # NSApplication 在 AppKit 里；先确保 AppKit 已加载，objc_getClass 才找得到这个类
+        load(['/System/Library/Frameworks/AppKit.framework/AppKit',
+              '/System/Library/Frameworks/Foundation.framework/Foundation'])
+        objc.objc_getClass.argtypes = [ctypes.c_char_p]
+        objc.objc_getClass.restype = ctypes.c_void_p
+        objc.sel_registerName.argtypes = [ctypes.c_char_p]
+        objc.sel_registerName.restype = ctypes.c_void_p
+
+        objc.objc_msgSend.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        objc.objc_msgSend.restype = ctypes.c_void_p
+        nsapp = objc.objc_msgSend(
+            objc.objc_getClass(b'NSApplication'),
+            objc.sel_registerName(b'sharedApplication'),
+        )
+        if not nsapp:
+            return
+
+        # NSApplicationActivationPolicyAccessory = 1（Regular = 0，Prohibited = 2）。
+        # 必须在 QApplication 建好之后再设：Qt 自己会在初始化时把它设成 Regular。
+        objc.objc_msgSend.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_long]
+        objc.objc_msgSend(nsapp, objc.sel_registerName(b'setActivationPolicy:'), 1)
+    except Exception:
+        pass
+
+
 class ScreenshotOverlay(QWidget):
     def __init__(self):
         super().__init__()
@@ -287,6 +344,7 @@ class ScreenshotOverlay(QWidget):
 
 def main():
     app = QApplication(sys.argv)
+    hide_from_dock()
     overlay = ScreenshotOverlay()
     overlay.show()
     app.exec_()

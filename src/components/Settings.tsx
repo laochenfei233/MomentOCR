@@ -657,25 +657,35 @@ function ShortcutEditor({ label, value, defaultValue, issue, onChange }: {
   // 已经存下来的组合也可能是坏的（旧版本录进来的无修饰键组合），同样要拦住不让它去抢按键
   const warning = editing ? captureError : (captureError || issue || validateShortcut(value));
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (e.key === 'Escape') {   // Esc 只用来取消录制，绝不录成快捷键
-      setEditing(false);
-      setCaptureError(null);
-      return;
-    }
-    if (isModifierKeyEvent(e.nativeEvent)) return;   // 还在按修饰键，继续等主键
+  // 录制期间在 window 上捕获按键，而不是挂在按钮自身：macOS 上 Tauri 用的 WebKit 里
+  // 鼠标点击 <button> 不会给它焦点，挂在按钮上的 onKeyDown 永远等不到按键，表现就是
+  // 「点完按钮进入录制，按什么都没反应」。（Windows 的 WebView2 点击会聚焦，所以只在 mac 上暴露）
+  useEffect(() => {
+    if (!editing) return;
 
-    const captured = shortcutFromKeyboardEvent(e.nativeEvent);
-    if ('error' in captured) {
-      setCaptureError(captured.error);
-      return;
-    }
-    setCaptureError(null);
-    setEditing(false);
-    onChange(captured.combo);
-  };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.key === 'Escape') {   // Esc 只用来取消录制，绝不录成快捷键
+        setEditing(false);
+        setCaptureError(null);
+        return;
+      }
+      if (isModifierKeyEvent(e)) return;   // 还在按修饰键，继续等主键
+
+      const captured = shortcutFromKeyboardEvent(e);
+      if ('error' in captured) {
+        setCaptureError(captured.error);
+        return;
+      }
+      setCaptureError(null);
+      setEditing(false);
+      onChange(captured.combo);
+    };
+
+    window.addEventListener('keydown', handleKeyDown, true);
+    return () => window.removeEventListener('keydown', handleKeyDown, true);
+  }, [editing, onChange]);
 
   const linkStyle: React.CSSProperties = {
     fontSize: 11, color: '#007AFF', background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px', whiteSpace: 'nowrap',
@@ -687,9 +697,7 @@ function ShortcutEditor({ label, value, defaultValue, issue, onChange }: {
         <span style={{ fontSize: 13, color: '#1c1c1e' }}>{label}</span>
         <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
           <button
-            onClick={() => { setCaptureError(null); setEditing(true); }}
-            onBlur={() => { setEditing(false); setCaptureError(null); }}
-            onKeyDown={editing ? handleKeyDown : undefined}
+            onClick={() => { setCaptureError(null); setEditing((v) => !v); }}
             style={{
               padding: '6px 12px',
               fontSize: 12,
