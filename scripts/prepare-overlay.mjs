@@ -23,6 +23,27 @@ if (existsSync(target) && sources.every((s) => statSync(s).mtimeMs <= statSync(t
   process.exit(0);
 }
 
+/// 目标架构：CI 由 workflow 显式给出；本地 tauri build 时 Tauri 会注入 TAURI_ENV_ARCH。
+/// 传下去让 build-overlay.py 校验产物架构，避免「arm64 机器打出 x64 覆盖层」这类事故。
+const expectedArch = process.env.MOMENTOCR_OVERLAY_ARCH || process.env.TAURI_ENV_ARCH || '';
+
+/// 目标架构与当前进程架构不同时，必须让整条工具链按目标架构跑。
+/// macOS 上 arm64 机器出 Intel 包就是这种情况：setup-python 给的「x64」解释器实际以 arm64
+/// 运行，pip 会装 arm64 的 PyQt5 wheel，PyInstaller 也按 arm64 出包——用户装上是「CPU 不匹配」。
+function crossArchPrefix() {
+  const want = expectedArch === 'aarch64' ? 'arm64' : expectedArch;
+  const host = process.arch === 'arm64' ? 'arm64' : 'x86_64';
+  if (process.platform === 'darwin' && want && want !== host) {
+    return ['arch', [`-${want}`]];
+  }
+  return null;
+}
+
+const prefix = crossArchPrefix();
+if (prefix) {
+  console.log(`[overlay] 目标架构 ${expectedArch} 与本机 ${process.arch} 不同，用 ${prefix[0]} ${prefix[1][0]} 跑工具链`);
+}
+
 /// 找一个装了打包工具的 Python（必须是用户环境里那个，不是随便哪个解释器）
 function findPython() {
   const candidates = [
@@ -31,11 +52,11 @@ function findPython() {
     { cmd: 'py', args: ['-3'] },
   ];
   for (const candidate of candidates) {
+    const cmd = prefix ? prefix[0] : candidate.cmd;
+    const args = prefix ? [...prefix[1], candidate.cmd, ...candidate.args] : candidate.args;
     try {
-      execFileSync(candidate.cmd, [...candidate.args, '-c', 'import PyInstaller, PyQt5'], {
-        stdio: 'ignore',
-      });
-      return candidate;
+      execFileSync(cmd, [...args, '-c', 'import PyInstaller, PyQt5'], { stdio: 'ignore' });
+      return { cmd, args };
     } catch {
       // 换下一个候选
     }
@@ -49,10 +70,6 @@ if (!python) {
   console.error('[overlay] 先执行：pip install pyinstaller PyQt5');
   process.exit(1);
 }
-
-// 目标架构：CI 由 workflow 显式给出；本地 tauri build 时 Tauri 会注入 TAURI_ENV_ARCH。
-// 传下去让 build-overlay.py 校验产物架构，避免「arm64 机器打出 x64 覆盖层」这类事故。
-const expectedArch = process.env.MOMENTOCR_OVERLAY_ARCH || process.env.TAURI_ENV_ARCH || '';
 
 console.log(`[overlay] 用 ${python.cmd} 打包截图覆盖层（${process.platform}，目标架构 ${expectedArch || '本机'}）…`);
 try {

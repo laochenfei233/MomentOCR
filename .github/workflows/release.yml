@@ -110,8 +110,20 @@ jobs:
           python-version: '3.12'
           architecture: x64
 
+      # arm64 runner 上出 Intel 包：必须让工具链真的按 x86_64 跑，
+      # 否则 pip 会装 arm64 的 PyQt5 wheel、PyInstaller 也产出 arm64 覆盖层
+      - name: Install Rosetta (Intel mac target)
+        if: matrix.target == 'x86_64-apple-darwin'
+        run: sudo softwareupdate --install-rosetta --agree-to-license || true
+
       - name: Install overlay packaging tools
-        run: python -m pip install --upgrade pip pyinstaller PyQt5
+        shell: bash
+        run: |
+          PY="python"
+          if [ "${{ matrix.target }}" = "x86_64-apple-darwin" ]; then PY="arch -x86_64 python"; fi
+          $PY -m pip install --upgrade pip
+          $PY -m pip install pyinstaller PyQt5
+          $PY -c "import platform,sys; print('工具链架构:', platform.machine(), sys.version.split()[0])"
 
       - name: Install frontend dependencies
         run: npm ci
