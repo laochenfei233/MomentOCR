@@ -26,6 +26,9 @@ anyhow = "1"
 reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 futures-util = "0.3"
+# 解压 unix 的 python-build-standalone 归档（tar.gz）；Windows 上只有测试会用到
+flate2 = "1"
+tar = "0.4"
 tokio = { version = "1", features = ["full"] }
 base64 = "0.22"
 urlencoding = "2"

@@ -9,17 +9,24 @@
 //!   · ocr        → rapidocr + onnxruntime（本地识别引擎，约 112 MB 下载 / 271 MB 磁盘）
 //!   · screenshot → PyQt5（截图覆盖层，约 55 MB 下载 / 150 MB 磁盘）
 //!
-//! 装配步骤（已在 Windows 实测通过）：
-//!   1. 下载 python.org embeddable 解释器（华为镜像，失败回退官方源）
-//!   2. 解压到 `<root>/runtime`
-//!   3. 引导 pip/setuptools/wheel：embeddable 没有 ensurepip，直接把 wheel 解包进
-//!      `<root>/site`。antlr4-python3-runtime（rapidocr→omegaconf 的依赖）只有源码包，
-//!      所以必须备好 setuptools 并关掉 pip 的构建隔离，否则装到一半会失败
-//!   4. 写 `python3xx._pth`：列出 stdlib、site、应用脚本目录 —— `._pth` 会让解释器进入
-//!      隔离模式，此时 PYTHONPATH 被忽略、脚本所在目录也不会自动进 sys.path
+//! 装配步骤：
+//!   1. 下载解释器：Windows 用 python.org 的 embeddable 包；macOS/Linux 没有 embeddable
+//!      发行版，改用 python-build-standalone 的可重定位构建（归档按架构分 Intel / ARM）。
+//!      两边都是国内主源 + 官方回退
+//!   2. 解压到 `<root>/runtime`。unix 归档整棵都在 `python/` 下，剥掉这一层，落点与
+//!      Windows 对齐（`runtime/python.exe` / `runtime/bin/python3`）
+//!   3. 引导 pip/setuptools/wheel：直接把 wheel 解包进 `<root>/site`（unix 的 standalone
+//!      自带 pip，但 setuptools/wheel 还是要补）。antlr4-python3-runtime（rapidocr→omegaconf
+//!      的依赖）只有源码包，所以必须备好 setuptools 并关掉 pip 的构建隔离，否则装到一半会失败
+//!   4. 让解释器认得私有 site 与应用脚本目录：Windows 写 `python3xx._pth`（embeddable 的
+//!      路径配置，会让解释器进入隔离模式，此时 PYTHONPATH 被忽略、脚本所在目录也不会自动
+//!      进 sys.path）；`._pth` 只在 Windows 生效，unix 改成往运行时自带的 site-packages
+//!      里放一个 `.pth`，作用相同
 //!   5. `pip install --target <root>/site <组件依赖>`
 //!      （rapidocr 把 onnxruntime 当可选后端，不显式带上就会装上却没引擎可用）
 //!   6. 自检：OCR 真识别一张现画的图、截图组件真起一个 offscreen 窗口，出结果才算装好
+//!
+//! Windows 走 embeddable + `._pth` 这条；macOS/Linux 走 standalone + `.pth` 这条。
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -28,13 +35,22 @@ use anyhow::{Context, Result};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
-/// embeddable 解释器版本，`._pth` 文件名由它推出
+/// embeddable 解释器版本，`._pth` 文件名与 unix 的 site-packages 路径都由它推出
 const PYTHON_VERSION: &str = "3.12.10";
-/// 主源（国内快）+ 官方回退
-const PYTHON_URLS: [&str; 2] = [
-    "https://mirrors.huaweicloud.com/python/3.12.10/python-3.12.10-embed-amd64.zip",
-    "https://www.python.org/ftp/python/3.12.10/python-3.12.10-embed-amd64.zip",
+/// python-build-standalone 的发布批次，这一批里带 cpython 3.12.10 的四种目标归档
+#[cfg(any(not(windows), test))]
+const STANDALONE_TAG: &str = "20250409";
+/// standalone 归档的下载源：国内镜像（快）+ GitHub 官方回退
+#[cfg(any(not(windows), test))]
+const STANDALONE_SOURCES: [&str; 2] = [
+    "https://mirror.nju.edu.cn/github-release/astral-sh/python-build-standalone",
+    "https://github.com/astral-sh/python-build-standalone/releases/download",
 ];
+/// 运行时归档在临时目录里的落盘名，扩展名决定用哪个解压器
+#[cfg(windows)]
+const RUNTIME_ARCHIVE: &str = "python-embed.zip";
+#[cfg(not(windows))]
+const RUNTIME_ARCHIVE: &str = "python-standalone.tar.gz";
 /// pip 源：清华 → 阿里 → 官方
 const PIP_INDEXES: [&str; 3] = [
     "https://pypi.tuna.tsinghua.edu.cn/simple",
@@ -43,8 +59,12 @@ const PIP_INDEXES: [&str; 3] = [
 ];
 /// 引导工具链：装 wheel 需要 pip，编译 antlr4 的源码包需要 setuptools + wheel
 const BOOTSTRAP_PACKAGES: [&str; 3] = ["pip", "setuptools", "wheel"];
-/// 共享的解释器 + 引导工具链的下载量估算
+/// 共享的解释器 + 引导工具链的下载量估算（embeddable 约 11 MiB）
+#[cfg(windows)]
 pub const RUNTIME_DOWNLOAD_MB: u64 = 12;
+/// 同上，按最大的一份 standalone 归档估（linux x86_64，约 63 MiB）
+#[cfg(not(windows))]
+pub const RUNTIME_DOWNLOAD_MB: u64 = 67;
 
 pub const PROGRESS_EVENT: &str = "local-engine-progress";
 /// 开发者本地覆盖解释器：设了就用它，跳过私有运行时
@@ -204,8 +224,21 @@ impl Layout {
         self.root.join("tmp")
     }
 
+    /// 解释器的路径配置落点：Windows 是 runtime 下的 `._pth`，
+    /// unix 是运行时自带 site-packages 里的 `.pth`
     fn pth_file(&self) -> PathBuf {
-        self.runtime().join(pth_name())
+        #[cfg(windows)]
+        {
+            self.runtime().join(pth_name())
+        }
+        #[cfg(not(windows))]
+        {
+            self.runtime()
+                .join("lib")
+                .join(format!("python{}", version_minor()))
+                .join("site-packages")
+                .join("momentocr.pth")
+        }
     }
 
     /// 解释器装好了吗
@@ -408,40 +441,61 @@ fn manifest_bytes(path: &Path) -> u64 {
         .sum()
 }
 
-/// `._pth` 的文件名跟着解释器版本走：3.12 → `python312._pth`
-fn pth_name() -> String {
+/// 版本里的 `3.12` 段，用来拼 `python312._pth` / `lib/python3.12/site-packages`
+fn version_minor() -> String {
     let mut parts = PYTHON_VERSION.split('.');
     let major = parts.next().unwrap_or("3");
     let minor = parts.next().unwrap_or("12");
-    format!("python{major}{minor}._pth")
+    format!("{major}.{minor}")
+}
+
+/// `._pth` 的文件名跟着解释器版本走：3.12 → `python312._pth`
+#[cfg(windows)]
+fn pth_name() -> String {
+    format!("python{}._pth", version_minor().replace('.', ""))
 }
 
 /// `._pth` 的内容：stdlib、自带目录、私有 site、应用脚本目录，最后开启 site 处理
-fn pth_content(scripts_dir: &Path) -> String {
-    let mut parts = PYTHON_VERSION.split('.');
-    let major = parts.next().unwrap_or("3");
-    let minor = parts.next().unwrap_or("12");
+#[cfg(windows)]
+fn pth_content(_layout: &Layout, scripts_dir: &Path) -> String {
     format!(
-        "python{major}{minor}.zip\n.\n..\\site\n{}\nimport site\n",
+        "python{}.zip\n.\n..\\site\n{}\nimport site\n",
+        version_minor().replace('.', ""),
         scripts_dir.display()
     )
 }
 
-/// 让私有解释器认得「应用脚本目录」。
+/// unix 的 `.pth` 只认「一行一个路径」，直接写绝对路径，不需要 `import site`
+#[cfg(not(windows))]
+fn pth_content(layout: &Layout, scripts_dir: &Path) -> String {
+    format!("{}\n{}\n", layout.site().display(), scripts_dir.display())
+}
+
+/// 落盘路径配置。unix 上这个文件在运行时自带的 site-packages 里，得先确保父目录在。
+fn write_pth(layout: &Layout, scripts_dir: &Path) -> std::io::Result<()> {
+    let path = layout.pth_file();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, pth_content(layout, scripts_dir))
+}
+
+/// 让私有解释器认得「私有 site」与「应用脚本目录」。
 ///
-/// `._pth` 会把解释器置于隔离模式：PYTHONPATH 被忽略、`python x.py` 也不会把脚本目录
-/// 放进 sys.path，所以脚本里的 `import ocr_text` 只能靠这里列出来。应用换目录或升级后
-/// 需要重写，因此每次识别前都对一次内容，不一致才落盘。
+/// Windows 的 `._pth` 会把解释器置于隔离模式：PYTHONPATH 被忽略、`python x.py` 也不会把
+/// 脚本目录放进 sys.path；unix 没有 `._pth`，改用运行时自带 site-packages 里的 `.pth`
+/// （PYTHONPATH 同样不参与，两边的路径都只能靠这个文件列出来）。应用换目录或升级后需要
+/// 重写，因此每次识别前都对一次内容，不一致才落盘。
 pub fn ensure_pth(layout: &Layout, scripts_dir: &Path) {
     if !layout.installed() {
         return;
     }
-    let desired = pth_content(scripts_dir);
+    let desired = pth_content(layout, scripts_dir);
     let current = std::fs::read_to_string(layout.pth_file()).unwrap_or_default();
     if normalize(&current) == normalize(&desired) {
         return;
     }
-    let _ = std::fs::write(layout.pth_file(), desired);
+    let _ = write_pth(layout, scripts_dir);
 }
 
 fn normalize(text: &str) -> String {
@@ -501,6 +555,49 @@ pub async fn install_into(
     Ok(format!("{}已安装完成（自检：{}）", component.label(), text))
 }
 
+/// 私有运行时的下载源，按优先级排；调用方逐个试。
+///
+/// Windows 用 python.org 的 embeddable 包；macOS/Linux 没有 embeddable 发行版，
+/// 用 python-build-standalone 的可重定位构建。
+fn runtime_urls() -> Result<Vec<String>> {
+    #[cfg(windows)]
+    {
+        Ok(vec![
+            "https://mirrors.huaweicloud.com/python/3.12.10/python-3.12.10-embed-amd64.zip"
+                .to_string(),
+            "https://www.python.org/ftp/python/3.12.10/python-3.12.10-embed-amd64.zip".to_string(),
+        ])
+    }
+
+    #[cfg(not(windows))]
+    {
+        let target = standalone_target(std::env::consts::OS, std::env::consts::ARCH)?;
+        Ok(standalone_urls(target).to_vec())
+    }
+}
+
+/// 当前平台对应的 python-build-standalone 目标三元组。
+#[cfg(any(not(windows), test))]
+fn standalone_target(os: &str, arch: &str) -> Result<&'static str> {
+    Ok(match (os, arch) {
+        ("macos", "aarch64") => "aarch64-apple-darwin",
+        ("macos", "x86_64") => "x86_64-apple-darwin",
+        ("linux", "aarch64") => "aarch64-unknown-linux-gnu",
+        ("linux", "x86_64") => "x86_64-unknown-linux-gnu",
+        _ => anyhow::bail!(
+            "本地引擎暂不支持当前平台（{os}/{arch}）：\
+             请自行装好 rapidocr，再用环境变量 MOMENTOCR_PYTHON 指向那个解释器"
+        ),
+    })
+}
+
+#[cfg(any(not(windows), test))]
+fn standalone_urls(target: &str) -> [String; 2] {
+    STANDALONE_SOURCES.map(|base| {
+        format!("{base}/{STANDALONE_TAG}/cpython-{PYTHON_VERSION}+{STANDALONE_TAG}-{target}-install_only.tar.gz")
+    })
+}
+
 async fn install_runtime(
     layout: &Layout,
     client: &reqwest::Client,
@@ -508,10 +605,10 @@ async fn install_runtime(
     progress: &(dyn Fn(&str, u8, &str) + Sync),
 ) -> Result<()> {
     progress("python", 2, "正在下载 Python 运行时…");
-    let archive = layout.scratch().join("python-embed.zip");
+    let archive = layout.scratch().join(RUNTIME_ARCHIVE);
     let mut last_error = None;
-    for url in PYTHON_URLS {
-        match download(client, url, &archive, |done, total| {
+    for url in runtime_urls()? {
+        match download(client, &url, &archive, |done, total| {
             let percent = if total > 0 { (done * 100 / total).min(100) as u8 } else { 0 };
             progress(
                 "python",
@@ -541,8 +638,12 @@ async fn install_runtime(
     std::fs::create_dir_all(&dest)?;
     let archive_for_extract = archive.clone();
     let dest_for_extract = dest.clone();
-    tokio::task::spawn_blocking(move || extract_zip(&archive_for_extract, &dest_for_extract))
-        .await??;
+    tokio::task::spawn_blocking(move || {
+        extract_runtime_archive(&archive_for_extract, &dest_for_extract)
+    })
+    .await??;
+    // 解压完就没用了；unix 的归档有 60 多 MB，留着白占磁盘（引导用的 wheel 同理）
+    let _ = std::fs::remove_file(&archive);
 
     progress("bootstrap", 14, "正在准备安装工具…");
     for name in BOOTSTRAP_PACKAGES {
@@ -556,8 +657,7 @@ async fn install_runtime(
         let _ = std::fs::remove_file(&path);
     }
 
-    std::fs::write(layout.pth_file(), pth_content(scripts_dir))
-        .context("写入运行时 path 配置失败")?;
+    write_pth(layout, scripts_dir).context("写入运行时 path 配置失败")?;
     Ok(())
 }
 
@@ -849,6 +949,70 @@ fn extract_zip(archive: &Path, dest: &Path) -> Result<()> {
     Ok(())
 }
 
+/// 解压运行时归档：Windows 是 zip，unix 是 tar.gz
+fn extract_runtime_archive(archive: &Path, dest: &Path) -> Result<()> {
+    #[cfg(windows)]
+    {
+        extract_zip(archive, dest)
+    }
+    #[cfg(not(windows))]
+    {
+        extract_tar_gz(archive, dest)
+    }
+}
+
+/// 解压 python-build-standalone 的 `install_only` 归档。
+///
+/// 归档整棵都在 `python/` 下，剥掉这一层，解释器才落到 `<root>/runtime/bin/python3`，
+/// 与 Windows 的 embeddable 布局对齐（`runtime/python.exe`）。`bin/python3` 是指向
+/// `python3.12` 的软链接，交给 `entry.unpack` 按原样重建。
+#[cfg(any(not(windows), test))]
+fn extract_tar_gz(archive: &Path, dest: &Path) -> Result<()> {
+    let file = std::fs::File::open(archive)
+        .with_context(|| format!("打开 {} 失败", archive.display()))?;
+    let mut tar = tar::Archive::new(flate2::read::GzDecoder::new(file));
+    // 不留权限位的话 bin/python3.12 会丢掉可执行位，解释器就起不来
+    tar.set_preserve_permissions(true);
+    tar.set_overwrite(true);
+
+    let mut extracted = 0usize;
+    for entry in tar.entries().context("压缩包无法解析")? {
+        let mut entry = entry?;
+        let relative = {
+            let path = entry.path()?;
+            stripped_relative(&path)
+        };
+        let Some(relative) = relative else { continue };
+        let target = dest.join(relative);
+        // unpack 不建父目录，得自己来（zip 那套也是这么做的）
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        entry.unpack(&target)?;
+        extracted += 1;
+    }
+    if extracted == 0 {
+        // 一条都没解出来说明归档结构变了；静默成功会让后面「解释器不存在」更难查
+        anyhow::bail!("运行时归档结构与预期不符：里面没有 python/ 目录");
+    }
+    Ok(())
+}
+
+/// 取条目在 `python/` 之下的相对路径；越出解压目录的条目返回 `None`
+/// （与 zip 那套用 `enclosed_name` 是同一个用意）。
+#[cfg(any(not(windows), test))]
+fn stripped_relative(path: &Path) -> Option<PathBuf> {
+    let relative = path.strip_prefix("python").ok()?;
+    if relative.is_absolute()
+        || relative
+            .components()
+            .any(|part| matches!(part, std::path::Component::ParentDir))
+    {
+        return None;
+    }
+    Some(relative.to_path_buf())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -878,6 +1042,11 @@ mod tests {
 
         let layout = Layout { root: root.clone() };
         assert!(layout.has(component), "组件标志物不存在");
+        // 下载的归档与引导 wheel 都该在解压后删掉，别几十 MB 的东西赖在临时目录里
+        let leftovers = std::fs::read_dir(layout.scratch())
+            .map(|entries| entries.flatten().count())
+            .unwrap_or(0);
+        assert_eq!(leftovers, 0, "临时目录里还留着下载的文件");
         assert!(
             !read_manifest(&layout.manifest(component)).is_empty(),
             "没有记录组件装了哪些文件"
@@ -888,5 +1057,138 @@ mod tests {
         println!("按清单释放 {:.1} MB", freed as f64 / 1_048_576.0);
         assert!(freed > 0, "没有释放任何空间");
         assert!(!layout.has(component), "移除后组件标志物还在");
+    }
+
+    /// 目标三元组与归档地址：写错就是整条装配线跑不通，而且只有到真机才暴露
+    #[test]
+    fn standalone_urls_match_each_target() {
+        assert_eq!(
+            standalone_target("macos", "aarch64").unwrap(),
+            "aarch64-apple-darwin"
+        );
+        assert_eq!(
+            standalone_target("macos", "x86_64").unwrap(),
+            "x86_64-apple-darwin"
+        );
+        assert_eq!(
+            standalone_target("linux", "aarch64").unwrap(),
+            "aarch64-unknown-linux-gnu"
+        );
+        assert_eq!(
+            standalone_target("linux", "x86_64").unwrap(),
+            "x86_64-unknown-linux-gnu"
+        );
+        // 表里没有的平台要给出可操作的提示，而不是拼一个必然 404 的地址
+        let err = standalone_target("freebsd", "x86_64").unwrap_err().to_string();
+        assert!(err.contains("MOMENTOCR_PYTHON"), "{err}");
+
+        let urls = standalone_urls("aarch64-apple-darwin");
+        for url in &urls {
+            assert!(url.starts_with("https://"), "{url}");
+            assert!(
+                url.ends_with(&format!(
+                    "/{STANDALONE_TAG}/cpython-{PYTHON_VERSION}+{STANDALONE_TAG}\
+                     -aarch64-apple-darwin-install_only.tar.gz"
+                )),
+                "{url}"
+            );
+        }
+        assert!(
+            urls[0].starts_with("https://mirror.nju.edu.cn/github-release/astral-sh/python-build-standalone"),
+            "{}",
+            urls[0]
+        );
+        assert!(
+            urls[1].starts_with(
+                "https://github.com/astral-sh/python-build-standalone/releases/download"
+            ),
+            "{}",
+            urls[1]
+        );
+    }
+
+    /// 归档条目都带 `python/` 前缀，剥掉后才对齐 `runtime/bin/python3` 的布局
+    #[test]
+    fn strips_python_prefix_and_rejects_escapes() {
+        let stripped = |p: &str| stripped_relative(Path::new(p));
+
+        assert_eq!(
+            stripped("python/bin/python3").unwrap(),
+            Path::new("bin/python3")
+        );
+        assert_eq!(
+            stripped("python/lib/python3.12/site-packages/README.txt").unwrap(),
+            Path::new("lib/python3.12/site-packages/README.txt")
+        );
+        // 归档里 `python/` 这一级本身也要能落到 runtime 目录上
+        assert_eq!(stripped("python").unwrap(), Path::new(""));
+
+        assert!(stripped("python/../escape").is_none(), "带 .. 的条目要丢掉");
+        assert!(stripped("/etc/passwd").is_none(), "绝对路径要丢掉");
+        assert!(stripped("other-root/bin/python3").is_none(), "前缀对不上");
+    }
+
+    /// 造一个带 `python/` 前缀的 tar.gz 真跑一遍解压，确认落点与权限位
+    #[test]
+    fn extracts_tar_gz_into_runtime_layout() {
+        let dir = std::env::temp_dir().join("momentocr-tar-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let archive = dir.join("runtime.tar.gz");
+        let file = std::fs::File::create(&archive).unwrap();
+        let encoder = flate2::write::GzEncoder::new(file, flate2::Compression::fast());
+        let mut builder = tar::Builder::new(encoder);
+        for (name, body, mode) in [
+            ("python/bin/python3.12", "#!/bin/sh\n", 0o775u32),
+            ("python/lib/python3.12/site-packages/README.txt", "hi\n", 0o644),
+        ] {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(body.len() as u64);
+            header.set_mode(mode);
+            header.set_path(name).unwrap();
+            header.set_cksum();
+            builder.append(&header, body.as_bytes()).unwrap();
+        }
+        builder.into_inner().unwrap().finish().unwrap();
+
+        let dest = dir.join("runtime");
+        extract_tar_gz(&archive, &dest).unwrap();
+
+        assert!(dest.join("bin/python3.12").is_file());
+        assert!(dest.join("lib/python3.12/site-packages/README.txt").is_file());
+        assert_eq!(
+            std::fs::read_to_string(dest.join("bin/python3.12")).unwrap(),
+            "#!/bin/sh\n"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 归档结构变了要立刻报错，别静默解出 0 个文件
+    #[test]
+    fn rejects_archive_without_python_prefix() {
+        let dir = std::env::temp_dir().join("momentocr-tar-bad-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let archive = dir.join("runtime.tar.gz");
+        let file = std::fs::File::create(&archive).unwrap();
+        let encoder = flate2::write::GzEncoder::new(file, flate2::Compression::fast());
+        let mut builder = tar::Builder::new(encoder);
+        let mut header = tar::Header::new_gnu();
+        header.set_size(3);
+        header.set_mode(0o644);
+        header.set_path("cpython/bin/python3").unwrap();
+        header.set_cksum();
+        builder.append(&header, "abc".as_bytes()).unwrap();
+        builder.into_inner().unwrap().finish().unwrap();
+
+        let err = extract_tar_gz(&archive, &dir.join("runtime"))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("python/"), "{err}");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
