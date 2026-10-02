@@ -4,9 +4,9 @@
  * 组合串格式与 tauri-plugin-global-shortcut 的解析器（global-hotkey）保持一致：
  * 修饰键在前、主键在最后，例如 `CmdOrCtrl+Shift+S`、`Alt+A`。空串表示「未启用」。
  *
- * 这里的校验只做一件事：**不让本应用注册会抢走其他软件按键的组合**。
- * 全局快捷键一旦注册，系统会把该组合从所有软件手上截走；若抢到的是别人的
- * 「退出 / 关闭」键（Alt+F4、Ctrl+Q、Ctrl+W 之类），用户就会觉得其他软件坏掉了。
+ * 这里**不再**拦截「会抢走其他软件按键」的组合：用户要的就能设。注册后其他软件里同一个
+ * 组合会被本应用接管，这是全局快捷键的固有代价，由用户自己决定（设置页里说明了，随时可以
+ * 点「禁用」把按键交还回去）。只保留两类硬检查：无法解析的组合、以及不在支持列表里的按键。
  */
 
 export type ShortcutAction = 'screenshot' | 'copy' | 'translate';
@@ -77,20 +77,6 @@ const SUPPORTED_KEYS = new Set<string>([
   'NUMPADMULTIPLY', 'NUMPADSUBTRACT',
 ]);
 
-/** 点下去就会退出 / 关闭的键，抢走它们最招人烦。 */
-const RESERVED_COMBOS: Record<string, string> = {
-  'Alt+F4': '关闭当前窗口 / 退出程序',
-  'CmdOrCtrl+Q': '多数软件的「退出」',
-  'CmdOrCtrl+Shift+Q': '多数软件的「退出」',
-  'CmdOrCtrl+W': '多数软件的「关闭窗口 / 关闭标签页」',
-  'CmdOrCtrl+Shift+W': '多数软件的「关闭窗口 / 关闭标签页」',
-  'CmdOrCtrl+Esc': 'Windows 开始菜单',
-  'CmdOrCtrl+Shift+Esc': 'Windows 任务管理器',
-  'CmdOrCtrl+Alt+DELETE': 'Windows 安全界面',
-  'Alt+TAB': '切换窗口',
-  'Alt+ESCAPE': '切换窗口',
-};
-
 function normalizeKeyToken(token: string): string | null {
   const upper = token.trim().toUpperCase();
   if (!upper) return null;
@@ -143,10 +129,7 @@ export function validateShortcut(combo: string): string | null {
 
   if (!SUPPORTED_KEYS.has(key)) return '这个按键不支持，请换一个组合';
 
-  const reserved = RESERVED_COMBOS[canonical];
-  if (reserved) return `「${reserved}」被其他软件占用，抢走它会让人以为其他软件坏了`;
-
-  if (key === 'ESCAPE') return 'Esc 是通用的「取消 / 退出」键，不能独占';
+  if (key === 'ESCAPE') return 'Esc 是录制时的「取消」键，不能录成快捷键';
 
   if (!isMacPlatform() && mods.includes('Super')) {
     return 'Win 组合键由 Windows 系统保留，无法注册，请改用 Ctrl / Alt / Shift';
