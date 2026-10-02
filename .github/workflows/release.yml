@@ -18,6 +18,9 @@ jobs:
     env:
       # 覆盖层必须按目标架构打包：arm64 机器上给 Intel 包打出 arm64 覆盖层，用户会看到 CPU 不匹配
       MOMENTOCR_OVERLAY_ARCH: ${{ matrix.overlay_arch }}
+      # Windows runner 的 Python 默认用旧代码页，打印非 ASCII 会 UnicodeEncodeError，这里统一成 UTF-8
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: utf-8
     strategy:
       fail-fast: false
       matrix:
@@ -123,7 +126,7 @@ jobs:
           if [ "${{ matrix.target }}" = "x86_64-apple-darwin" ]; then PY="arch -x86_64 python"; fi
           $PY -m pip install --upgrade pip
           $PY -m pip install pyinstaller PyQt5
-          $PY -c "import platform,sys; print('工具链架构:', platform.machine(), sys.version.split()[0])"
+          $PY -c "import platform,sys; print('toolchain arch:', platform.machine(), 'python', sys.version.split()[0])"
 
       - name: Install frontend dependencies
         run: npm ci
