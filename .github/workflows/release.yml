@@ -157,7 +157,9 @@ jobs:
           # runner 上可能没有 libfuse2，让 linuxdeploy 自解压运行而不是挂载
           APPIMAGE_EXTRACT_AND_RUN: 1
         with:
-          tagName: v__VERSION__
+          # 只有推 tag 才生成（草稿）release；手动触发仅构建并上传运行页产物，
+          # 避免测试运行反复产生草稿，装包直接从 Actions 运行页下载即可
+          tagName: ${{ github.event_name == 'push' && 'v__VERSION__' || '' }}
           releaseName: 须臾OCR v__VERSION__
           releaseBody: |
             ## 须臾OCR v__VERSION__
@@ -174,3 +176,43 @@ jobs:
           releaseDraft: true
           prerelease: false
           args: --target ${{ matrix.target }} --verbose
+
+      # 把安装包汇总到运行页摘要并作为运行产物上传：不用再翻 Releases 里的草稿
+      - name: Collect installers
+        shell: bash
+        run: |
+          set -euo pipefail
+          BUNDLE="src-tauri/target/${{ matrix.target }}/release/bundle"
+          rm -rf dist-installers && mkdir -p dist-installers
+          if [ -d "$BUNDLE" ]; then
+            find "$BUNDLE" -maxdepth 2 -type f \
+              \( -name '*.exe' -o -name '*.msi' -o -name '*.dmg' \
+                 -o -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' \) \
+              -exec cp {} dist-installers/ \;
+          fi
+          count=$(find dist-installers -type f | wc -l)
+          echo "收集到 $count 个安装包"
+          ls -lh dist-installers
+          {
+            echo "### ${{ matrix.label }}"
+            echo ""
+            if [ "$count" -eq 0 ]; then
+              echo "没有找到安装包，检查 bundle 输出目录。"
+            else
+              echo "| 文件 | 体积 |"
+              echo "| --- | --- |"
+              for f in dist-installers/*; do
+                [ -e "$f" ] || continue
+                printf '| `%s` | %s |\n' "$(basename "$f")" "$(du -h "$f" | cut -f1)"
+              done
+            fi
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload installers as run artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: MomentOCR-${{ matrix.label }}
+          path: dist-installers/*
+          if-no-files-found: error
+          retention-days: 14
