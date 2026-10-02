@@ -69,6 +69,19 @@ PRUNE_DIRS_WINDOWS = [
 ]
 
 
+
+def use_utf8_stdout():
+    """CI runner 上 stdout 可能是 cp1252/POSIX，打印中文会 UnicodeEncodeError。
+
+    本地开发环境通常是 UTF-8，所以这个坑只在 CI 上暴露（Windows 与 Linux runner 都踩过）。
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
+
 def dir_size(path: Path) -> float:
     return sum(f.stat().st_size for f in path.rglob("*") if f.is_file()) / 1048576
 
@@ -79,6 +92,7 @@ def executable_name() -> str:
 
 def build(script: Path, out: Path, name: str = TARGET_NAME) -> Path:
     """打包 + （Windows）瘦身，返回产物目录（可执行文件与 _internal 同级）。"""
+    use_utf8_stdout()
     shutil.rmtree(WORK, ignore_errors=True)
     WORK.mkdir(parents=True, exist_ok=True)
 
@@ -138,6 +152,7 @@ def build(script: Path, out: Path, name: str = TARGET_NAME) -> Path:
 
 
 def main() -> int:
+    use_utf8_stdout()
     build(SCRIPTS / "screenshot_overlay.py", OUT_DIR / TARGET_NAME)
     return 0
 

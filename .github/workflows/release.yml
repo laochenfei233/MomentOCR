@@ -116,6 +116,8 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # runner 上可能没有 libfuse2，让 linuxdeploy 自解压运行而不是挂载
+          APPIMAGE_EXTRACT_AND_RUN: 1
         with:
           tagName: v__VERSION__
           releaseName: 须臾OCR v__VERSION__
@@ -133,4 +135,4 @@ jobs:
             > macOS 安装包未做代码签名，首次打开需在「系统设置 → 隐私与安全性」中点击「仍要打开」。
           releaseDraft: true
           prerelease: false
-          args: --target ${{ matrix.target }}
+          args: --target ${{ matrix.target }} --verbose
