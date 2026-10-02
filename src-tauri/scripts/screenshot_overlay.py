@@ -11,6 +11,66 @@ from PyQt5.QtCore import Qt, QPoint, QRect
 from PyQt5.QtGui import QPainter, QColor, QPixmap, QPen
 
 
+def capture_desktop(app, virtual_geometry):
+    """逐屏抓取并拼成一张覆盖整个虚拟桌面的位图。
+
+    为什么不一次抓整个虚拟桌面：一块屏一个缩放系数（内建 Retina 2x + 外接 1080p 1x
+    很常见），而 grabWindow 一次只给一块屏、一个系数，跨屏的矩形在各平台上含义也不一致。
+    逐屏拿到「该屏自己的系数」后，统一按最大的那个系数铺到同一张画布上，最清晰的那块屏
+    就不会被降采样；系数不同的屏在这个环节被重采样，位置仍然准确。
+
+    单屏时等价于原来的「一次抓整块屏」。
+    """
+    shots = []
+    scale = 1.0
+
+    for screen in app.screens():
+        geo = screen.geometry()
+        if geo.width() <= 0 or geo.height() <= 0:
+            continue
+
+        pixmap = screen.grabWindow(0, geo.x(), geo.y(), geo.width(), geo.height())
+        if pixmap.isNull():
+            continue
+
+        # 「物理像素 / 逻辑点」的比例由返回尺寸反推，不读 devicePixelRatio
+        # （并非所有平台/版本都会设这个值）。顺带把返回尺寸不是整数倍的情况挡在外面，
+        # 免得把一块屏的内容错铺到另一块屏上。
+        ratio = pixmap.width() / geo.width()
+        if abs(ratio - round(ratio)) > 0.01 or not 1 <= round(ratio) <= 4:
+            continue
+
+        shots.append((geo, pixmap))
+        scale = max(scale, ratio)
+
+    if not shots:
+        return QPixmap()
+
+    canvas = QPixmap(
+        int(round(virtual_geometry.width() * scale)),
+        int(round(virtual_geometry.height() * scale)),
+    )
+    canvas.fill(Qt.black)
+
+    painter = QPainter(canvas)
+    for geo, pixmap in shots:
+        # 位图自带的比例先抹平：下面一律按「整张像素 → 目标矩形」显式缩放，
+        # 否则位图自己的 devicePixelRatio 会和这里的缩放叠乘
+        pixmap.setDevicePixelRatio(1.0)
+        painter.drawPixmap(
+            QRect(
+                int(round((geo.x() - virtual_geometry.x()) * scale)),
+                int(round((geo.y() - virtual_geometry.y()) * scale)),
+                int(round(geo.width() * scale)),
+                int(round(geo.height() * scale)),
+            ),
+            pixmap,
+        )
+    painter.end()
+
+    return canvas
+
+
 class ScreenshotOverlay(QWidget):
     def __init__(self):
         super().__init__()
@@ -34,13 +94,7 @@ class ScreenshotOverlay(QWidget):
         self.setGeometry(virtual_geometry)
         
         # 截取整个虚拟桌面（所有屏幕）
-        self.screenshot_pixmap = app.primaryScreen().grabWindow(
-            0, 
-            virtual_geometry.x(), 
-            virtual_geometry.y(), 
-            virtual_geometry.width(), 
-            virtual_geometry.height()
-        )
+        self.screenshot_pixmap = capture_desktop(app, virtual_geometry)
         
         # 选区状态
         self.selection_start = None
@@ -54,7 +108,9 @@ class ScreenshotOverlay(QWidget):
         painter = QPainter(self)
         
         # 1. 绘制截图（所有屏幕）
-        painter.drawPixmap(0, 0, self.screenshot_pixmap)
+        #    显式铺满窗口的逻辑矩形：画布是物理像素，按 (0, 0) 原尺寸画会只露出左上角一块。
+        #    铺满之后，to_pixmap_rect 正好是这一步的逆运算 —— 裁出来的就是看到的
+        painter.drawPixmap(self.rect(), self.screenshot_pixmap)
         
         # 2. 绘制半透明遮罩
         painter.setBrush(QColor(0, 0, 0, 80))
@@ -68,7 +124,10 @@ class ScreenshotOverlay(QWidget):
                 x, y, w, h = rect
                 
                 # 重新绘制选区内的截图
-                painter.drawPixmap(x, y, self.screenshot_pixmap, x, y, w, h)
+                # 目标矩形用逻辑坐标，源矩形换算成画布像素，与上面铺满整张图保持一致
+                sx, sy, sw, sh = self.to_pixmap_rect(x, y, w, h)
+                if sw > 0 and sh > 0:
+                    painter.drawPixmap(x, y, w, h, self.screenshot_pixmap, sx, sy, sw, sh)
                 
                 # 选区边框
                 pen = QPen(QColor(0, 122, 255), 2)
@@ -125,6 +184,29 @@ class ScreenshotOverlay(QWidget):
         w = abs(self.selection_end.x() - self.selection_start.x())
         h = abs(self.selection_end.y() - self.selection_start.y())
         return (x, y, w, h)
+
+    def to_pixmap_rect(self, x, y, w, h):
+        """逻辑坐标（窗口 / 鼠标事件）→ 位图像素矩形 (x, y, w, h)。
+
+        分母用窗口的**实际**逻辑尺寸，而不是 __init__ 里 setGeometry 请求的尺寸：系统可能
+        对无边框置顶窗口做约束（macOS 上不让盖住菜单栏就是常见一种），那种情况下二者不等，
+        只有按实际尺寸换算才能保证「裁出来的 = 覆盖层里看到的」。也因此必须用时计算，
+        不能缓存在 __init__ 里 —— show() 之前读到的还没被约束。
+        """
+        scale_x = self.screenshot_pixmap.width() / self.width() if self.width() else 1.0
+        scale_y = self.screenshot_pixmap.height() / self.height() if self.height() else 1.0
+
+        sx = int(round(x * scale_x))
+        sy = int(round(y * scale_y))
+        sw = int(round(w * scale_x))
+        sh = int(round(h * scale_y))
+
+        # 夹回位图范围：换算取整后越界 1px，copy / 取源矩形会带出透明（黑）边
+        sx = max(0, min(sx, self.screenshot_pixmap.width()))
+        sy = max(0, min(sy, self.screenshot_pixmap.height()))
+        sw = max(0, min(sw, self.screenshot_pixmap.width() - sx))
+        sh = max(0, min(sh, self.screenshot_pixmap.height() - sy))
+        return (sx, sy, sw, sh)
     
     def show_toolbar(self, rect):
         x, y, w, h = rect
@@ -168,14 +250,17 @@ class ScreenshotOverlay(QWidget):
         # 如果工具栏超出窗口底部，放到选区上方
         if toolbar_y + 36 > self.height():
             toolbar_y = y - 44
-        self.toolbar.move(toolbar_x, toolbar_y)
+        # 工具栏是独立顶层窗口，move() 用的是屏幕坐标；上面的 x/y 是覆盖层内的局部坐标，
+        # 多显示器下覆盖层原点不一定是 (0, 0)，要加上自身偏移才对得上。
+        self.toolbar.move(self.x() + toolbar_x, self.y() + toolbar_y)
         self.toolbar.show()
     
     def do_ocr(self, rect):
         x, y, w, h = rect
         
-        # 裁剪选区
-        cropped = self.screenshot_pixmap.copy(x, y, w, h)
+        # 裁剪选区：坐标要换算成位图像素，否则截到的是错位且只有一半大小的区域
+        sx, sy, sw, sh = self.to_pixmap_rect(x, y, w, h)
+        cropped = self.screenshot_pixmap.copy(sx, sy, sw, sh)
         
         # 保存裁剪结果
         temp_path = os.path.join(os.environ.get('TEMP', '/tmp'), 'ocr_crop.png')
