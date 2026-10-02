@@ -39,6 +39,9 @@ jobs:
         if: matrix.platform == 'ubuntu-22.04'
         run: |
           sudo apt-get update
+          # 自带覆盖层里的 PyQt5 需要这些运行时库：PyInstaller 分析要 libGL 系列，
+          # linuxdeploy 打 AppImage 时还要能解析 Qt 的 xcb 依赖，
+          # 否则报 "Could not find dependency: libxcb-icccm.so.4" 直接失败
           sudo apt-get install -y \
             libwebkit2gtk-4.1-dev \
             libappindicator3-dev \
@@ -54,7 +57,19 @@ jobs:
             libxkbcommon-dev \
             libxdo-dev \
             libssl-dev \
-            rpm
+            rpm \
+            libgl1 \
+            libegl1 \
+            libxkbcommon-x11-0 \
+            libxcb-icccm4 \
+            libxcb-image0 \
+            libxcb-keysyms1 \
+            libxcb-render-util0 \
+            libxcb-xinerama0 \
+            libxcb-xkb1 \
+            libxcb-shape0 \
+            libxcb-util1 \
+            libxcb-cursor0
 
       - name: Setup Node
         uses: actions/setup-node@v4
