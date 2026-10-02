@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { DEFAULT_SHORTCUTS } from '../utils/shortcut';
 
 export type Theme = 'light' | 'dark';
 
@@ -120,7 +121,7 @@ interface SettingsState {
 export const useSettingsStore = create<SettingsState>()(
   persist(
     (set) => ({
-      activeOcrPlugin: 'paddle-ocr',
+      activeOcrPlugin: 'rapid-ocr',
       activeTranslationPlugin: 'google-translate',
       pluginSettings: {},
       theme: 'light',
@@ -175,11 +176,7 @@ export const useSettingsStore = create<SettingsState>()(
         trayClick: '显示窗口',
       },
 
-      shortcuts: {
-        screenshot: 'CmdOrCtrl+Shift+S',
-        copy: 'CmdOrCtrl+Shift+C',
-        translate: 'CmdOrCtrl+Shift+T',
-      },
+      shortcuts: { ...DEFAULT_SHORTCUTS },
 
       proxy: {
         type: 'none',

@@ -73,6 +73,24 @@ jobs:
           workspaces: src-tauri -> target
           key: ${{ matrix.label }}
 
+      # 每个平台各打一份自带运行时的截图覆盖层（PyInstaller 不能交叉编译）
+      - name: Setup Python
+        if: matrix.target != 'x86_64-apple-darwin'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # Intel mac 目标跑在 arm64 runner 上，覆盖层也必须编成 x86_64，否则在 Intel 机上跑不了
+      - name: Setup Python (x64 for Intel mac)
+        if: matrix.target == 'x86_64-apple-darwin'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: x64
+
+      - name: Install overlay packaging tools
+        run: python -m pip install --upgrade pip pyinstaller PyQt5
+
       - name: Install frontend dependencies
         run: npm ci
 

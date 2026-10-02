@@ -1,10 +1,39 @@
 import { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { useSettingsStore } from '../stores/settingsStore';
 import { useOcrStore } from '../stores/ocrStore';
 import { builtinPlugins } from '../plugins';
 import { Logo } from './Logo';
+import { DEFAULT_SHORTCUTS, formatShortcut, isModifierKeyEvent, shortcutFromKeyboardEvent, validateShortcut } from '../utils/shortcut';
 type SettingsTab = 'general' | 'config' | 'screenshot' | 'api' | 'shortcuts' | 'update' | 'about';
+
+/** 一个可独立安装的本地组件的状态 */
+interface ComponentStatus {
+  installed: boolean;
+  version: string;
+  disk_bytes: number;
+  download_mb: number;
+  disk_mb: number;
+}
+
+/** 本地组件总览：两个组件共用同一个隔离运行时 */
+interface ComponentsStatus {
+  runtime_installed: boolean;
+  runtime_download_mb: number;
+  ocr: ComponentStatus;
+  /** Windows 安装包自带覆盖层，截图组件就不必再下载 */
+  screenshot_bundled: boolean;
+  screenshot: ComponentStatus;
+  runtime_bytes: number;
+}
+
+/** 安装进度事件（Rust 端 local-engine-progress） */
+interface LocalEngineProgress {
+  stage: string;
+  percent: number;
+  detail: string;
+}
 
 const SETTINGS_TABS: { key: SettingsTab; label: string }[] = [
   { key: 'general', label: '常规' },
@@ -16,15 +45,21 @@ const SETTINGS_TABS: { key: SettingsTab; label: string }[] = [
   { key: 'about', label: '关于' },
 ];
 
-function Settings() {
+function Settings({ shortcutIssues = {}, autostartIssue = null }: {
+  shortcutIssues?: Record<string, string>;
+  autostartIssue?: string | null;
+}) {
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
-  const [localOcrStatus, setLocalOcrStatus] = useState<Record<string, boolean | null>>({ 'paddle-ocr': null, 'rapid-ocr': null });
-  const [installing, setInstalling] = useState<string | null>(null);
-  const [installMsg, setInstallMsg] = useState<Record<string, string | null>>({});
+  // 本地组件都是按需下载的：装进应用自己的目录，不碰系统环境
+  const [components, setComponents] = useState<ComponentsStatus | null>(null);
+  const [engineProgress, setEngineProgress] = useState<LocalEngineProgress | null>(null);
+  const [engineBusy, setEngineBusy] = useState<string | null>(null);
+  const [engineMsg, setEngineMsg] = useState<Record<string, string | null>>({});
   const [clearCacheMsg, setClearCacheMsg] = useState<string | null>(null);
   const [clearCacheOk, setClearCacheOk] = useState(false);
   const [updateChecking, setUpdateChecking] = useState(false);
   const [updateChecked, setUpdateChecked] = useState(false);
+  const [autoStartError, setAutoStartError] = useState<string | null>(null);
   const store = useSettingsStore();
   const { clearHistory } = useOcrStore();
   const {
@@ -57,27 +92,51 @@ function Settings() {
   const ocrPlugins = builtinPlugins.filter((p) => p.metadata.type === 'ocr');
   const translationPlugins = builtinPlugins.filter((p) => p.metadata.type === 'translation');
 
-  const checkLocalOcr = async (engineId: string) => {
+  // 本地组件：挂载时查一次状态，安装过程靠事件推进度
+  const refreshComponents = async () => {
     try {
-      const installed = await invoke<boolean>(engineId === 'rapid-ocr' ? 'check_rapidocr' : 'check_paddleocr');
-      setLocalOcrStatus((s) => ({ ...s, [engineId]: installed }));
-    } catch {
-      setLocalOcrStatus((s) => ({ ...s, [engineId]: false }));
+      setComponents(await invoke<ComponentsStatus>('get_local_components_status'));
+    } catch (err) {
+      setEngineMsg((m) => ({ ...m, status: `读取组件状态失败：${err}` }));
     }
   };
 
-  const handleInstallLocalOcr = async (engineId: string) => {
-    setInstalling(engineId);
-    setInstallMsg((m) => ({ ...m, [engineId]: null }));
+  useEffect(() => {
+    refreshComponents();
+    const unlisten = listen<LocalEngineProgress>('local-engine-progress', (event) => {
+      setEngineProgress(event.payload);
+    });
+    return () => { unlisten.then((fn) => fn()); };
+  }, []);
+
+  const installComponent = async (id: 'ocr' | 'screenshot') => {
+    setEngineBusy(id);
+    setEngineMsg((m) => ({ ...m, [id]: null }));
+    setEngineProgress({ stage: 'python', percent: 0, detail: '正在准备下载…' });
     try {
-      const msg = await invoke<string>(engineId === 'rapid-ocr' ? 'install_rapidocr' : 'install_paddleocr');
-      setInstallMsg((m) => ({ ...m, [engineId]: msg }));
-      setLocalOcrStatus((s) => ({ ...s, [engineId]: true }));
+      const message = await invoke<string>('install_local_component', { component: id });
+      setEngineMsg((m) => ({ ...m, [id]: message }));
     } catch (err) {
-      setInstallMsg((m) => ({ ...m, [engineId]: `安装失败: ${err}` }));
-      setLocalOcrStatus((s) => ({ ...s, [engineId]: false }));
+      setEngineMsg((m) => ({ ...m, [id]: `安装失败：${err}` }));
     } finally {
-      setInstalling(null);
+      setEngineBusy(null);
+      setEngineProgress(null);
+      await refreshComponents();
+    }
+  };
+
+  const removeComponent = async (id: 'ocr' | 'screenshot', label: string) => {
+    if (!window.confirm(`移除${label}？需要时再重新下载。`)) return;
+    setEngineBusy(id);
+    setEngineMsg((m) => ({ ...m, [id]: null }));
+    try {
+      const message = await invoke<string>('remove_local_component', { component: id });
+      setEngineMsg((m) => ({ ...m, [id]: message }));
+    } catch (err) {
+      setEngineMsg((m) => ({ ...m, [id]: `移除失败：${err}` }));
+    } finally {
+      setEngineBusy(null);
+      await refreshComponents();
     }
   };
 
@@ -87,10 +146,13 @@ function Settings() {
 
   const handleAutoStartChange = async (v: boolean) => {
     setStartup({ autoStart: v });
+    setAutoStartError(null);
     try {
       await invoke('set_autostart', { enable: v });
     } catch (err) {
-      console.error('set_autostart failed:', err);
+      // 没写进系统就别让勾留着，否则用户会以为已经设好了
+      setStartup({ autoStart: !v });
+      setAutoStartError(v ? `开启失败：${err}` : `关闭失败：${err}`);
     }
   };
 
@@ -144,6 +206,9 @@ function Settings() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
             <SettingsCard title="启动时">
               <CheckboxItem label="开机时自动启动" checked={startup.autoStart} onChange={handleAutoStartChange} />
+              {(autoStartError || autostartIssue) && (
+                <p style={{ fontSize: 11, color: '#FF3B30', margin: '4px 0 0' }}>{autoStartError || autostartIssue}</p>
+              )}
               <CheckboxItem label="以管理员身份运行" checked={startup.runAsAdmin} onChange={(v) => setStartup({ runAsAdmin: v })} />
               <CheckboxItem label="启动时显示窗口" checked={startup.showWindow} onChange={(v) => setStartup({ showWindow: v })} />
               <CheckboxItem label="启动时显示工具栏" checked={startup.showToolbar} onChange={(v) => setStartup({ showToolbar: v })} />
@@ -223,6 +288,23 @@ function Settings() {
         {/* ===== 截图 ===== */}
         {activeTab === 'screenshot' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <SettingsCard title="截图组件">
+              <LocalComponentPanel
+                id="screenshot"
+                title="截图覆盖层"
+                description="抓屏与选区用的全屏覆盖窗口（PyQt5）。Windows 安装包已随包自带，其他平台按需下载到应用自己的目录。"
+                status={components?.screenshot ?? null}
+                bundled={components?.screenshot_bundled ?? false}
+                runtimeInstalled={components?.runtime_installed ?? false}
+                runtimeDownloadMb={components?.runtime_download_mb ?? 12}
+                busy={engineBusy === 'screenshot'}
+                progress={engineBusy === 'screenshot' ? engineProgress : null}
+                msg={engineMsg.screenshot ?? null}
+                onInstall={() => installComponent('screenshot')}
+                onRemove={() => removeComponent('screenshot', '截图组件')}
+                onRefresh={refreshComponents}
+              />
+            </SettingsCard>
             <SettingsCard title="截图按钮">
               <CheckboxItem label="是否显示截图右侧识别框" checked={screenshot.showRightPanel} onChange={(v) => setScreenshot({ showRightPanel: v })} />
               <p style={{ fontSize: 11, color: '#AEAEB2', marginTop: 4 }}>蓝色为截图时显示该按钮</p>
@@ -269,15 +351,26 @@ function Settings() {
                 {ocrPlugins.find((p) => p.metadata.id === activeOcrPlugin)?.metadata.description}
               </p>
               {(activeOcrPlugin === 'paddle-ocr' || activeOcrPlugin === 'rapid-ocr') && (
-                <LocalOcrPanel
-                  engineId={activeOcrPlugin}
-                  engineName={activeOcrPlugin === 'rapid-ocr' ? 'RapidOCR' : 'PaddleOCR'}
-                  status={localOcrStatus[activeOcrPlugin] ?? null}
-                  msg={installMsg[activeOcrPlugin] ?? null}
-                  installing={installing === activeOcrPlugin}
-                  onCheck={() => checkLocalOcr(activeOcrPlugin)}
-                  onInstall={() => handleInstallLocalOcr(activeOcrPlugin)}
+                <LocalComponentPanel
+                  id="ocr"
+                  title="本地识别引擎"
+                  description="RapidOCR（PP-OCRv6）：本地识别、离线可用、不上传图片。装进应用自己的目录，不需要系统里预先装 Python。"
+                  status={components?.ocr ?? null}
+                  bundled={false}
+                  runtimeInstalled={components?.runtime_installed ?? false}
+                  runtimeDownloadMb={components?.runtime_download_mb ?? 12}
+                  busy={engineBusy === 'ocr'}
+                  progress={engineBusy === 'ocr' ? engineProgress : null}
+                  msg={engineMsg.ocr ?? null}
+                  onInstall={() => installComponent('ocr')}
+                  onRemove={() => removeComponent('ocr', '本地识别引擎')}
+                  onRefresh={refreshComponents}
                 />
+              )}
+              {activeOcrPlugin === 'paddle-ocr' && (
+                <p style={{ fontSize: 11, color: '#FF9500', marginTop: 8, lineHeight: 1.6 }}>
+                  ⚠ PaddleOCR 不随应用下载（paddlepaddle 就要 290 MB 以上），本地识别请用 RapidOCR
+                </p>
               )}
               {activeOcrPlugin === 'openai-vision' && (
                 <PluginApiKeyConfig pluginId="openai-vision" listProvider="openai" defaultBaseUrl="https://api.openai.com/v1" fields={[
@@ -421,12 +514,33 @@ function Settings() {
         {activeTab === 'shortcuts' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
             <SettingsCard title="全局快捷键">
-              <p style={{ fontSize: 12, color: '#8E8E93', marginBottom: 12 }}>
-                快捷键在应用后台也能生效。点击右侧按钮后按下新的快捷键组合。
+              <p style={{ fontSize: 12, color: '#8E8E93', marginBottom: 8 }}>
+                快捷键在应用后台也能生效。点右侧按钮后按下新的组合，按 Esc 取消录制。
               </p>
-              <ShortcutEditor label="截图识别" value={shortcuts.screenshot} onChange={(v) => setShortcuts({ screenshot: v })} />
-              <ShortcutEditor label="复制文本" value={shortcuts.copy} onChange={(v) => setShortcuts({ copy: v })} />
-              <ShortcutEditor label="翻译" value={shortcuts.translate} onChange={(v) => setShortcuts({ translate: v })} />
+              <p style={{ fontSize: 12, color: '#C77700', background: 'rgba(255,149,0,0.08)', borderRadius: 8, padding: '8px 10px', lineHeight: 1.6, marginBottom: 4 }}>
+                这些是系统级快捷键：注册之后，其他软件里同一个组合会被本应用接管。如果和常用软件冲突（尤其是 Alt+F4、Ctrl+Q、Ctrl+W 这类退出/关闭键），点「禁用」把按键交还回去。
+              </p>
+              <ShortcutEditor
+                label="截图识别"
+                value={shortcuts.screenshot}
+                defaultValue={DEFAULT_SHORTCUTS.screenshot}
+                issue={shortcutIssues.screenshot}
+                onChange={(v) => setShortcuts({ screenshot: v })}
+              />
+              <ShortcutEditor
+                label="复制文本"
+                value={shortcuts.copy}
+                defaultValue={DEFAULT_SHORTCUTS.copy}
+                issue={shortcutIssues.copy}
+                onChange={(v) => setShortcuts({ copy: v })}
+              />
+              <ShortcutEditor
+                label="翻译"
+                value={shortcuts.translate}
+                defaultValue={DEFAULT_SHORTCUTS.translate}
+                issue={shortcutIssues.translate}
+                onChange={(v) => setShortcuts({ translate: v })}
+              />
             </SettingsCard>
           </div>
         )}
@@ -535,54 +649,80 @@ function RadioItem({ label, checked, onChange }: { label: string; checked: boole
   );
 }
 
-function ShortcutEditor({ label, value, onChange }: {
-  label: string; value: string; onChange: (v: string) => void;
+function ShortcutEditor({ label, value, defaultValue, issue, onChange }: {
+  label: string; value: string; defaultValue: string; issue?: string; onChange: (v: string) => void;
 }) {
   const [editing, setEditing] = useState(false);
+  const [captureError, setCaptureError] = useState<string | null>(null);
+  // 已经存下来的组合也可能是坏的（旧版本录进来的无修饰键组合），同样要拦住不让它去抢按键
+  const warning = editing ? captureError : (captureError || issue || validateShortcut(value));
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    const parts: string[] = [];
-    if (e.ctrlKey || e.metaKey) parts.push('CmdOrCtrl');
-    if (e.shiftKey) parts.push('Shift');
-    if (e.altKey) parts.push('Alt');
-    const key = e.key;
-    if (!['Control', 'Shift', 'Alt', 'Meta'].includes(key)) {
-      parts.push(key.toUpperCase());
-      onChange(parts.join('+'));
+    if (e.key === 'Escape') {   // Esc 只用来取消录制，绝不录成快捷键
       setEditing(false);
+      setCaptureError(null);
+      return;
     }
+    if (isModifierKeyEvent(e.nativeEvent)) return;   // 还在按修饰键，继续等主键
+
+    const captured = shortcutFromKeyboardEvent(e.nativeEvent);
+    if ('error' in captured) {
+      setCaptureError(captured.error);
+      return;
+    }
+    setCaptureError(null);
+    setEditing(false);
+    onChange(captured.combo);
   };
 
-  const formatShortcut = (s: string) => {
-    return s.replace('CmdOrCtrl', navigator.platform.includes('Mac') ? '⌘' : 'Ctrl')
-             .replace('Shift', '⇧')
-             .replace('Alt', navigator.platform.includes('Mac') ? '⌥' : 'Alt')
-             .replace(/\+/g, ' ');
+  const linkStyle: React.CSSProperties = {
+    fontSize: 11, color: '#007AFF', background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px', whiteSpace: 'nowrap',
   };
 
   return (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 0' }}>
-      <span style={{ fontSize: 13, color: '#1c1c1e' }}>{label}</span>
-      <button
-        onClick={() => setEditing(true)}
-        onBlur={() => setEditing(false)}
-        onKeyDown={editing ? handleKeyDown : undefined}
-        style={{
-          padding: '6px 12px',
-          fontSize: 12,
-          border: `1px solid ${editing ? '#007AFF' : '#D1D1D6'}`,
-          borderRadius: 8,
-          background: editing ? '#F0F8FF' : '#FFFFFF',
-          cursor: 'pointer',
-          minWidth: 120,
-          textAlign: 'center',
-          outline: editing ? '2px solid rgba(0,122,255,0.3)' : 'none',
-        }}
-      >
-        {editing ? '请按下快捷键...' : formatShortcut(value)}
-      </button>
+    <div style={{ padding: '8px 0' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+        <span style={{ fontSize: 13, color: '#1c1c1e' }}>{label}</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+          <button
+            onClick={() => { setCaptureError(null); setEditing(true); }}
+            onBlur={() => { setEditing(false); setCaptureError(null); }}
+            onKeyDown={editing ? handleKeyDown : undefined}
+            style={{
+              padding: '6px 12px',
+              fontSize: 12,
+              border: `1px solid ${editing ? '#007AFF' : '#D1D1D6'}`,
+              borderRadius: 8,
+              background: editing ? '#F0F8FF' : '#FFFFFF',
+              color: value ? '#1c1c1e' : '#8E8E93',
+              cursor: 'pointer',
+              minWidth: 120,
+              textAlign: 'center',
+              outline: editing ? '2px solid rgba(0,122,255,0.3)' : 'none',
+            }}
+          >
+            {editing ? '请按下快捷键…' : formatShortcut(value)}
+          </button>
+          {value !== defaultValue && (
+            <button onClick={() => { setCaptureError(null); onChange(defaultValue); }} style={linkStyle}>恢复默认</button>
+          )}
+          {value ? (
+            <button onClick={() => { setCaptureError(null); onChange(''); }} style={linkStyle}>禁用</button>
+          ) : null}
+        </div>
+      </div>
+      {editing && (
+        <div style={{ fontSize: 11, color: '#8E8E93', textAlign: 'right', marginTop: 4 }}>
+          需要配合 Ctrl / Alt / Shift 一起按；单独一个按键会独占整个系统的这个键
+        </div>
+      )}
+      {warning && (
+        <div style={{ fontSize: 11, color: '#FF9500', textAlign: 'right', marginTop: 4, lineHeight: 1.5 }}>
+          ⚠ {warning}
+        </div>
+      )}
     </div>
   );
 }
@@ -716,42 +856,84 @@ function PluginApiKeyConfig({ pluginId, fields, listProvider, defaultBaseUrl, en
   );
 }
 
-function LocalOcrPanel({ engineId, engineName, status, msg, installing, onCheck, onInstall }: {
-  engineId: string;
-  engineName: string;
-  status: boolean | null;
+function LocalComponentPanel({ id, title, description, status, bundled, runtimeInstalled, runtimeDownloadMb, busy, progress, msg, onInstall, onRemove, onRefresh }: {
+  id: 'ocr' | 'screenshot';
+  title: string;
+  description: string;
+  status: ComponentStatus | null;
+  /** 安装包里是否已经带了这个组件（Windows 的截图覆盖层） */
+  bundled: boolean;
+  runtimeInstalled: boolean;
+  runtimeDownloadMb: number;
+  busy: boolean;
+  progress: LocalEngineProgress | null;
   msg: string | null;
-  installing: boolean;
-  onCheck: () => void;
   onInstall: () => void;
+  onRemove: () => void;
+  onRefresh: () => void;
 }) {
+  const installed = !!status?.installed;
+  const failed = !!msg && (msg.startsWith('安装失败') || msg.startsWith('移除失败'));
+  const toMb = (bytes: number) => Math.round(bytes / 1048576);
+  // 第一次装组件时还要把共享的运行时一起下下来
+  const downloadHint = (status?.download_mb ?? 0) + (runtimeInstalled ? 0 : runtimeDownloadMb);
+  const buttonStyle: React.CSSProperties = {
+    padding: '6px 12px', border: 'none', borderRadius: 12, fontSize: 12, fontWeight: 600,
+  };
+
   return (
-    <div style={{ marginTop: 12, padding: 12, background: '#F2F2F7', borderRadius: 12 }}>
+    <div data-component={id} style={{ marginTop: 12, padding: 12, background: '#F2F2F7', borderRadius: 12 }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <span style={{ fontSize: 13, color: '#1c1c1e' }}>
-          {engineName}: {status === null ? '未检测' : status ? '已安装' : '未安装'}
+          {title}：
+          {bundled ? '已随安装包提供' : status === null ? '读取中…' : installed ? `已安装 ${status.version || '已就绪'}` : '未安装'}
         </span>
         <div style={{ display: 'flex', gap: 8 }}>
-          <button onClick={onCheck}
-            style={{ padding: '6px 12px', background: '#E5E5EA', color: '#1c1c1e', border: 'none', borderRadius: 12, fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+          <button onClick={onRefresh} disabled={busy}
+            style={{ ...buttonStyle, background: '#E5E5EA', color: '#1c1c1e', cursor: busy ? 'default' : 'pointer' }}>
             检测
           </button>
-          {!status && (
-            <button onClick={onInstall} disabled={installing}
-              style={{ padding: '6px 12px', background: '#007AFF', color: 'white', border: 'none', borderRadius: 12, fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
-              {installing ? '安装中...' : '安装'}
+          {!bundled && (installed ? (
+            <button onClick={onRemove} disabled={busy}
+              style={{ ...buttonStyle, background: '#E5E5EA', color: '#FF3B30', cursor: busy ? 'default' : 'pointer' }}>
+              移除
             </button>
-          )}
+          ) : (
+            <button onClick={onInstall} disabled={busy}
+              style={{ ...buttonStyle, background: busy ? '#AEAEB2' : '#007AFF', color: 'white', cursor: busy ? 'default' : 'pointer' }}>
+              {busy ? '下载中…' : `下载并安装（约 ${downloadHint} MB）`}
+            </button>
+          ))}
         </div>
       </div>
-      {msg && <p style={{ fontSize: 12, color: '#8E8E93', marginTop: 8 }}>{msg}</p>}
-      {!msg && (
-        <p style={{ fontSize: 11, color: '#AEAEB2', marginTop: 8 }}>
-          {engineId === 'rapid-ocr'
-            ? '首次识别会自动下载 ONNX 模型文件'
-            : '首次识别会自动下载 PaddleOCR 模型文件'}
-        </p>
+
+      {progress && (
+        <div style={{ marginTop: 10 }}>
+          <div style={{ height: 6, borderRadius: 3, background: '#E5E5EA', overflow: 'hidden' }}>
+            <div style={{ width: `${progress.percent}%`, height: '100%', background: '#007AFF', transition: 'width 200ms ease-out' }} />
+          </div>
+          <p style={{ fontSize: 11, color: '#636366', marginTop: 6 }}>{progress.detail}</p>
+        </div>
       )}
+
+      {msg && <p style={{ fontSize: 12, color: failed ? '#FF3B30' : '#34C759', marginTop: 8 }}>{msg}</p>}
+
+      {!progress && (bundled ? (
+        <p style={{ fontSize: 11, color: '#8E8E93', marginTop: 8, lineHeight: 1.6 }}>
+          {description} 安装包已自带，无需下载，也不需要系统里预先装 Python。
+        </p>
+      ) : installed ? (
+        <p style={{ fontSize: 11, color: '#AEAEB2', marginTop: 8, lineHeight: 1.6 }}>
+          占用磁盘约 {toMb(status?.disk_bytes ?? 0)} MB，装在应用自己的目录里，不动系统环境；
+          移除时只删这个组件的文件（两个组件都移除后运行时一起清掉）。
+        </p>
+      ) : (
+        <p style={{ fontSize: 11, color: '#8E8E93', marginTop: 8, lineHeight: 1.6 }}>
+          {description} 按需下载：约 {status?.download_mb ?? 0} MB
+          {runtimeInstalled ? '' : `，首次还需下载共享运行时约 ${runtimeDownloadMb} MB`}
+          ，磁盘约 {status?.disk_mb ?? 0} MB，不改动也不需要系统里预先装 Python。
+        </p>
+      ))}
     </div>
   );
 }

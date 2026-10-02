@@ -1,8 +1,10 @@
 mod api;
+mod local_engine;
 mod screenshot;
 mod overlay;
 mod paddleocr;
 mod rapidocr;
+mod recognizer;
 
 use screenshot::ScreenshotManager;
 use overlay::{OverlayManager, OverlayResult};
@@ -16,7 +18,7 @@ use std::collections::HashMap;
 async fn start_screenshot_overlay(app: tauri::AppHandle) -> Result<String, String> {
     let app_handle = app.clone();
     tauri::async_runtime::spawn(async move {
-        let manager = OverlayManager::new();
+        let manager = OverlayManager::new(&app_handle);
         let result = tokio::task::spawn_blocking(move || manager.start_overlay()).await;
         match result {
             Ok(Ok(OverlayResult::Ocr { path })) => { let _ = app_handle.emit("screenshot-cropped", path); }
@@ -72,28 +74,56 @@ fn save_temp_files(file_names: Vec<String>, file_data: Vec<Vec<u8>>) -> Result<V
 }
 
 #[tauri::command]
-async fn ocr_paddleocr(image_path: String) -> Result<String, String> {
-    let r = tokio::task::spawn_blocking(move || paddleocr::recognize(&image_path)).await;
+async fn ocr_paddleocr(app: tauri::AppHandle, image_path: String) -> Result<String, String> {
+    let r = tokio::task::spawn_blocking(move || paddleocr::recognize(&app, &image_path)).await;
     match r { Ok(Ok(t)) => Ok(t), Ok(Err(e)) => Err(e.to_string()), Err(e) => Err(e.to_string()) }
 }
+
+/// 本地组件的状态：各自的版本、占用，以及截图组件是否可以省掉（Windows 随包自带）
 #[tauri::command]
-fn check_paddleocr() -> bool { paddleocr::check_installed() }
-#[tauri::command]
-async fn install_paddleocr() -> Result<String, String> {
-    let r = tokio::task::spawn_blocking(|| paddleocr::install()).await;
-    match r { Ok(Ok(m)) => Ok(m), Ok(Err(e)) => Err(e.to_string()), Err(e) => Err(e.to_string()) }
+fn get_local_components_status(app: tauri::AppHandle) -> local_engine::Status {
+    local_engine::status(&app)
 }
+
 #[tauri::command]
-async fn ocr_rapidocr(image_path: String) -> Result<String, String> {
-    let r = tokio::task::spawn_blocking(move || rapidocr::recognize(&image_path)).await;
+async fn install_local_component(app: tauri::AppHandle, component: String) -> Result<String, String> {
+    let component = local_engine::Component::parse(&component).map_err(|e| e.to_string())?;
+    let scripts_dir = overlay::scripts_dir().ok_or("找不到随应用分发的脚本")?;
+    local_engine::install(&app, component, &scripts_dir)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn remove_local_component(app: tauri::AppHandle, component: String) -> Result<String, String> {
+    let component = local_engine::Component::parse(&component).map_err(|e| e.to_string())?;
+    let (freed, runtime_removed) =
+        local_engine::remove_component(&app, component).map_err(|e| e.to_string())?;
+    Ok(if runtime_removed {
+        format!(
+            "已移除{}，并清理了不再需要的运行时，共释放 {:.0} MB",
+            component.label(),
+            freed as f64 / 1_048_576.0
+        )
+    } else {
+        format!(
+            "已移除{}，释放 {:.0} MB",
+            component.label(),
+            freed as f64 / 1_048_576.0
+        )
+    })
+}
+
+#[tauri::command]
+fn remove_local_runtime(app: tauri::AppHandle) -> Result<String, String> {
+    let freed = local_engine::remove(&app).map_err(|e| e.to_string())?;
+    Ok(format!("已移除本地运行时，释放 {:.0} MB", freed as f64 / 1_048_576.0))
+}
+
+#[tauri::command]
+async fn ocr_rapidocr(app: tauri::AppHandle, image_path: String) -> Result<String, String> {
+    let r = tokio::task::spawn_blocking(move || rapidocr::recognize(&app, &image_path)).await;
     match r { Ok(Ok(t)) => Ok(t), Ok(Err(e)) => Err(e.to_string()), Err(e) => Err(e.to_string()) }
-}
-#[tauri::command]
-fn check_rapidocr() -> bool { rapidocr::check_installed() }
-#[tauri::command]
-async fn install_rapidocr() -> Result<String, String> {
-    let r = tokio::task::spawn_blocking(|| rapidocr::install()).await;
-    match r { Ok(Ok(m)) => Ok(m), Ok(Err(e)) => Err(e.to_string()), Err(e) => Err(e.to_string()) }
 }
 #[tauri::command]
 async fn ocr_openai(api_key: String, image_path: String, model: String, max_tokens: u32) -> Result<String, String> {
@@ -134,40 +164,69 @@ async fn translate_custom(base_url: String, api_key: String, model: String, text
 #[tauri::command]
 fn set_autostart(app: tauri::AppHandle, enable: bool) -> Result<(), String> {
     let am = app.autolaunch();
-    if enable { am.enable().map_err(|e| e.to_string()) } else { am.disable().map_err(|e| e.to_string()) }
+    if !enable {
+        return am.disable().map_err(|e| e.to_string());
+    }
+
+    am.enable().map_err(|e| e.to_string())?;
+    // 回读确认：写注册表可能被安全软件拦下，静默失败会让用户以为设好了
+    if !am.is_enabled().unwrap_or(false) {
+        return Err("开机自启没有写入系统，可能被杀毒软件拦截，请检查启动项".to_string());
+    }
+    Ok(())
 }
 #[tauri::command]
 fn get_autostart(app: tauri::AppHandle) -> bool { app.autolaunch().is_enabled().unwrap_or(false) }
+
+/// 单条快捷键的注册结果。前端据此告诉用户「这个组合已经被其他软件占了」，
+/// 而不是悄无声息地什么都没发生。
+#[derive(serde::Serialize)]
+struct ShortcutRegistration {
+    action: String,
+    ok: bool,
+    error: Option<String>,
+}
+
 #[tauri::command]
-fn register_shortcuts(app: tauri::AppHandle, shortcuts: HashMap<String, String>) -> Result<(), String> {
+fn register_shortcuts(app: tauri::AppHandle, shortcuts: HashMap<String, String>) -> Vec<ShortcutRegistration> {
     let app_handle = app.clone();
-    app.global_shortcut().unregister_all().map_err(|e| e.to_string())?;
+    let _ = app_handle.global_shortcut().unregister_all();
 
-    // Parse all shortcuts first — if any is invalid, fail without registering anything
-    let parsed: Vec<(String, Shortcut)> = shortcuts.iter().map(|(action, shortcut_str)| {
-        let shortcut: Shortcut = shortcut_str.parse().map_err(|e| {
-            format!("Invalid shortcut '{}' for action '{}': {}", shortcut_str, action, e)
-        })?;
-        Ok((action.clone(), shortcut))
-    }).collect::<Result<Vec<_>, String>>()?;
+    // 空串 = 用户禁用了这条快捷键，不注册，把按键交还给其他软件
+    let mut entries: Vec<(String, String)> = shortcuts
+        .into_iter()
+        .filter(|(_, combo)| !combo.trim().is_empty())
+        .collect();
+    entries.sort();
 
-    // Register all, rollback on failure
-    for (action, shortcut) in &parsed {
-        let action_owned = action.clone();
-        let handle = app_handle.clone();
-        let action_for_err = action_owned.clone();
-        app.global_shortcut().on_shortcut(shortcut.clone(), move |_app, _shortcut, event| {
-            if event.state == ShortcutState::Pressed {
-                let _ = handle.emit("global-shortcut-triggered", serde_json::json!({ "action": action_owned }));
+    entries
+        .into_iter()
+        .map(|(action, combo)| match combo.parse::<Shortcut>() {
+            Ok(shortcut) => {
+                let action_owned = action.clone();
+                let handle = app_handle.clone();
+                let registered = app_handle.global_shortcut().on_shortcut(shortcut, move |_app, _shortcut, event| {
+                    if event.state == ShortcutState::Pressed {
+                        let _ = handle.emit("global-shortcut-triggered", serde_json::json!({ "action": action_owned }));
+                    }
+                });
+                match registered {
+                    Ok(()) => ShortcutRegistration { action, ok: true, error: None },
+                    // 逐条注册：某一条被别的软件占用时，其余快捷键照常生效
+                    Err(e) => ShortcutRegistration {
+                        action,
+                        ok: false,
+                        error: Some(format!("已被其他软件占用，请换一个组合（{}）", e)),
+                    },
+                }
             }
-        }).map_err(|e| {
-            // Rollback: unregister everything
-            let _ = app_handle.global_shortcut().unregister_all();
-            format!("Failed to register shortcut for '{}': {}", action_for_err, e)
-        })?;
-    }
-
-    Ok(())
+            Err(e) => ShortcutRegistration {
+                action,
+                ok: false,
+                error: Some(format!("组合无法解析：{}", e)),
+            },
+        })
+        .collect()
 }
 
 #[tauri::command]
@@ -193,8 +252,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             start_screenshot_overlay, get_screenshot_base64, copy_image_to_clipboard,
             save_screenshot_dialog, select_image_files, save_temp_files,
-            ocr_paddleocr, check_paddleocr, install_paddleocr,
-            ocr_rapidocr, check_rapidocr, install_rapidocr,
+            ocr_paddleocr, ocr_rapidocr, get_local_components_status, install_local_component, remove_local_component,
+            remove_local_runtime,
             ocr_openai, ocr_ollama, translate_google, translate_custom, translate_claude,
             ocr_custom_vision, ocr_claude, list_models, set_autostart, get_autostart, clear_temp_cache,
             register_shortcuts, unregister_all_shortcuts

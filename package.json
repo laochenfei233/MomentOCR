@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "overlay": "node scripts/prepare-overlay.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",

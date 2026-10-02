@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!--
+    须臾OCR 应用图标（矢量源文件）——所有 PNG / ICO / ICNS 都由它生成：
+        node scripts/build-icons.mjs
+
+    设计要点：
+    · 表盘：浅色圆角底板 + 细边框，白色标题栏和深色任务栏上都有轮廓
+    · 弧线：从 12 点顺时针 240° 的渐变弧，缺口留在左上，取「须臾一瞬」之意
+    · 指针：粗笔画 + 高对比墨色；只有 32px 以上才画，小尺寸糊成一团反而脏
+    改这里以后请重跑构建脚本，不要直接改导出的 PNG。
+  -->
+  <defs>
+    <linearGradient id="plate" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#EDF0F7"/>
+    </linearGradient>
+    <linearGradient id="arc" x1="0.62" y1="0.04" x2="0.12" y2="0.96">
+      <stop offset="0" stop-color="#5856D6"/>
+      <stop offset="0.42" stop-color="#007AFF"/>
+      <stop offset="1" stop-color="#34C759"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="16" y="16" width="480" height="480" rx="106" fill="url(#plate)" stroke="#D7DBE4" stroke-width="3"/>
+
+  <!-- 240° 渐变弧：起点在 12 点，顺时针到左下 -->
+  <path d="M256 104 A152 152 0 1 1 124.4 332" fill="none"
+        stroke="url(#arc)" stroke-width="48" stroke-linecap="round"/>
+
+  <!-- hands:start 小尺寸渲染时整段移除 -->
+  <path d="M256 256 L256 176" fill="none" stroke="#1C1C1E" stroke-width="28" stroke-linecap="round"/>
+  <path d="M256 256 L320 200" fill="none" stroke="#007AFF" stroke-width="24" stroke-linecap="round"/>
+  <!-- hands:end -->
+
+  <!-- 圆心：小尺寸去掉指针后由构建脚本放大到 r=30 顶住画面 -->
+  <circle cx="256" cy="256" r="24" fill="#007AFF"/>
+</svg>

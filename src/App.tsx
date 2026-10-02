@@ -8,6 +8,7 @@ import { listen } from '@tauri-apps/api/event';
 import { useOcrStore } from './stores/ocrStore';
 import { useSettingsStore } from './stores/settingsStore';
 import { builtinPlugins } from './plugins';
+import { validateShortcut, type ShortcutRegistration } from './utils/shortcut';
 
 type Tab = 'screenshot' | 'file' | 'settings';
 
@@ -33,7 +34,7 @@ function App() {
   // 迁移：已删除的插件（如 ai-translate）不再存在于列表时回退到默认项
   useEffect(() => {
     const ids = new Set(builtinPlugins.map((p) => p.metadata.id));
-    if (!ids.has(activeOcrPlugin)) setActiveOcrPlugin('paddle-ocr');
+    if (!ids.has(activeOcrPlugin)) setActiveOcrPlugin('rapid-ocr');
     if (!ids.has(activeTranslationPlugin)) setActiveTranslationPlugin('google-translate');
   }, [activeOcrPlugin, activeTranslationPlugin, setActiveOcrPlugin, setActiveTranslationPlugin]);
 
@@ -78,14 +79,55 @@ function App() {
     return () => { unlisten.then((fn) => fn()); };
   }, []);
 
+  // 开机自启：系统里的启动项会被卸载/重装清掉（覆盖安装时 NSIS 会删除 Run 键），
+  // 一旦与设置里存的状态不同步，开机就会静默失效。启动时对一次账，以设置为准补写。
+  const [autostartIssue, setAutostartIssue] = useState<string | null>(null);
+  useEffect(() => {
+    (async () => {
+      try {
+        const enabledOnSystem = await invoke<boolean>('get_autostart');
+        const { startup, setStartup } = useSettingsStore.getState();
+        if (enabledOnSystem === startup.autoStart) return;
+        if (startup.autoStart) {
+          await invoke('set_autostart', { enable: true });
+          setAutostartIssue(null);
+        } else {
+          // 系统里还开着但设置里已关：按系统实际状态显示，别让勾选状态骗人
+          setStartup({ autoStart: enabledOnSystem });
+        }
+      } catch (err) {
+        setAutostartIssue(`开机自启同步失败：${err}`);
+      }
+    })();
+  }, []);
+
   // 注册全局快捷键
+  const [shortcutIssues, setShortcutIssues] = useState<Record<string, string>>({});
   useEffect(() => {
     const registerAll = async () => {
+      // 先本地拦截：无修饰键的组合、其他软件的退出/关闭键都不送去注册，
+      // 否则系统会把那些键从别的软件手里截走
+      const enabled: Record<string, string> = {};
+      const issues: Record<string, string> = {};
+      for (const [action, combo] of Object.entries(shortcuts)) {
+        if (!combo.trim()) continue;   // 未启用：不注册，按键留给其他软件
+        const problem = validateShortcut(combo);
+        if (problem) {
+          issues[action] = `${problem}（已停用，请重新设置）`;
+          continue;
+        }
+        enabled[action] = combo;
+      }
       try {
-        await invoke('register_shortcuts', { shortcuts });
+        const results = await invoke<ShortcutRegistration[]>('register_shortcuts', { shortcuts: enabled });
+        for (const r of results) {
+          if (!r.ok && r.error) issues[r.action] = r.error;
+        }
       } catch (err) {
         console.error('[shortcuts] register failed:', err);
+        for (const action of Object.keys(enabled)) issues[action] = `注册失败：${err}`;
       }
+      setShortcutIssues(issues);
     };
     registerAll();
   }, [shortcuts]);
@@ -226,7 +268,7 @@ function App() {
           <span className="text-sm font-medium" style={{ color: '#1c1c1e' }}>设置</span>
           <div style={{ width: 60 }} />
         </header>
-        <main style={{ flex: 1, overflow: 'hidden' }}><Settings /></main>
+        <main style={{ flex: 1, overflow: 'hidden' }}><Settings shortcutIssues={shortcutIssues} autostartIssue={autostartIssue} /></main>
       </div>
     );
   }

@@ -34,3 +34,9 @@ src-tauri/scripts/build/
 src-tauri/scripts/dist/
 __pycache__/
 *.pyc
+
+# 截图覆盖层产物：由 scripts/prepare-overlay.mjs 在构建前生成，不进仓库
+src-tauri/binaries/
+
+# 图标预览是构建产物，由 scripts/build-icons.mjs 生成
+docs/icon-preview/
