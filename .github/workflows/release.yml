@@ -94,6 +94,24 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      # 单独一步准备覆盖层：失败时把原因写进 check-run 注解。
+      # 构建步骤的日志需要仓库管理员权限才能读，注解不需要，出问题能第一时间看到原因。
+      - name: Prepare bundled overlay
+        shell: bash
+        run: |
+          if ! node scripts/prepare-overlay.mjs > overlay-build.log 2>&1; then
+            detail=$(tail -c 1500 overlay-build.log | tr '\n' ' ' | sed 's/%/%25/g; s/\r//g')
+            echo "::error title=overlay packaging failed::$detail"
+            tail -40 overlay-build.log
+            exit 1
+          fi
+          if [ ! -f src-tauri/binaries/screenshot_overlay/screenshot_overlay ] \
+             && [ ! -f src-tauri/binaries/screenshot_overlay/screenshot_overlay.exe ]; then
+            echo "::error title=overlay artifact missing::脚本退出成功但没有产物，检查 build-overlay.py"
+            exit 1
+          fi
+          du -sh src-tauri/binaries/screenshot_overlay
+
       - name: Build and publish
         uses: tauri-apps/tauri-action@v0
         env:
