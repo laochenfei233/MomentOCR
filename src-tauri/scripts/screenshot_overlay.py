@@ -71,6 +71,102 @@ def capture_desktop(app, virtual_geometry):
     return canvas
 
 
+MENUBAR_WINDOW_LEVEL = 25
+
+# 覆盖层与工具栏的窗口层级。
+#
+# Qt 的 WindowStaysOnTopHint 只给到 floating 层，实测 layer=8，而程序坞是 20、菜单栏是 25
+# —— 系统 UI 全都在上面。后果是「冻结画面」根本冻不住它们：屏幕上那一条程序坞是活的，
+# 鼠标按在它上面时事件直接进程序坞、到不了覆盖层（想框选程序坞那一带连拖都起不了）。
+# 抬到系统 UI 之上，才是「整屏定格 → 选区域」该有的样子，和系统自带截图工具一致；
+# 定格画面里本来就拍到了程序坞和菜单栏（CGDisplayCreateImageForRect 两者都含），
+# 所以抬上去之后看不出差别，只是它们变成了画面的一部分。
+#
+# 工具栏必须比覆盖层更高：它是独立的顶层窗口，低了会被覆盖层整个盖住（连按钮都看不见）。
+OVERLAY_WINDOW_LEVEL = MENUBAR_WINDOW_LEVEL + 1
+TOOLBAR_WINDOW_LEVEL = OVERLAY_WINDOW_LEVEL + 1
+
+
+def mac_objc():
+    """拿到 libobjc（objc_getClass / sel_registerName / objc_msgSend 的签名已配好）。
+
+    非 macOS 或任何一步失败都返回 None，调用方静默放过：这些是外观上的锦上添花，
+    坏了也不能影响截图本身。
+
+    注意：macOS 11 起系统库都在 dyld 共享缓存里，os.path.exists 对这些路径返回 False，
+    但 CDLL 仍能按路径打开 —— 所以别拿 os.path.exists 做前置判断；也不要用
+    ctypes.util.find_library，实测它在本机返回 None（那样这段就静默失效了）。
+    """
+    if sys.platform != 'darwin':
+        return None
+    try:
+        import ctypes
+
+        objc = None
+        for path in ('/usr/lib/libobjc.A.dylib', '/usr/lib/libobjc.dylib'):
+            try:
+                objc = ctypes.CDLL(path)
+                break
+            except OSError:
+                continue
+        if objc is None:
+            return None
+
+        # NSApplication / NSWindow 在 AppKit 里；先确保 AppKit 已加载，objc_getClass 才找得到
+        for path in ('/System/Library/Frameworks/AppKit.framework/AppKit',
+                     '/System/Library/Frameworks/Foundation.framework/Foundation'):
+            try:
+                ctypes.CDLL(path)
+            except OSError:
+                pass
+
+        objc.objc_getClass.argtypes = [ctypes.c_char_p]
+        objc.objc_getClass.restype = ctypes.c_void_p
+        objc.sel_registerName.argtypes = [ctypes.c_char_p]
+        objc.sel_registerName.restype = ctypes.c_void_p
+        objc.objc_msgSend.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        objc.objc_msgSend.restype = ctypes.c_void_p
+        return objc
+    except Exception:
+        return None
+
+
+def objc_send(objc, receiver, selector, *args):
+    """调用一个 Objective-C 方法。objc_msgSend 是可变参数的，签名不能只配一次。
+
+    argtypes 一旦设过就会一直是那个样子：前一个调用如果把签名配成三参数，
+    后面所有两参数的调用都会 TypeError。所以这里每次按实参个数重建——
+    这层包装存在的唯一理由就是别让签名在函数之间串味。
+    """
+    import ctypes
+
+    argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    for arg in args:
+        argtypes.append(ctypes.c_long if isinstance(arg, int) else ctypes.c_void_p)
+    objc.objc_msgSend.argtypes = argtypes
+    objc.objc_msgSend.restype = ctypes.c_void_p
+    return objc.objc_msgSend(receiver, selector, *args)
+
+
+def set_window_level(widget, level):
+    """把窗口抬到指定层级（见 OVERLAY_WINDOW_LEVEL）。只能在 show() 之后调。
+
+    取 NSWindow 的路径：Qt5 的 winId() 是 NSView*，还要再 [view window]；
+    万一以后 winId() 直接给 NSWindow，那次 [window] 返回 NULL，就退回用它自己。
+    """
+    objc = mac_objc()
+    if objc is None:
+        return
+    try:
+        import ctypes
+
+        handle = ctypes.c_void_p(int(widget.winId()))
+        ns_window = objc_send(objc, handle, objc.sel_registerName(b'window')) or handle
+        objc_send(objc, ns_window, objc.sel_registerName(b'setLevel:'), level)
+    except Exception:
+        pass
+
+
 def hide_from_dock():
     """让覆盖层以「附件（accessory）」身份运行：不在 Dock 里露图标，也不占菜单栏。
 
@@ -80,55 +176,39 @@ def hide_from_dock():
     改成 Accessory —— 对「随包二进制」和「私有/系统 Python 跑脚本」两条路径都生效，
     不像改 .app 那样要动产物布局和查找路径。
 
+    但这一步只够管住「运行期间」：真正把名字写进 Dock 的是**启动瞬间**。Qt 的 cocoa 插件
+    在 QApplication 构造时会调用 TransformProcessType 把进程变成前台应用，系统当场就把它
+    当成一个独立 App 记进 Dock 的「最近使用」，此后再改 policy 也只是撤掉图标，那条记录
+    留在 plist 里不走（黑底 exec 图标，看着就像弹了个终端）。所以 main() 里还要用
+    QT_MAC_DISABLE_FOREGROUND_APPLICATION_TRANSFORM 从源头拦住这次转变。
+
     用 ctypes 直接调 Objective-C 而不是 PyObjC：随包运行时里没有 PyObjC
     （PyInstaller 只打进被 import 的模块）。任何一步失败都静默放过：宁可外观不变，
-    也不能让这段可选优化把截图弄坏。
+    也不能让这段可选优化把截图弄坏（失败处理在 mac_objc 里）。
     """
     if sys.platform != 'darwin':
         return
+    objc = mac_objc()
+    if objc is None:
+        return
     try:
-        import ctypes
-
-        def load(paths):
-            for path in paths:
-                try:
-                    return ctypes.CDLL(path)
-                except OSError:
-                    continue
-            return None
-
-        # 注意：macOS 11 起系统库都在 dyld 共享缓存里，os.path.exists 对这些路径返回 False，
-        # 但 CDLL 仍能按路径打开 —— 所以别拿 os.path.exists 做前置判断；也不要用
-        # ctypes.util.find_library，实测它在本机返回 None（那样这段就静默失效了）。
-        objc = load(['/usr/lib/libobjc.A.dylib', '/usr/lib/libobjc.dylib'])
-        if objc is None:
-            return
-        # NSApplication 在 AppKit 里；先确保 AppKit 已加载，objc_getClass 才找得到这个类
-        load(['/System/Library/Frameworks/AppKit.framework/AppKit',
-              '/System/Library/Frameworks/Foundation.framework/Foundation'])
-        objc.objc_getClass.argtypes = [ctypes.c_char_p]
-        objc.objc_getClass.restype = ctypes.c_void_p
-        objc.sel_registerName.argtypes = [ctypes.c_char_p]
-        objc.sel_registerName.restype = ctypes.c_void_p
-
-        objc.objc_msgSend.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
-        objc.objc_msgSend.restype = ctypes.c_void_p
-        nsapp = objc.objc_msgSend(
-            objc.objc_getClass(b'NSApplication'),
-            objc.sel_registerName(b'sharedApplication'),
-        )
+        nsapp = objc_send(objc, objc.objc_getClass(b'NSApplication'),
+                          objc.sel_registerName(b'sharedApplication'))
         if not nsapp:
             return
 
         # NSApplicationActivationPolicyAccessory = 1（Regular = 0，Prohibited = 2）。
         # 必须在 QApplication 建好之后再设：Qt 自己会在初始化时把它设成 Regular。
-        objc.objc_msgSend.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_long]
-        objc.objc_msgSend(nsapp, objc.sel_registerName(b'setActivationPolicy:'), 1)
+        objc_send(objc, nsapp, objc.sel_registerName(b'setActivationPolicy:'), 1)
     except Exception:
         pass
 
 
 class ScreenshotOverlay(QWidget):
+    TOOLBAR_W = 130
+    TOOLBAR_H = 36
+    GAP = 8
+
     def __init__(self):
         super().__init__()
         
@@ -265,9 +345,36 @@ class ScreenshotOverlay(QWidget):
         sh = max(0, min(sh, self.screenshot_pixmap.height() - sy))
         return (sx, sy, sw, sh)
     
-    def show_toolbar(self, rect):
+    def toolbar_position(self, rect):
+        """工具栏该落到哪儿（屏幕坐标）：优先贴选区下沿，下沿容不下就翻到上沿。
+
+        边界必须按「选区所在那块屏的可用区域」算，不能拿覆盖层窗口比：覆盖层横跨所有
+        显示器，self.height() 是整个虚拟桌面的高度，主屏底部的选区据此会以为下面还有半屏，
+        工具栏就被放到隔壁显示器上；可用区域还扣掉了菜单栏和程序坞，工具栏才不会压在那上面。
+        """
         x, y, w, h = rect
-        
+        app = QApplication.instance()
+        center = self.mapToGlobal(QPoint(x + w // 2, y + h // 2))
+        screen = next(
+            (s for s in app.screens() if s.geometry().contains(center)),
+            app.primaryScreen(),
+        )
+        area = screen.availableGeometry()
+
+        # 横向以选区中心对齐，再夹回可用区域：贴边的选区不至于把工具栏顶出屏幕
+        gx = max(
+            area.left(),
+            min(center.x() - self.TOOLBAR_W // 2, area.right() - self.TOOLBAR_W + 1),
+        )
+
+        # 纵向：下沿外侧优先；下沿放不下就翻到上沿外侧；选区占满整屏时贴着可用区域顶部
+        top = self.mapToGlobal(QPoint(x, y))
+        gy = top.y() + h + self.GAP
+        if gy + self.TOOLBAR_H > area.bottom() + 1:
+            gy = top.y() - self.TOOLBAR_H - self.GAP
+        return QPoint(gx, max(area.top(), gy))
+
+    def show_toolbar(self, rect):
         if self.toolbar:
             self.toolbar.close()
         
@@ -275,7 +382,7 @@ class ScreenshotOverlay(QWidget):
         self.toolbar.setWindowFlags(
             Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool
         )
-        self.toolbar.setFixedSize(130, 36)
+        self.toolbar.setFixedSize(self.TOOLBAR_W, self.TOOLBAR_H)
         self.toolbar.setStyleSheet("background: white; border-radius: 6px;")
         
         layout = QHBoxLayout(self.toolbar)
@@ -301,16 +408,11 @@ class ScreenshotOverlay(QWidget):
         layout.addWidget(ocr_btn)
         layout.addWidget(cancel_btn)
         
-        # 工具栏位置（确保在屏幕内）
-        toolbar_x = x + w // 2 - 65
-        toolbar_y = y + h + 8
-        # 如果工具栏超出窗口底部，放到选区上方
-        if toolbar_y + 36 > self.height():
-            toolbar_y = y - 44
-        # 工具栏是独立顶层窗口，move() 用的是屏幕坐标；上面的 x/y 是覆盖层内的局部坐标，
-        # 多显示器下覆盖层原点不一定是 (0, 0)，要加上自身偏移才对得上。
-        self.toolbar.move(self.x() + toolbar_x, self.y() + toolbar_y)
+        # 工具栏位置
+        self.toolbar.move(self.toolbar_position(rect))
         self.toolbar.show()
+        # 工具栏是独立顶层窗口，得比覆盖层更高，否则会被定格画面整个盖住
+        set_window_level(self.toolbar, TOOLBAR_WINDOW_LEVEL)
     
     def do_ocr(self, rect):
         x, y, w, h = rect
@@ -343,10 +445,21 @@ class ScreenshotOverlay(QWidget):
 
 
 def main():
+    # macOS：拦住 Qt 把本进程变成「前台应用」的那次转变（Qt 在 QApplication 构造时做）。
+    # 变过一次，系统就把它记进 Dock 的「最近使用」，之后每次截图都冒出一条
+    # screenshot_overlay（黑底 exec 图标），关掉覆盖层也不消失。必须在 QApplication 之前
+    # 设置：转变一旦发生，ctypes 里那次 setActivationPolicy 只能撤图标，撤不掉已写进
+    # Dock plist 的记录。
+    if sys.platform == 'darwin':
+        os.environ.setdefault('QT_MAC_DISABLE_FOREGROUND_APPLICATION_TRANSFORM', '1')
+
     app = QApplication(sys.argv)
     hide_from_dock()
     overlay = ScreenshotOverlay()
     overlay.show()
+    # 截图先定格（__init__ 里抓的），再抬到系统 UI 之上：顺序反过来没影响，
+    # 但抬层级要在 show() 之后，窗口还没创建时 winId() 拿不到 NSWindow。
+    set_window_level(overlay, OVERLAY_WINDOW_LEVEL)
     app.exec_()
 
 
