@@ -464,38 +464,60 @@ def dangling_refs(internal: Path) -> tuple:
     return found, scanned
 
 
-def check_dangling(before: tuple, after: tuple, system: str) -> None:
-    """只报瘦身新增的悬空引用：插件之外的二进制、以及必需的平台插件算致命，其余只提示。"""
-    baseline, _ = before
-    current, scanned = after
-    new = sorted(current - baseline)
-    if not new:
-        print(f"悬空引用校验：扫描 {scanned} 个二进制，没有新增悬空引用")
-        return
-
+def is_load_bearing(referrer: str, system: str) -> bool:
+    """这个二进制是不是必需的——是的话它绝不能悬空，也不许被自动删掉。"""
     plugins_prefix = f"{QT_REL.as_posix()}/plugins/"
-    required = f"{plugins_prefix}platforms/{REQUIRED_PLATFORM_PLUGIN.get(system, '')}"
+    if not referrer.startswith(plugins_prefix):
+        return True
+    # 可选插件的依赖缺失只让 Qt 跳过它；必需的平台插件缺失则整个应用起不来
+    return referrer.startswith(
+        f"{plugins_prefix}platforms/{REQUIRED_PLATFORM_PLUGIN.get(system, '')}"
+    )
 
-    def is_load_bearing(referrer):
-        if not referrer.startswith(plugins_prefix):
-            return True
-        # 可选插件的依赖缺失只让 Qt 跳过它；必需的平台插件缺失则整个应用起不来
-        return referrer.startswith(required)
 
-    fatal = [item for item in new if is_load_bearing(item[0])]
-    optional = [item for item in new if not is_load_bearing(item[0])]
-    print(f"悬空引用校验：扫描 {scanned} 个二进制，新增悬空 {len(new)} 条"
-          f"（致命 {len(fatal)}，可选插件 {len(optional)}）")
-    for referrer, dep, target in optional:
-        print(f"  · 可选插件 {referrer}  --{dep}-->  缺失 {target}（Qt 会跳过这个插件）")
+def drop_broken_referrers(internal: Path, system: str, baseline: tuple) -> tuple:
+    """删掉「被我们的精简删到加载不了」的文件，返回 (删掉的相对路径, 字节数, 最终悬空集合)。
 
-    if fatal:
-        for referrer, dep, target in fatal:
-            print(f"  ! 致命：{referrer}  --{dep}-->  缺失 {target}")
-        raise SystemExit(
-            "瘦身清单删掉了仍在被引用的文件（见上面「致命」几行）。"
-            "把对应模块从 DROP_QT_MODULES 里去掉，或一并删掉引用它的文件。"
-        )
+    为什么必须删而不是只提示：AppImage 的 linuxdeploy 会解析整个 AppDir 的 DT_NEEDED，
+    只要有解析不了的依赖就直接中止打包——CI 实测 Linux job 就挂在
+    `ERROR: Could not find dependency: libQt5Svg.so.5`（`libqsvg.so` / `libqsvgicon.so`
+    还引用着被删的 Qt5Svg）。而一个引用了已删文件的插件本来也加载不了，删掉它不会让任何
+    还能用的东西失效。
+
+    必需的平台插件和插件之外的二进制不在这里删——那是清单本身错了，交给 check_dangling 报失败。
+    """
+    dropped, removed = [], 0
+    while True:
+        current = dangling_refs(internal)
+        broken = sorted({
+            referrer for referrer, _, _ in current[0] - baseline[0]
+            if not is_load_bearing(referrer, system)
+        })
+        deleted = 0
+        for relative in broken:
+            path = internal / relative
+            if path.is_file() and not path.is_symlink():
+                removed += path.stat().st_size
+                path.unlink()
+                dropped.append(relative)
+                deleted += 1
+        if not deleted:
+            # 这一轮什么都没删掉就收手，避免删不掉时死循环
+            return dropped, removed, current
+
+
+def check_dangling(baseline: tuple, current: tuple) -> None:
+    """瘦身后不该再有任何新增的悬空引用——可选插件那批已经被 drop_broken_referrers 清掉了。"""
+    new = sorted(current[0] - baseline[0])
+    if not new:
+        print(f"悬空引用校验：扫描 {current[1]} 个二进制，没有新增悬空引用")
+        return
+    for referrer, dep, target in new:
+        print(f"  ! {referrer}  --{dep}-->  缺失 {target}")
+    raise SystemExit(
+        "瘦身清单删掉了仍在被引用的文件（见上面几行）。"
+        "把对应模块从 DROP_QT_MODULES 里去掉，或一并删掉引用它的文件。"
+    )
 
 
 def build(script: Path, out: Path) -> Path:
@@ -534,7 +556,14 @@ def build(script: Path, out: Path) -> Path:
     if system == "Windows":
         print("悬空引用校验：Windows 走 PE，不解析（清单已在真机验证）")
     else:
-        check_dangling(baseline, dangling_refs(internal), system)
+        dropped, dropped_bytes, current = drop_broken_referrers(internal, system, baseline)
+        removed += dropped_bytes
+        if dropped:
+            print(f"顺带删掉 {len(dropped)} 个被删到加载不了的文件"
+                  f"（不删的话 AppImage 的 linuxdeploy 会因为它们中止）：")
+            for relative in dropped:
+                print(f"  · {relative}")
+        check_dangling(baseline, current)
 
     shutil.rmtree(out, ignore_errors=True)
     out.parent.mkdir(parents=True, exist_ok=True)
