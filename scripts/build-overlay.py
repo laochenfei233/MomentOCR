@@ -199,7 +199,27 @@ def resolve_drop_paths(internal: Path, system: str) -> tuple:
 
 def prune(internal: Path, system: str) -> int:
     """按解析出的路径删除，返回省下的字节数。"""
+    # 清单失效要响，不能静默：QT_REL 假定的是 PyQt5 >= 5.15.4 的新布局，旧版是
+    # PyQt5/Qt（PyInstaller/utils/hooks/qt/__init__.py:124-128）。布局对不上时下面每一条
+    # 都会被「不存在就跳过」吞掉，瘦身白做而构建全绿。
+    if not (internal / QT_REL).is_dir():
+        raise SystemExit(
+            f"{internal / QT_REL} 不存在：PyInstaller 没按预期收集 Qt。"
+            f"若是 PyQt5 < 5.15.4，布局是 PyQt5/Qt，需要改 QT_REL；"
+            f"若是本地用发行版（apt 等）装的 PyQt5，它的 Qt 库不在 site-packages、会被平铺到 "
+            f"_internal 根下，换装 PyPI 版 PyQt5 才能瘦身。"
+        )
     files, dirs = resolve_drop_paths(internal, system)
+    if not any(path.exists() for path in files + dirs):
+        # 正常构建不可能是 0 命中（三平台都至少能命中那几个平台插件）。真出现 0 只剩两种可能：
+        # 布局整体变了，或者上游 PyInstaller 不再收集这些东西——两种都该有人看一眼，
+        # 所以直接失败而不是警告：警告的代价是静默发出一个没瘦身的安装包。
+        raise SystemExit(
+            f"{system} 上一条都没命中：要么 {internal / QT_REL} 下的布局整体变了，"
+            f"要么上游 PyInstaller 已经不收集这些文件（后者的话这条断言该放宽）。"
+            f"请对照实际内容更新 DROP_* 清单。"
+        )
+
     removed = 0
     for path in files:
         if path.is_file() and not path.is_symlink():
