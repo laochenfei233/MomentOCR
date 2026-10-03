@@ -3,7 +3,7 @@ feature: pyqt5-runtime-prune
 status: delivered
 updated: 2026-10-03
 branch: feat/pyqt5-runtime-prune
-commits: a10d15d..6154fb7
+commits: ed90237..c0a5402
 ---
 
 # PyQt5 Runtime Prune
@@ -30,6 +30,8 @@ macOS 实测 66.9 MB → 47.1 MB。过程中还修掉一个原先只在 macOS �
 | Linux 近似 bundle 端到端 prune + check | PASS：致命 0、可选插件提示 4 条；1025 条基线悬空被差集全部抵消 |
 
 独立复评（另一个 agent，未参与实现）复核通过：T1–T7 逐条达标、0 条 critical；它自行复现了 FAT 解析结果与 `otool -L` 完全一致、ELF 的 `DT_NEEDED`/`RPATH` 正确、Windows 覆盖零缺失，以及 `libqcocoa` 的 `@rpath/QtPrintSupport` 确实解析到实存文件。
+
+评审时的范围是 `a10d15d..6154fb7`。合入前 master 前进到 `ed90237`（`chore: 清掉脚本与打包链路里的冗余`，也改到了 `build()`），所以分支 rebase 到 `ed90237` 之后才落盘；唯一的冲突是 `build()` 的 `name` 形参——取 master 去掉形参简化，其余不动。rebase 后重跑了完整构建与启动冒烟，结果与上表一致（66.9 → 47.1 MB、致命 0、进程存活）。
 
 **未验证的风险（merge 前值得看一眼）**
 
