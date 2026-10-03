@@ -66,31 +66,27 @@ function Settings({ shortcutIssues = {}, autostartIssue = null }: {
     activeOcrPlugin,
     activeTranslationPlugin,
     startup,
-    captureOpt,
     language,
     afterRecognize,
     style,
     config,
     quickAction,
-    proxy,
     screenshot,
     setActiveOcrPlugin,
     setActiveTranslationPlugin,
     setStartup,
-    setCaptureOpt,
     setLanguage,
     setAfterRecognize,
     setStyle,
     setConfig,
     setQuickAction,
-    setProxy,
     setScreenshot,
     shortcuts,
     setShortcuts,
   } = store;
 
-  const ocrPlugins = builtinPlugins.filter((p) => p.metadata.type === 'ocr');
-  const translationPlugins = builtinPlugins.filter((p) => p.metadata.type === 'translation');
+  const ocrPlugins = builtinPlugins.filter((p) => p.type === 'ocr');
+  const translationPlugins = builtinPlugins.filter((p) => p.type === 'translation');
 
   // 本地组件：挂载时查一次状态，安装过程靠事件推进度
   const refreshComponents = async () => {
@@ -209,24 +205,11 @@ function Settings({ shortcutIssues = {}, autostartIssue = null }: {
               {(autoStartError || autostartIssue) && (
                 <p style={{ fontSize: 11, color: '#FF3B30', margin: '4px 0 0' }}>{autoStartError || autostartIssue}</p>
               )}
-              <CheckboxItem label="以管理员身份运行" checked={startup.runAsAdmin} onChange={(v) => setStartup({ runAsAdmin: v })} />
-              <CheckboxItem label="启动时显示窗口" checked={startup.showWindow} onChange={(v) => setStartup({ showWindow: v })} />
-              <CheckboxItem label="启动时显示工具栏" checked={startup.showToolbar} onChange={(v) => setStartup({ showToolbar: v })} />
-            </SettingsCard>
-            <SettingsCard title="截图时">
-              <CheckboxItem label="截图时启用十字线" checked={captureOpt.crosshair} onChange={(v) => setCaptureOpt({ crosshair: v })} />
-              <CheckboxItem label="复制图片和文件" checked={captureOpt.copyImageAndFile} onChange={(v) => setCaptureOpt({ copyImageAndFile: v })} />
-              <CheckboxItem label="截图时启用放大镜" checked={captureOpt.magnifier} onChange={(v) => setCaptureOpt({ magnifier: v })} />
             </SettingsCard>
             <SettingsCard title="识别后">
-              <CheckboxItem label="识别后文本叠加" checked={afterRecognize.textOverlay} onChange={(v) => setAfterRecognize({ textOverlay: v })} />
-              <CheckboxItem label="识别后播放音效" checked={afterRecognize.soundEffect} onChange={(v) => setAfterRecognize({ soundEffect: v })} />
               <CheckboxItem label="识别后复制到剪贴板" checked={afterRecognize.autoCopy} onChange={(v) => setAfterRecognize({ autoCopy: v })} />
-              <CheckboxItem label="自动复制Office公式" checked={afterRecognize.autoCopyOfficeFormula} onChange={(v) => setAfterRecognize({ autoCopyOfficeFormula: v })} />
-              <CheckboxItem label="识别后弹出窗体" checked={afterRecognize.popupWindow} onChange={(v) => setAfterRecognize({ popupWindow: v })} />
             </SettingsCard>
             <SettingsCard title="语言设置">
-              <SelectItem label="识别语言" value={language.ocrLang} options={['自动检测', '中文', '英文', '日文', '韩文']} onChange={(v) => setLanguage({ ocrLang: v })} />
               <SelectItem label="翻译目标" value={language.translateTarget} options={['中文', '英文', '日文', '韩文']} onChange={(v) => setLanguage({ translateTarget: v })} />
               <SelectItem label="翻译结果显示" value={language.translateLayout || '下方'} options={['下方', '右侧']} onChange={(v) => setLanguage({ translateLayout: v })} />
               <p style={{ fontSize: 11, color: '#AEAEB2', marginTop: 4 }}>翻译结果独立成框，显示在识别原文的下方或右侧</p>
@@ -247,13 +230,7 @@ function Settings({ shortcutIssues = {}, autostartIssue = null }: {
             </SettingsCard>
             <SettingsCard title="设置">
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-                <SelectItem label="取色代码" value={config.colorCode} options={['RGB', 'HEX', 'HSL']} onChange={(v) => setConfig({ colorCode: v })} inline />
-                <SelectItem label="搜索引擎" value={config.searchEngine} options={['百度', '谷歌', '必应', '搜狗']} onChange={(v) => setConfig({ searchEngine: v })} inline />
                 <SelectItem label="字数统计" value={config.wordCountMode} options={['Word模式', '字符模式']} onChange={(v) => setConfig({ wordCountMode: v })} inline />
-                <SelectItem label="自动分段" value={config.autoSegment} options={['标点符号', '换行符', '无']} onChange={(v) => setConfig({ autoSegment: v })} inline />
-                <SelectItem label="工具栏" value={config.toolbarLayout} options={['横向', '纵向']} onChange={(v) => setConfig({ toolbarLayout: v })} inline />
-                <CheckboxItem label="竖排空格" checked={config.verticalSpacing} onChange={(v) => setConfig({ verticalSpacing: v })} />
-                <SelectItem label="竖排方向" value={config.verticalDirection} options={['从左向右', '从右向左']} onChange={(v) => setConfig({ verticalDirection: v })} inline />
               </div>
             </SettingsCard>
             <SettingsCard title="快捷操作">
@@ -261,21 +238,6 @@ function Settings({ shortcutIssues = {}, autostartIssue = null }: {
                 <SelectItem label="关闭软件" value={quickAction.closeAction} options={['最小化到托盘', '直接退出']} onChange={(v) => setQuickAction({ closeAction: v })} inline />
                 <SelectItem label="单击托盘" value={quickAction.trayClick} options={['显示窗口', '无操作']} onChange={(v) => setQuickAction({ trayClick: v })} inline />
               </div>
-            </SettingsCard>
-            <SettingsCard title="代理类型">
-              <div style={{ display: 'flex', gap: 20, marginBottom: 12 }}>
-                <RadioItem label="不使用代理" checked={proxy.type === 'none'} onChange={() => setProxy({ type: 'none' })} />
-                <RadioItem label="使用系统代理" checked={proxy.type === 'system'} onChange={() => setProxy({ type: 'system' })} />
-                <RadioItem label="自定义代理" checked={proxy.type === 'custom'} onChange={() => setProxy({ type: 'custom' })} />
-              </div>
-              {proxy.type === 'custom' && (
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-                  <InputItem label="服务器" value={proxy.server} onChange={(v) => setProxy({ server: v })} placeholder="" />
-                  <InputItem label="端口" value={proxy.port} onChange={(v) => setProxy({ port: v })} placeholder="" />
-                  <InputItem label="用户名" value={proxy.username} onChange={(v) => setProxy({ username: v })} placeholder="" />
-                  <InputItem label="密码" value={proxy.password} onChange={(v) => setProxy({ password: v })} placeholder="" type="password" />
-                </div>
-              )}
             </SettingsCard>
             <SettingsCard title="数据管理">
               <button onClick={handleClearCache} style={{ padding: '6px 12px', background: '#FF3B30', color: 'white', border: 'none', borderRadius: 12, fontSize: 12, cursor: 'pointer' }}>清除缓存</button>
@@ -305,28 +267,9 @@ function Settings({ shortcutIssues = {}, autostartIssue = null }: {
                 onRefresh={refreshComponents}
               />
             </SettingsCard>
-            <SettingsCard title="截图按钮">
-              <CheckboxItem label="是否显示截图右侧识别框" checked={screenshot.showRightPanel} onChange={(v) => setScreenshot({ showRightPanel: v })} />
-              <p style={{ fontSize: 11, color: '#AEAEB2', marginTop: 4 }}>蓝色为截图时显示该按钮</p>
-            </SettingsCard>
-            <SettingsCard title="图片保存名称">
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-                <InputItem label="截图前缀" value={screenshot.filenamePrefix} onChange={(v) => setScreenshot({ filenamePrefix: v })} />
-                <InputItem label="截图扩展名" value={screenshot.filenameExt} onChange={(v) => setScreenshot({ filenameExt: v })} />
-              </div>
-            </SettingsCard>
-            <SettingsCard title="图片自动保存">
-              <CheckboxItem label="是否启用" checked={screenshot.autoSave} onChange={(v) => setScreenshot({ autoSave: v })} />
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
-                <InputItem label="图片路径" value={screenshot.savePath} onChange={(v) => setScreenshot({ savePath: v })} />
-              </div>
-            </SettingsCard>
             <SettingsCard title="截图设置">
               <CheckboxItem label="截图时隐藏主窗口" checked={screenshot.hideMainWindow} onChange={(v) => setScreenshot({ hideMainWindow: v })} />
               <CheckboxItem label="截图后自动识别" checked={screenshot.autoRecognize} onChange={(v) => setScreenshot({ autoRecognize: v })} />
-              <CheckboxItem label="显示截图预览" checked={screenshot.showPreview} onChange={(v) => setScreenshot({ showPreview: v })} />
-              <CheckboxItem label="支持多屏幕截图" checked={screenshot.multiScreen} onChange={(v) => setScreenshot({ multiScreen: v })} />
-              <SelectItem label="保存格式" value={screenshot.saveFormat} options={['PNG (无损)', 'JPG (有损)']} onChange={(v) => setScreenshot({ saveFormat: v })} />
             </SettingsCard>
           </div>
         )}
@@ -343,12 +286,12 @@ function Settings({ shortcutIssues = {}, autostartIssue = null }: {
                   style={{ padding: '6px 10px', fontSize: 13, border: '0.5px solid #D1D1D6', borderRadius: 12, background: '#FFFFFF', outline: 'none' }}
                 >
                   {ocrPlugins.map((p) => (
-                    <option key={p.metadata.id} value={p.metadata.id}>{p.metadata.name}</option>
+                    <option key={p.id} value={p.id}>{p.name}</option>
                   ))}
                 </select>
               </div>
               <p style={{ fontSize: 12, color: '#8E8E93', marginTop: 8 }}>
-                {ocrPlugins.find((p) => p.metadata.id === activeOcrPlugin)?.metadata.description}
+                {ocrPlugins.find((p) => p.id === activeOcrPlugin)?.description}
               </p>
               {(activeOcrPlugin === 'paddle-ocr' || activeOcrPlugin === 'rapid-ocr') && (
                 <LocalComponentPanel
@@ -443,12 +386,12 @@ function Settings({ shortcutIssues = {}, autostartIssue = null }: {
                   style={{ padding: '6px 10px', fontSize: 13, border: '0.5px solid #D1D1D6', borderRadius: 12, background: '#FFFFFF', outline: 'none' }}
                 >
                   {translationPlugins.map((p) => (
-                    <option key={p.metadata.id} value={p.metadata.id}>{p.metadata.name}</option>
+                    <option key={p.id} value={p.id}>{p.name}</option>
                   ))}
                 </select>
               </div>
               <p style={{ fontSize: 12, color: '#8E8E93', marginTop: 8 }}>
-                {translationPlugins.find((p) => p.metadata.id === activeTranslationPlugin)?.metadata.description}
+                {translationPlugins.find((p) => p.id === activeTranslationPlugin)?.description}
               </p>
               {activeTranslationPlugin === 'openai-translate' && (
                 <PluginApiKeyConfig pluginId="openai-translate" listProvider="openai" defaultBaseUrl="https://api.openai.com/v1" fields={[
@@ -618,34 +561,6 @@ function SelectItem({ label, value, options, onChange, inline }: {
         {options.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
       </select>
     </div>
-  );
-}
-
-function InputItem({ label, value, onChange, placeholder, type = 'text' }: {
-  label: string; value: string; onChange: (v: string) => void; placeholder?: string; type?: string;
-}) {
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '4px 0' }}>
-      <label style={{ fontSize: 13, color: '#1c1c1e', minWidth: 70, whiteSpace: 'nowrap' }}>{label}:</label>
-      <input
-        type={type}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder || ''}
-        style={{ padding: '6px 10px', fontSize: 13, border: '0.5px solid #D1D1D6', borderRadius: 12, background: '#FFFFFF', outline: 'none', flex: 1, cursor: 'text', transition: 'border-color 100ms ease-out' }}
-        onFocus={(e) => { e.currentTarget.style.borderColor = '#007AFF'; e.currentTarget.style.boxShadow = '0 0 0 3px rgba(0,122,255,0.18)'; }}
-        onBlur={(e) => { e.currentTarget.style.borderColor = '#D1D1D6'; e.currentTarget.style.boxShadow = 'none'; }}
-      />
-    </div>
-  );
-}
-
-function RadioItem({ label, checked, onChange }: { label: string; checked: boolean; onChange: () => void }) {
-  return (
-    <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 13, color: '#1c1c1e' }}>
-      <input type="radio" checked={checked} onChange={onChange} style={{ accentColor: '#007AFF' }} />
-      {label}
-    </label>
   );
 }
 

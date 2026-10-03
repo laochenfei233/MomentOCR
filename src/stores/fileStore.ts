@@ -1,20 +1,14 @@
 import { create } from 'zustand';
 
-export type FileStatus = 'pending' | 'processing' | 'done' | 'error';
-
 export interface FileItem {
   id: string;
   name: string;
   path: string;
-  status: FileStatus;
-  result?: string;
-  error?: string;
 }
 
 interface FileState {
   files: FileItem[];
-  addFiles: (files: Omit<FileItem, 'id' | 'status'>[]) => void;
-  updateFileStatus: (id: string, status: FileStatus, result?: string, error?: string) => void;
+  addFiles: (files: Omit<FileItem, 'id'>[]) => void;
   removeFile: (id: string) => void;
   clearFiles: () => void;
 }
@@ -25,18 +19,8 @@ export const useFileStore = create<FileState>((set) => ({
     set((state) => ({
       files: [
         ...state.files,
-        ...newFiles.map((f) => ({
-          ...f,
-          id: crypto.randomUUID(),
-          status: 'pending' as const,
-        })),
+        ...newFiles.map((f) => ({ ...f, id: crypto.randomUUID() })),
       ],
-    })),
-  updateFileStatus: (id, status, result, error) =>
-    set((state) => ({
-      files: state.files.map((f) =>
-        f.id === id ? { ...f, status, result, error } : f
-      ),
     })),
   removeFile: (id) =>
     set((state) => ({

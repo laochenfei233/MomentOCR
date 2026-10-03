@@ -4,9 +4,10 @@ import { listen } from '@tauri-apps/api/event';
 import { useScreenshotStore } from '../stores/screenshotStore';
 import { useOcrStore } from '../stores/ocrStore';
 import { useSettingsStore } from '../stores/settingsStore';
+import { runOcr } from '../plugins';
 
 function ScreenshotTool() {
-  const { isCapturing, setCapturing, setScreenshotPath } = useScreenshotStore();
+  const { isCapturing, setCapturing } = useScreenshotStore();
   const { setProcessing, setResult, addToHistory } = useOcrStore();
   const { activeOcrPlugin, pluginSettings, screenshot, afterRecognize } = useSettingsStore();
   const [error, setError] = useState<string | null>(null);
@@ -15,44 +16,7 @@ function ScreenshotTool() {
   const doOcr = useCallback(async (imagePath: string) => {
     setProcessing(true);
     try {
-      let ocrResult = '';
-      const customVisionPlugins = ['qwen-vision', 'zhipu-vision', 'doubao-vision', 'gemini-vision', 'mimo-vision'];
-      if (activeOcrPlugin === 'openai-vision') {
-        const apiKey = (pluginSettings['openai-vision']?.apiKey as string) || '';
-        const model = (pluginSettings['openai-vision']?.model as string) || 'gpt-4o';
-        const maxTokens = Number(pluginSettings['openai-vision']?.maxTokens) || 1024;
-        if (!apiKey) { ocrResult = '错误：未配置OpenAI API Key'; } else {
-          ocrResult = await invoke<string>('ocr_openai', { apiKey, imagePath, model, maxTokens });
-        }
-      } else if (customVisionPlugins.includes(activeOcrPlugin)) {
-        const cfg = pluginSettings[activeOcrPlugin] || {};
-        const apiKey = (cfg.apiKey as string) || '';
-        const model = (cfg.model as string) || '';
-        const baseUrl = (cfg.baseUrl as string) || '';
-        const maxTokens = Number(cfg.maxTokens) || 1024;
-        if (!apiKey) { ocrResult = `错误：未配置${activeOcrPlugin} API Key`; } else {
-          ocrResult = await invoke<string>('ocr_custom_vision', { baseUrl, apiKey, model, imagePath, maxTokens });
-        }
-      } else if (activeOcrPlugin === 'claude-vision') {
-        const cfg = pluginSettings['claude-vision'] || {};
-        const apiKey = (cfg.apiKey as string) || '';
-        const model = (cfg.model as string) || 'claude-sonnet-4-5';
-        const baseUrl = (cfg.baseUrl as string) || 'https://api.anthropic.com/v1';
-        const maxTokens = Number(cfg.maxTokens) || 1024;
-        if (!apiKey) { ocrResult = '错误：未配置 Claude API Key'; } else {
-          ocrResult = await invoke<string>('ocr_claude', { baseUrl, apiKey, model, imagePath, maxTokens });
-        }
-      } else if (activeOcrPlugin === 'local-llm') {
-        const endpoint = (pluginSettings['local-llm']?.endpoint as string) || 'http://localhost:11434';
-        const model = (pluginSettings['local-llm']?.model as string) || 'llava';
-        ocrResult = await invoke<string>('ocr_ollama', { endpoint, model, imagePath });
-      } else if (activeOcrPlugin === 'paddle-ocr') {
-        ocrResult = await invoke<string>('ocr_paddleocr', { imagePath });
-      } else if (activeOcrPlugin === 'rapid-ocr') {
-        ocrResult = await invoke<string>('ocr_rapidocr', { imagePath });
-      } else {
-        ocrResult = `未知引擎: ${activeOcrPlugin}`;
-      }
+      const ocrResult = await runOcr(activeOcrPlugin, imagePath, pluginSettings);
       const result = { success: !ocrResult.startsWith('错误'), data: ocrResult, confidence: 0, language: 'auto' };
       setResult(result);
       addToHistory(result);
@@ -92,7 +56,6 @@ function ScreenshotTool() {
   useEffect(() => {
     const unlisten1 = listen<string>('screenshot-cropped', async (event) => {
       const imagePath = event.payload;
-      setScreenshotPath(imagePath);
       setCaptureSuccess(true);
       setCapturing(false);
       setTimeout(() => setCaptureSuccess(false), 1500);
@@ -120,7 +83,7 @@ function ScreenshotTool() {
     });
     const unlisten4 = listen('screenshot-triggered', () => handleScreenshot());
     return () => { unlisten1.then(fn => fn()); unlisten2.then(fn => fn()); unlisten3.then(fn => fn()); unlisten4.then(fn => fn()); };
-  }, [handleScreenshot, setCapturing, setScreenshotPath, doOcr, screenshot.showPreview, screenshot.autoRecognize, screenshot.hideMainWindow]);
+  }, [handleScreenshot, setCapturing, doOcr, screenshot.autoRecognize, screenshot.hideMainWindow]);
 
   return (
     <div style={{ padding: 12 }}>

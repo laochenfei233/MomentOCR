@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { useFileStore } from '../stores/fileStore';
 import { useOcrStore } from '../stores/ocrStore';
 import { useSettingsStore } from '../stores/settingsStore';
+import { runOcr } from '../plugins';
 
 function FileUploader() {
   const { files, addFiles, removeFile, clearFiles } = useFileStore();
@@ -17,44 +18,7 @@ function FileUploader() {
     setProcessing(true);
     setProcessingFile(imagePath.split(/[/\\]/).pop() || imagePath);
     try {
-      let ocrResult = '';
-      const customVisionPlugins = ['qwen-vision', 'zhipu-vision', 'doubao-vision', 'gemini-vision', 'mimo-vision'];
-      if (activeOcrPlugin === 'openai-vision') {
-        const apiKey = (pluginSettings['openai-vision']?.apiKey as string) || '';
-        const model = (pluginSettings['openai-vision']?.model as string) || 'gpt-4o';
-        const maxTokens = Number(pluginSettings['openai-vision']?.maxTokens) || 1024;
-        if (!apiKey) { ocrResult = '错误：未配置OpenAI API Key'; } else {
-          ocrResult = await invoke<string>('ocr_openai', { apiKey, imagePath, model, maxTokens });
-        }
-      } else if (customVisionPlugins.includes(activeOcrPlugin)) {
-        const cfg = pluginSettings[activeOcrPlugin] || {};
-        const apiKey = (cfg.apiKey as string) || '';
-        const model = (cfg.model as string) || '';
-        const baseUrl = (cfg.baseUrl as string) || '';
-        const maxTokens = Number(cfg.maxTokens) || 1024;
-        if (!apiKey) { ocrResult = `错误：未配置${activeOcrPlugin} API Key`; } else {
-          ocrResult = await invoke<string>('ocr_custom_vision', { baseUrl, apiKey, model, imagePath, maxTokens });
-        }
-      } else if (activeOcrPlugin === 'claude-vision') {
-        const cfg = pluginSettings['claude-vision'] || {};
-        const apiKey = (cfg.apiKey as string) || '';
-        const model = (cfg.model as string) || 'claude-sonnet-4-5';
-        const baseUrl = (cfg.baseUrl as string) || 'https://api.anthropic.com/v1';
-        const maxTokens = Number(cfg.maxTokens) || 1024;
-        if (!apiKey) { ocrResult = '错误：未配置 Claude API Key'; } else {
-          ocrResult = await invoke<string>('ocr_claude', { baseUrl, apiKey, model, imagePath, maxTokens });
-        }
-      } else if (activeOcrPlugin === 'local-llm') {
-        const endpoint = (pluginSettings['local-llm']?.endpoint as string) || 'http://localhost:11434';
-        const model = (pluginSettings['local-llm']?.model as string) || 'llava';
-        ocrResult = await invoke<string>('ocr_ollama', { endpoint, model, imagePath });
-      } else if (activeOcrPlugin === 'paddle-ocr') {
-        ocrResult = await invoke<string>('ocr_paddleocr', { imagePath });
-      } else if (activeOcrPlugin === 'rapid-ocr') {
-        ocrResult = await invoke<string>('ocr_rapidocr', { imagePath });
-      } else {
-        ocrResult = `未知引擎: ${activeOcrPlugin}`;
-      }
+      const ocrResult = await runOcr(activeOcrPlugin, imagePath, pluginSettings);
       const result = { success: !ocrResult.startsWith('错误'), data: ocrResult, confidence: 0, language: 'auto' };
       setResult(result);
       addToHistory(result);

@@ -7,7 +7,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { useOcrStore } from './stores/ocrStore';
 import { useSettingsStore } from './stores/settingsStore';
-import { builtinPlugins } from './plugins';
+import { builtinPlugins, findPlugin } from './plugins';
 import { validateShortcut, type ShortcutRegistration } from './utils/shortcut';
 
 type Tab = 'screenshot' | 'file' | 'settings';
@@ -33,7 +33,7 @@ function App() {
 
   // 迁移：已删除的插件（如 ai-translate）不再存在于列表时回退到默认项
   useEffect(() => {
-    const ids = new Set(builtinPlugins.map((p) => p.metadata.id));
+    const ids = new Set(builtinPlugins.map((p) => p.id));
     if (!ids.has(activeOcrPlugin)) setActiveOcrPlugin('rapid-ocr');
     if (!ids.has(activeTranslationPlugin)) setActiveTranslationPlugin('google-translate');
   }, [activeOcrPlugin, activeTranslationPlugin, setActiveOcrPlugin, setActiveTranslationPlugin]);
@@ -154,57 +154,31 @@ function App() {
     const targetCode = targetCodeMap[targetName] || 'zh-CN';
     try {
       let result = '';
-      const customTranslatePlugins = ['openai-translate', 'qwen-translate', 'zhipu-translate', 'doubao-translate', 'gemini-translate', 'mimo-translate', 'deepseek-translate'];
+      const plugin = findPlugin(activeTranslationPlugin);
+      const cfg = pluginSettings[activeTranslationPlugin] || {};
+      const apiKey = (cfg.apiKey as string) || '';
+      const baseUrl = (cfg.baseUrl as string) || plugin?.defaultBaseUrl || '';
+      const model = (cfg.model as string) || plugin?.defaultModel || '';
       if (activeTranslationPlugin === 'google-translate') {
+        // Google 用语言代码，大模型用中文名
         result = await invoke<string>('translate_google', { text: ocrText, targetLang: targetCode });
-      } else if (activeTranslationPlugin === 'claude-translate') {
-        const cfg = pluginSettings['claude-translate'] || {};
-        const apiKey = (cfg.apiKey as string) || '';
-        const model = (cfg.model as string) || 'claude-sonnet-4-5';
-        const baseUrl = (cfg.baseUrl as string) || 'https://api.anthropic.com/v1';
-        if (!apiKey) { result = '错误：未配置翻译 API Key'; }
-        else {
-          result = await invoke<string>('translate_claude', {
-            baseUrl, apiKey, model, text: ocrText, targetLang: targetName,
-          });
-        }
-      } else if (customTranslatePlugins.includes(activeTranslationPlugin)) {
-        const cfg = pluginSettings[activeTranslationPlugin] || {};
-        const apiKey = (cfg.apiKey as string) || '';
-        const model = (cfg.model as string) || '';
-        const baseUrl = (cfg.baseUrl as string) || '';
-        const defaultBaseUrls: Record<string, string> = {
-          'openai-translate': 'https://api.openai.com/v1',
-          'qwen-translate': 'https://trial.cn-beijing.maas.aliyuncs.com/compatible-mode/v1',
-          'zhipu-translate': 'https://open.bigmodel.cn/api/paas/v4',
-          'doubao-translate': 'https://ark.cn-beijing.volces.com/api/v3',
-          'gemini-translate': 'https://generativelanguage.googleapis.com/v1beta/openai',
-          'mimo-translate': 'https://api.xiaomimimo.com/v1',
-          'deepseek-translate': 'https://api.deepseek.com/v1',
-        };
-        const defaultModels: Record<string, string> = {
-          'openai-translate': 'gpt-4o',
-          'qwen-translate': 'qwen-turbo',
-          'zhipu-translate': 'glm-4-flash',
-          'doubao-translate': 'doubao-pro-32k',
-          'gemini-translate': 'gemini-1.5-flash',
-          'mimo-translate': '',
-          'deepseek-translate': 'deepseek-chat',
-        };
-        const finalBaseUrl = baseUrl || defaultBaseUrls[activeTranslationPlugin] || '';
-        const finalModel = model || defaultModels[activeTranslationPlugin] || '';
-        console.log('[translate]', activeTranslationPlugin, 'baseUrl=', finalBaseUrl, 'model=', finalModel);
-        if (!apiKey) { result = '错误：未配置翻译 API Key'; }
-        else if (!finalBaseUrl) { result = `错误：缺少 baseUrl (${activeTranslationPlugin})`; }
-        else if (!finalModel) { result = '错误：未选择模型，请在设置中拉取模型列表后选择'; }
-        else {
-          result = await invoke<string>('translate_custom', {
-            baseUrl: finalBaseUrl, apiKey, model: finalModel,
-            text: ocrText, targetLang: targetName,
-          });
-        }
-      } else {
+      } else if (plugin?.type !== 'translation') {
         result = `未知翻译服务: ${activeTranslationPlugin}`;
+      } else if (!apiKey) {
+        result = '错误：未配置翻译 API Key';
+      } else if (activeTranslationPlugin === 'claude-translate') {
+        result = await invoke<string>('translate_claude', {
+          baseUrl, apiKey, model, text: ocrText, targetLang: targetName,
+        });
+      } else if (!baseUrl) {
+        result = `错误：缺少 baseUrl (${activeTranslationPlugin})`;
+      } else if (!model) {
+        result = '错误：未选择模型，请在设置中拉取模型列表后选择';
+      } else {
+        console.log('[translate]', activeTranslationPlugin, 'baseUrl=', baseUrl, 'model=', model);
+        result = await invoke<string>('translate_custom', {
+          baseUrl, apiKey, model, text: ocrText, targetLang: targetName,
+        });
       }
       if (result.startsWith('错误') || result.startsWith('未知')) {
         showTranslateFeedback(false, result);
