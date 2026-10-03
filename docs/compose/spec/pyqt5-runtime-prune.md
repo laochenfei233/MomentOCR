@@ -3,7 +3,7 @@ feature: pyqt5-runtime-prune
 status: delivered
 updated: 2026-10-03
 branch: feat/pyqt5-runtime-prune
-commits: ed90237..c0a5402
+commits: ed90237..b8104e4
 ---
 
 # PyQt5 Runtime Prune
@@ -12,15 +12,19 @@ commits: ed90237..c0a5402
 
 **What was built** — `scripts/build-overlay.py` 的运行时瘦身从「只有 Windows 生效」推到三平台。要删什么是一份平台无关的语义清单（`DROP_QT_MODULES` / `DROP_PLUGIN_FILES` / `DROP_QT_DIRS` / `DROP_EXTRA_FILES` / `DROP_QT_MODULES_KEEP`），各平台解析成真实路径：Windows 的 `PyQt5/Qt5/bin/Qt5<M>.dll`、Linux 的 `libQt5<M>.so*`、macOS 的整目录 `Qt<M>.framework` 加 PyInstaller 在 `_internal` 根上生成的符号链接（非 Windows 的插件还带 `lib` 前缀）。macOS 必须留 `QtPrintSupport`——`libqcocoa.dylib` 强链接它，删掉之后平台插件加载失败、应用根本起不来。打包后新增一道悬空引用校验（Mach-O load commands / ELF `DT_NEEDED`，纯 Python 按魔数解析，不依赖 `otool`/`readelf`/`ldd`）：只对瘦身新增的悬空引用动手，能自动删的就删掉，必需的平台插件一旦悬空就直接失败。`prune()` 开头另加两道断言，保证清单失效时是硬失败而不是静默放过。
 
-macOS 构建目录 66.9 MB → 46.9 MB。但**对用户有意义的是 CI 打出来的安装包**（macos-x64，同一条流水线前后对比）：
+macOS 构建目录 66.9 MB → 46.9 MB。但**对用户有意义的是 CI 打出来的安装包**（同一条流水线前后对比，改动前 = run `37125076611`，改动后 = run `37128207057`）：
 
 | | 改动前 | 改动后 |
 | --- | --- | --- |
-| 用户下载的 dmg | 77 MB | **47 MB**（−39%） |
-| app 内覆盖层占盘 | 188 MB | **108 MB** |
-| 覆盖层符号链接 | 0 | 0（Tauri 展平，见下） |
-| Qt 框架 | 11 个 | 5 个 |
-| `platforms/` 插件 | 4 个 | 1 个（`libqcocoa`） |
+| macOS dmg | 77 MB | **47 MB**（−39%） |
+| macOS app 内覆盖层占盘 | 188 MB | **108 MB** |
+| Linux deb / rpm | 99 MB | **85 MB**（−14%） |
+| Linux AppImage | 144 MB | **136 MB** |
+| 覆盖层符号链接（app 内） | 0 | 0（Tauri 展平，见下） |
+| macOS Qt 框架 | 11 个 | 5 个 |
+| macOS `platforms/` 插件 | 4 个 | 1 个（`libqcocoa`） |
+
+Linux 的收益明显更小，因为安装包里占大头的是 Tauri/WebKit 那一侧，覆盖层只占一部分（覆盖层自身瘦掉 23.8 MB，压缩进 deb/rpm 后是 14 MB）。
 
 实测直接在挂载的 dmg 里启动覆盖层能正常起来（进程存活、stderr 空）。
 
@@ -39,16 +43,16 @@ macOS 构建目录 66.9 MB → 46.9 MB。但**对用户有意义的是 CI 打出
 | Linux 解析 vs 真实 manylinux wheel 文件名 | PASS：11/11 命中，无重复无误伤 |
 | Linux 近似 bundle 端到端 prune + drop + check | PASS：自动删掉 4 个（`libqtuiotouchplugin` / `libqsvgicon` / `libqsvg` / `libqvnc`），0 条残留悬空 |
 
-CI（`gh workflow run Release`，run `37127401083`，GitHub master `657edf8`）——**四个平台第一次跑就抓到一处本机测不出的回归**：
+CI（`gh workflow run Release`）——**第一次跑就抓到一处本机测不出的回归，修完后四平台全绿**：
 
-| job | 结果 |
-| --- | --- |
-| windows-x64 | PASS |
-| macos-arm64 | PASS |
-| macos-x64 | PASS |
-| linux-x64 | **FAIL** → 已修（见下），待复跑确认 |
+| job | run `37127401083`（`657edf8`） | run `37128207057`（`7ae3aa1`） |
+| --- | --- | --- |
+| windows-x64 | PASS | PASS |
+| macos-arm64 | PASS | PASS |
+| macos-x64 | PASS | PASS |
+| linux-x64 | **FAIL** | **PASS** |
 
-Linux 的失败不在覆盖层构建（那一步 CI 打印的正是 `扫描 148 个二进制，新增悬空 4 条`，与本机预测一致），而在其后的 AppImage 打包：`linuxdeploy` 解析 AppDir 的 `DT_NEEDED` 时撞上被删的 `libQt5Svg.so.5` 直接中止。修法是 `drop_broken_referrers()`——把「被我们的精简删到加载不了」的文件一并删掉；本机重跑后 macOS 自动删 3 个、Linux 近似 bundle 自动删 4 个，均 0 条残留。
+Linux 的失败不在覆盖层构建（那一步 CI 打印的正是 `扫描 148 个二进制，新增悬空 4 条`，与本机预测一致），而在其后的 AppImage 打包：`linuxdeploy` 解析 AppDir 的 `DT_NEEDED` 时撞上被删的 `libQt5Svg.so.5` 直接中止。修法是 `drop_broken_referrers()`——把「被我们的精简删到加载不了」的文件一并删掉；修后 CI 打印 `顺带删掉 4 个 …（不删的话 AppImage 的 linuxdeploy 会因为它们中止）`，正是 `libqtuiotouchplugin.so` / `libqsvgicon.so` / `libqsvg.so` / `libqvnc.so`，与本机近似 bundle 的预测逐条一致，随后 `悬空引用校验：扫描 144 个二进制，没有新增悬空引用`，AppImage 正常打出。
 
 独立复评（另一个 agent，未参与实现）复核通过：T1–T7 逐条达标、0 条 critical；它自行复现了 FAT 解析结果与 `otool -L` 完全一致、ELF 的 `DT_NEEDED`/`RPATH` 正确、Windows 覆盖零缺失，以及 `libqcocoa` 的 `@rpath/QtPrintSupport` 确实解析到实存文件。
 
@@ -191,5 +195,5 @@ macOS 的清单能在本机真机验证，Linux 不行（本机无 Linux、无 D
 - [x] T5: 真机验证 macOS 产物 — acceptance: 瘦身后产物启动成功（进程存活、stderr 无输出），关键二进制逐个 dlopen 成功 (covers: S2; depends: T2, T4)
 - [x] T6: 修 `copytree` 不保留符号链接导致的构建目录体积虚高（macOS 上 66.9 MB 被撑到 133 MB）— acceptance: 构建目录保留 24 个符号链接，`dir_size` 与 `du -sh` 一致 (covers: S2; depends: T2)
 - [x] T7: 清单失效时不静默：布局不是 `PyQt5/Qt5`、或解析结果零命中时直接让构建失败 — acceptance: 造出旧布局 `PyQt5/Qt/lib` 与「目录在但零命中」两种情况都触发失败并给出可操作的缘由 (covers: S2; depends: T1)
-- [ ] T8: 自动删掉被精简删到加载不了的文件（`drop_broken_referrers`），修 Linux 上 AppImage 打包失败 — acceptance: 本机 macOS 自动删 3 个、Linux 近似 bundle 自动删 4 个且 0 条残留；CI 的 linux-x64 job 转绿 (covers: S2; depends: T4)
-- [ ] T9: 用真流水线确认交付形态 — acceptance: `gh workflow run Release` 四平台绿；macos-x64 的 dmg 从 77 MB 降到 47 MB；挂载 dmg 后覆盖层无符号链接（Tauri 展平）且能启动 (covers: S2; depends: T2, T6)
+- [x] T8: 自动删掉被精简删到加载不了的文件（`drop_broken_referrers`），修 Linux 上 AppImage 打包失败 — acceptance: 本机 macOS 自动删 3 个、Linux 近似 bundle 自动删 4 个且 0 条残留；CI 的 linux-x64 job 转绿 (covers: S2; depends: T4)
+- [x] T9: 用真流水线确认交付形态 — acceptance: `gh workflow run Release` 四平台绿；macos-x64 的 dmg 从 77 MB 降到 47 MB；挂载 dmg 后覆盖层无符号链接（Tauri 展平）且能启动 (covers: S2; depends: T2, T6)
