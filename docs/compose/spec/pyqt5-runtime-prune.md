@@ -1,14 +1,52 @@
 ---
 feature: pyqt5-runtime-prune
-status: in-progress
+status: delivered
 updated: 2026-10-03
 branch: feat/pyqt5-runtime-prune
-commits:
+commits: a10d15d..6154fb7
 ---
 
 # PyQt5 Runtime Prune
 
 ## Report
+
+**What was built** — `scripts/build-overlay.py` 的运行时瘦身从「只有 Windows 生效」推到三平台。要删什么是一份平台无关的语义清单（`DROP_QT_MODULES` / `DROP_PLUGIN_FILES` / `DROP_QT_DIRS` / `DROP_EXTRA_FILES` / `DROP_QT_MODULES_KEEP`），各平台解析成真实路径：Windows 的 `PyQt5/Qt5/bin/Qt5<M>.dll`、Linux 的 `libQt5<M>.so*`、macOS 的整目录 `Qt<M>.framework` 加 PyInstaller 在 `_internal` 根上生成的符号链接（非 Windows 的插件还带 `lib` 前缀）。macOS 必须留 `QtPrintSupport`——`libqcocoa.dylib` 强链接它，删掉之后平台插件加载失败、应用根本起不来。打包后新增一道悬空引用校验（Mach-O load commands / ELF `DT_NEEDED`，纯 Python 按魔数解析，不依赖 `otool`/`readelf`/`ldd`），只报瘦身新增的悬空引用，并分「致命 / 可选插件」两级。`prune()` 开头另加两道断言，保证清单失效时是硬失败而不是静默放过。
+
+macOS 实测 66.9 MB → 47.1 MB。过程中还修掉一个原先只在 macOS 上才暴露的问题：`shutil.copytree()` 默认展开符号链接，而 PyInstaller 在 macOS 上用链接指向框架里的真身，展开后一份 Qt 二进制在产物里存三份，66.9 MB 被撑到 133 MB——瘦身省下的量还不够填这个坑。
+
+**Verification** — 以下均为本机实际执行（macOS x86_64，PyInstaller 6.11.1 + PyQt5 5.15.11）。
+
+| 命令 | 结果 |
+| --- | --- |
+| `python -m py_compile scripts/build-overlay.py` | PASS |
+| `python scripts/build-overlay.py` | PASS：瘦身前 66.9 MB / 删掉 19.8 MB / 最终 47.1 MB；悬空校验「致命 0，可选插件 3」；架构校验 x86_64 |
+| `du -sh src-tauri/binaries/screenshot_overlay` | PASS：47M，24 个符号链接 |
+| 启动冒烟（后台起产物、4 s 后确认存活、kill） | PASS：进程存活，stdout 与 stderr 均空 |
+| 逐个 dlopen（`libqcocoa` / `libqmacstyle` / `libqjpeg` / `QtWidgets.abi3.so` / `QtCore.abi3.so`，各自独立进程） | PASS 5/5 |
+| 负面测试：`DROP_QT_MODULES_KEEP` 置空后重建 | PASS：被拦下并指名 `libqcocoa.dylib --@rpath/QtPrintSupport--> 缺失` |
+| 两道布局断言的触发测试（旧布局 / 零命中） | PASS：都被拦下，信息点明原因与出路 |
+| Windows 解析等价性 vs 旧 `PRUNE_FILES_WINDOWS`/`PRUNE_DIRS_WINDOWS` | PASS：16 文件 + 8 目录零缺失，新增 2 个同类模块，无重复 |
+| Linux 解析 vs 真实 manylinux wheel 文件名 | PASS：11/11 命中，无重复无误伤 |
+| Linux 近似 bundle 端到端 prune + check | PASS：致命 0、可选插件提示 4 条；1025 条基线悬空被差集全部抵消 |
+
+独立复评（另一个 agent，未参与实现）复核通过：T1–T7 逐条达标、0 条 critical；它自行复现了 FAT 解析结果与 `otool -L` 完全一致、ELF 的 `DT_NEEDED`/`RPATH` 正确、Windows 覆盖零缺失，以及 `libqcocoa` 的 `@rpath/QtPrintSupport` 确实解析到实存文件。
+
+**未验证的风险（merge 前值得看一眼）**
+
+- **Tauri 打包环节没验。** 本机没有 cargo/rustc，跑不了 `tauri build`。覆盖层是作为 Tauri resource 分发的（`src-tauri/tauri.conf.json`），改动前那个目录零符号链接，现在有 24 个。若 bundler 展开链接，安装包里的覆盖层回到约 91.6 MB（仍远好于改动前的 ~133 MB）；若 bundler 丢链接，覆盖层起不来。跑一次 `tauri build` 看安装包体积即可判定。
+- **Windows / Linux 没有真机证据。** 两边结论都来自静态推导 + 校验器：Windows 靠与旧清单逐条比对，Linux 靠真实 manylinux wheel 的文件名加按 PyInstaller `_modules_info` 拼出的近似 bundle。真机结论由 CI 的 windows / ubuntu job 兜底。
+- **Windows 新增的两个删除项**（`Qt5WebSockets.dll` / `Qt5QmlWorkerScript.dll`）**没有 PE 校验兜底**——悬空引用校验跳过 PE。这两个与旧清单里已删的那些同类（由 `qwebgl.dll` 反向链接引入），但没有在真机重测。
+- `_internal` 之外的主可执行文件不参与扫描（macOS 实测它只链系统库）。
+- 解析器对损坏输入的健壮性没做（`_cstr` 在无 NUL 时抛 `ValueError`、FAT 头的 `nfat_arch` 是无界循环）。只在人为截断/伪造的二进制上触发，正常构建产物不会。
+- 布局断言假定用的是 PyPI 版 PyQt5。本地用发行版（apt 等）PyQt5 的人会直接失败而不是静默不瘦身——这是有意的，错误信息里给了出路。
+
+**Journey log**
+
+1. **直接照搬 Windows 清单会发出一个起不来的 macOS 包。** 第一版按「macOS 就是 Windows 的路径换个名字」写，悬空校验当场指出 `libqcocoa.dylib --@rpath/QtPrintSupport--> 缺失`。先用 `otool -L` 确认不是弱链接，再在独立进程里 dlopen 复现 `Library not loaded: @rpath/QtPrintSupport`，才定下 `DROP_QT_MODULES_KEEP = {"Darwin": {"PrintSupport"}}`。校验器第一次运行就赚回了自己。
+2. **「平台插件一律算致命」这个初版分级太粗**，被 `libqvnc.so` 打回来：它也在 `plugins/platforms/` 下，也链接 `libQt5Network`，Linux 构建会被自己的清单拦下。改成只把 `REQUIRED_PLATFORM_PLUGIN`（各平台唯一必需的那个）算致命。
+3. **第一次的 Linux 端到端模拟不成立。** 我删的是整个 wheel，而真实 bundle 只含 PyInstaller 收进去的子集，于是 `libQt5Quick3D` 这类不在产物里的库也被算成悬空、报出 69 条假致命。改成先按 `_modules_info` 推出「实际会被收集的文件」再拼 bundle，才拿到可用结论。**模拟的边界必须和真实产物的边界对齐，否则结论全废。**
+4. **`shutil.copytree()` 默认 `symlinks=False`。** macOS 上把 48 个链接展开成实体副本，66.9 MB 变 133 MB，差点让整件事变成负收益；同一原因让 `dir_size()` 跟随链接把同一份二进制算好几遍，「瘦身前 133.2 MB」那个假数字就出自这里。只做 Windows 时两者都不会暴露。
+5. **悬空校验必须做「瘦身前后差集」。** Linux 侧基线就有 1025 条悬空（`$ORIGIN` 展开后落在 bundle 内的系统库名，如 `libc.so.6`）。不做差集全是假失败，校验形同虚设。
 
 ## [S1] Problem
 
@@ -111,6 +149,7 @@ macOS 的清单能在本机真机验证，Linux 不行（本机无 Linux、无 D
 
 - 只动 `scripts/build-overlay.py`，不改 CI workflow、不改 `tauri.*.conf.json`、不改覆盖层 Python 脚本。
 - 瘦身逻辑仍然是「打包后删文件」，不引入 PyInstaller spec/`TOC` 层的过滤。
+- `prune()` 的两道布局断言（`PyQt5/Qt5` 必须是目录、解析结果至少命中一条）假定用的是 **PyPI 版 PyQt5**。本地用发行版（apt 等）装的 PyQt5 其 Qt 库不在 `site-packages`、会被 PyInstaller 平铺到 `_internal` 根下，这时会硬失败而不是静默不瘦身——有意为之，错误信息里给了出路。
 
 ## [S3] Out of Scope
 
@@ -128,3 +167,4 @@ macOS 的清单能在本机真机验证，Linux 不行（本机无 Linux、无 D
 - [x] T4: 加构建期悬空引用校验（Mach-O / ELF，纯 Python，致命 / 可选分级）— acceptance: 正常清单下构建通过；瘦身前就存在的悬空引用（Linux 实测 1025 条）不报错；必需的平台插件悬空会失败 (covers: S2; depends: T2, T3)
 - [x] T5: 真机验证 macOS 产物 — acceptance: 瘦身后产物启动成功（进程存活、stderr 无输出），关键二进制逐个 dlopen 成功 (covers: S2; depends: T2, T4)
 - [x] T6: 修 `copytree` 不保留符号链接导致的体积膨胀（macOS 上 66.9 MB 被撑到 133 MB）— acceptance: 产物保留 24 个符号链接，`dir_size` 与 `du -sh` 一致 (covers: S2; depends: T2)
+- [x] T7: 清单失效时不静默：布局不是 `PyQt5/Qt5`、或解析结果零命中时直接让构建失败 — acceptance: 造出旧布局 `PyQt5/Qt/lib` 与「目录在但零命中」两种情况都触发失败并给出可操作的缘由 (covers: S2; depends: T1)
