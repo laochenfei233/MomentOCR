@@ -10,16 +10,15 @@
 
 import json
 import sys
-from importlib.metadata import PackageNotFoundError, version
+from importlib.metadata import version
 
 DEFAULT_PACKAGES = ("rapidocr", "onnxruntime", "paddleocr", "paddlepaddle")
 
 
 def installed_version(package):
+    # 没装（PackageNotFoundError）和探测本身出错，对调用方都一样：当作没有版本
     try:
         return version(package)
-    except PackageNotFoundError:
-        return ""
     except Exception:
         return ""
 

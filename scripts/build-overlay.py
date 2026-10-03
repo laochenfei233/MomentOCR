@@ -136,14 +136,14 @@ def executable_name() -> str:
     return f"{TARGET_NAME}.exe" if platform.system() == "Windows" else TARGET_NAME
 
 
-def build(script: Path, out: Path, name: str = TARGET_NAME) -> Path:
+def build(script: Path, out: Path) -> Path:
     """打包 + （Windows）瘦身，返回产物目录（可执行文件与 _internal 同级）。"""
     use_utf8_stdout()
     shutil.rmtree(WORK, ignore_errors=True)
     WORK.mkdir(parents=True, exist_ok=True)
 
     cmd = [
-        sys.executable, "-m", "PyInstaller", "--noconfirm", "--onedir", "--name", name,
+        sys.executable, "-m", "PyInstaller", "--noconfirm", "--onedir", "--name", TARGET_NAME,
         "--workpath", str(WORK / "work"), "--distpath", str(WORK / "dist"),
         "--specpath", str(WORK),
     ]
@@ -161,7 +161,7 @@ def build(script: Path, out: Path, name: str = TARGET_NAME) -> Path:
         print(result.stderr[-3000:])
         raise SystemExit(result.returncode)
 
-    built = WORK / "dist" / name
+    built = WORK / "dist" / TARGET_NAME
     internal = built / "_internal"
     before = dir_size(built)
     removed = 0
