@@ -111,7 +111,7 @@ impl Component {
         }
     }
 
-    /// 判断「装没装」的标志物（相对 site 目录）
+    /// 判断「装没装」的标志物（相对 site 目录）。取值同时也是界面展示版本用的包名
     fn marker(self) -> &'static str {
         match self {
             Component::Ocr => "rapidocr",
@@ -124,14 +124,6 @@ impl Component {
         match self {
             Component::Ocr => "ocr_selftest.py",
             Component::Screenshot => "screenshot_selftest.py",
-        }
-    }
-
-    /// 界面上展示该组件版本的包名
-    fn version_package(self) -> &'static str {
-        match self {
-            Component::Ocr => "rapidocr",
-            Component::Screenshot => "PyQt5",
         }
     }
 
@@ -333,7 +325,7 @@ pub fn status(app: &AppHandle) -> Status {
         ComponentStatus {
             installed,
             version: if installed {
-                versions.get(component.version_package()).cloned().unwrap_or_default()
+                versions.get(component.marker()).cloned().unwrap_or_default()
             } else {
                 String::new()
             },
@@ -354,18 +346,6 @@ pub fn status(app: &AppHandle) -> Status {
         screenshot: component_status(Component::Screenshot),
         runtime_bytes: layout.as_ref().map(|l| l.size()).unwrap_or(0),
     }
-}
-
-/// 私有运行时的全局占用（用于「移除运行时」这类提示）
-pub fn remove(app: &AppHandle) -> Result<u64> {
-    let layout = Layout::resolve(app)?;
-    if !layout.root.exists() {
-        return Ok(0);
-    }
-    let freed = layout.size();
-    std::fs::remove_dir_all(&layout.root)
-        .with_context(|| format!("删除 {} 失败（可能仍被占用）", layout.root.display()))?;
-    Ok(freed)
 }
 
 /// 只移除某个组件：按清单删它装的文件，一个组件都不剩时连运行时一起删。
@@ -898,10 +878,9 @@ async fn download(
     dest: &Path,
     mut on_progress: impl FnMut(u64, u64),
 ) -> Result<()> {
-    use futures_util::StreamExt;
     use tokio::io::AsyncWriteExt;
 
-    let response = client
+    let mut response = client
         .get(url)
         .send()
         .await
@@ -914,10 +893,8 @@ async fn download(
         std::fs::create_dir_all(parent)?;
     }
     let mut file = tokio::fs::File::create(dest).await?;
-    let mut stream = response.bytes_stream();
     let mut done = 0u64;
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk?;
+    while let Some(chunk) = response.chunk().await? {
         file.write_all(&chunk).await?;
         done += chunk.len() as u64;
         on_progress(done, total);

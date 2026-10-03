@@ -14,7 +14,7 @@ pub fn set_resource_dir(dir: PathBuf) {
 }
 
 /// 随包分发的截图覆盖层：自带 Python 运行时的 PyQt5 程序。
-/// 由 `scripts/build-overlay.py` 生成，Windows 包通过 `tauri.windows.conf.json` 带上。
+/// 由 `scripts/build-overlay.py` 生成，由 tauri.conf.json 的 bundle.resources 随包发布。
 #[cfg(windows)]
 const OVERLAY_BINARY: &str = "binaries/screenshot_overlay/screenshot_overlay.exe";
 #[cfg(not(windows))]
@@ -252,7 +252,7 @@ mod tests {
     use super::*;
 
     /// 安装版把覆盖层放在 <安装目录>/binaries/screenshot_overlay/ 下
-    /// （见 tauri.windows.conf.json 与 NSIS 脚本里的 $INSTDIR 路径），
+    /// （见 tauri.conf.json 的 bundle.resources 与 NSIS 脚本里的 $INSTDIR 路径），
     /// 这里造一份同样的目录结构，确认查找逻辑能命中。
     #[test]
     fn finds_bundled_overlay_in_resource_dir() {

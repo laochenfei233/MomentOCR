@@ -1,12 +1,8 @@
 mod api;
 mod local_engine;
-mod screenshot;
 mod overlay;
-mod paddleocr;
-mod rapidocr;
 mod recognizer;
 
-use screenshot::ScreenshotManager;
 use overlay::{OverlayManager, OverlayResult};
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
@@ -15,7 +11,6 @@ use tauri::{
 };
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
-use chrono::Local;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -132,26 +127,6 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
 }
 
 #[tauri::command]
-fn get_screenshot_base64() -> Result<String, String> {
-    let path = ScreenshotManager::get_last_screenshot().ok_or("No screenshot")?;
-    let data = std::fs::read(&path).map_err(|e| e.to_string())?;
-    use base64::Engine;
-    Ok(base64::engine::general_purpose::STANDARD.encode(&data))
-}
-
-#[tauri::command]
-fn copy_image_to_clipboard(_path: String) -> Result<(), String> { Ok(()) }
-
-#[tauri::command]
-async fn save_screenshot_dialog() -> Result<String, String> {
-    let screenshot_path = ScreenshotManager::get_last_screenshot().ok_or("没有截图")?;
-    let desktop = dirs::desktop_dir().ok_or("无法获取桌面路径")?;
-    let save_path = desktop.join(format!("screenshot_{}.png", Local::now().format("%Y%m%d_%H%M%S")));
-    std::fs::copy(&screenshot_path, &save_path).map_err(|e| e.to_string())?;
-    Ok(save_path.to_string_lossy().to_string())
-}
-
-#[tauri::command]
 fn select_image_files() -> Result<Vec<String>, String> {
     let paths = rfd::FileDialog::new()
         .add_filter("图片文件", &["png", "jpg", "jpeg", "gif", "webp", "bmp"])
@@ -176,7 +151,9 @@ fn save_temp_files(file_names: Vec<String>, file_data: Vec<Vec<u8>>) -> Result<V
 
 #[tauri::command]
 async fn ocr_paddleocr(app: tauri::AppHandle, image_path: String) -> Result<String, String> {
-    let r = tokio::task::spawn_blocking(move || paddleocr::recognize(&app, &image_path)).await;
+    let r = tokio::task::spawn_blocking(move || {
+        recognizer::run_script(&app, "paddleocr_recognize.py", &image_path)
+    }).await;
     match r { Ok(Ok(t)) => Ok(t), Ok(Err(e)) => Err(e.to_string()), Err(e) => Err(e.to_string()) }
 }
 
@@ -216,29 +193,25 @@ fn remove_local_component(app: tauri::AppHandle, component: String) -> Result<St
 }
 
 #[tauri::command]
-fn remove_local_runtime(app: tauri::AppHandle) -> Result<String, String> {
-    let freed = local_engine::remove(&app).map_err(|e| e.to_string())?;
-    Ok(format!("已移除本地运行时，释放 {:.0} MB", freed as f64 / 1_048_576.0))
-}
-
-#[tauri::command]
 async fn ocr_rapidocr(app: tauri::AppHandle, image_path: String) -> Result<String, String> {
-    let r = tokio::task::spawn_blocking(move || rapidocr::recognize(&app, &image_path)).await;
+    let r = tokio::task::spawn_blocking(move || {
+        recognizer::run_script(&app, "rapidocr_recognize.py", &image_path)
+    }).await;
     match r { Ok(Ok(t)) => Ok(t), Ok(Err(e)) => Err(e.to_string()), Err(e) => Err(e.to_string()) }
 }
 #[tauri::command]
 async fn ocr_openai(api_key: String, image_path: String, model: String, max_tokens: u32) -> Result<String, String> {
-    let b64 = ScreenshotManager::image_to_base64(&image_path).map_err(|e| e.to_string())?;
+    let b64 = api::image_to_base64(&image_path).map_err(|e| e.to_string())?;
     api::call_openai_vision(&api_key, &b64, &model, max_tokens).await.map_err(|e| e.to_string())
 }
 #[tauri::command]
 async fn ocr_ollama(endpoint: String, model: String, image_path: String) -> Result<String, String> {
-    let b64 = ScreenshotManager::image_to_base64(&image_path).map_err(|e| e.to_string())?;
+    let b64 = api::image_to_base64(&image_path).map_err(|e| e.to_string())?;
     api::call_ollama(&endpoint, &model, &b64).await.map_err(|e| e.to_string())
 }
 #[tauri::command]
 async fn ocr_custom_vision(base_url: String, api_key: String, model: String, image_path: String, max_tokens: u32) -> Result<String, String> {
-    let b64 = ScreenshotManager::image_to_base64(&image_path).map_err(|e| e.to_string())?;
+    let b64 = api::image_to_base64(&image_path).map_err(|e| e.to_string())?;
     api::call_custom_vision(&base_url, &api_key, &model, &b64, max_tokens).await.map_err(|e| e.to_string())
 }
 #[tauri::command]
@@ -255,7 +228,7 @@ async fn list_models(base_url: String, api_key: String, provider: String) -> Res
 }
 #[tauri::command]
 async fn ocr_claude(base_url: String, api_key: String, model: String, image_path: String, max_tokens: u32) -> Result<String, String> {
-    let b64 = ScreenshotManager::image_to_base64(&image_path).map_err(|e| e.to_string())?;
+    let b64 = api::image_to_base64(&image_path).map_err(|e| e.to_string())?;
     api::call_claude_vision(&base_url, &api_key, &model, &b64, max_tokens).await.map_err(|e| e.to_string())
 }
 #[tauri::command]
@@ -331,12 +304,6 @@ fn register_shortcuts(app: tauri::AppHandle, shortcuts: HashMap<String, String>)
 }
 
 #[tauri::command]
-fn unregister_all_shortcuts(app: tauri::AppHandle) -> Result<(), String> {
-    app.global_shortcut().unregister_all().map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-#[tauri::command]
 fn clear_temp_cache() -> Result<String, String> {
     use std::fs;
     let t = std::env::temp_dir().join("moment_ocr");
@@ -367,13 +334,11 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
-            start_screenshot_overlay, get_screenshot_base64, copy_image_to_clipboard,
-            save_screenshot_dialog, select_image_files, save_temp_files,
+            start_screenshot_overlay, select_image_files, save_temp_files,
             ocr_paddleocr, ocr_rapidocr, get_local_components_status, install_local_component, remove_local_component,
-            remove_local_runtime,
             ocr_openai, ocr_ollama, translate_google, translate_custom, translate_claude,
             ocr_custom_vision, ocr_claude, list_models, set_autostart, get_autostart, clear_temp_cache,
-            register_shortcuts, unregister_all_shortcuts, set_tray_behavior, quit_app
+            register_shortcuts, set_tray_behavior, quit_app
         ])
         .setup(|app| {
             // 注入资源目录：安装版把 OCR/截图脚本随包发布到此处（见 tauri.conf.json 的 bundle.resources）

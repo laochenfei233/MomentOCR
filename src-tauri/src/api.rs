@@ -2,108 +2,14 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::fs;
 
-// OpenAI Vision API
+// OpenAI Vision API：它就是 OpenAI 的兼容接口，和 call_custom_vision 只差固定的 base_url
 pub async fn call_openai_vision(
     api_key: &str,
     image_base64: &str,
     model: &str,
     max_tokens: u32,
 ) -> Result<String, anyhow::Error> {
-    let client = Client::new();
-
-    #[derive(Serialize)]
-    struct ImageUrl {
-        url: String,
-    }
-
-    #[derive(Serialize)]
-    struct ImageContent {
-        #[serde(rename = "type")]
-        content_type: String,
-        image_url: ImageUrl,
-    }
-
-    #[derive(Serialize)]
-    struct TextContent {
-        #[serde(rename = "type")]
-        content_type: String,
-        text: String,
-    }
-
-    #[derive(Serialize)]
-    struct Message {
-        role: String,
-        content: serde_json::Value,
-    }
-
-    #[derive(Serialize)]
-    struct RequestBody {
-        model: String,
-        messages: Vec<Message>,
-        max_tokens: u32,
-    }
-
-    let image_content = ImageContent {
-        content_type: "image_url".to_string(),
-        image_url: ImageUrl {
-            url: format!("data:image/png;base64,{}", image_base64),
-        },
-    };
-
-    let text_content = TextContent {
-        content_type: "text".to_string(),
-        text: "Please extract all text from this image and return it as-is. If the text appears to be in a specific language, just return the original text without translation.".to_string(),
-    };
-
-    let content_array = serde_json::json!([
-        image_content,
-        text_content
-    ]);
-
-    let message = Message {
-        role: "user".to_string(),
-        content: content_array,
-    };
-
-    let body = RequestBody {
-        model: model.to_string(),
-        messages: vec![message],
-        max_tokens,
-    };
-
-    let response = client
-        .post("https://api.openai.com/v1/chat/completions")
-        .header("Authorization", format!("Bearer {}", api_key))
-        .header("Content-Type", "application/json")
-        .json(&body)
-        .send()
-        .await?;
-
-    let response_text = response.text().await?;
-
-    #[derive(Deserialize)]
-    struct Choice {
-        message: ChoiceMessage,
-    }
-
-    #[derive(Deserialize)]
-    struct ChoiceMessage {
-        content: String,
-    }
-
-    #[derive(Deserialize)]
-    struct OpenAIResponse {
-        choices: Vec<Choice>,
-    }
-
-    let parsed: OpenAIResponse = serde_json::from_str(&response_text)
-        .map_err(|e| anyhow::anyhow!("Failed to parse OpenAI response: {}. Response: {}", e, response_text))?;
-
-    parsed
-        .choices
-        .first()
-        .map(|c| c.message.content.clone())
-        .ok_or_else(|| anyhow::anyhow!("No choices in OpenAI response"))
+    call_custom_vision("https://api.openai.com/v1", api_key, model, image_base64, max_tokens).await
 }
 
 // Ollama API

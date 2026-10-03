@@ -42,7 +42,8 @@
       "icons/icon.ico"
     ],
     "resources": [
-      "scripts/*.py"
+      "scripts/*.py",
+      "binaries/screenshot_overlay/"
     ],
     "windows": {
       "nsis": {
