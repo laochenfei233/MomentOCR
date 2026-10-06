@@ -233,6 +233,26 @@ def test_paint_marks_the_handles_that_make_resizing_discoverable():
 
 
 @case
+def test_degenerate_selection_is_refused_instead_of_cropping_the_whole_screen():
+    """把左边把手拖到与右边重合：选区宽变成 0。
+
+    QPixmap.copy 在宽/高为 0 时返回的是**整张画布**（实测），不拦住就会把整个虚拟
+    桌面当成识别结果送出去。评审就是这么发现这条的。
+    """
+    o = make_overlay()
+    drag(o, (50, 50), (250, 250))
+    assert o.get_selection_rect() == (50, 50, 200, 200)
+
+    assert o.hit_test(QPoint(50, 150)) == 'l', o.hit_test(QPoint(50, 150))
+    drag(o, (50, 150), (250, 150))
+    assert o.get_selection_rect() == (250, 50, 0, 200), o.get_selection_rect()
+
+    with Capture() as cap:
+        o.do_ocr()
+    assert cap.lines == [], "零宽选区不该产出任何结果：%r" % (cap.lines,)
+
+
+@case
 def test_escape_cancels():
     o = make_overlay()
     with Capture() as cap:

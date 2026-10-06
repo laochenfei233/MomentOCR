@@ -6,6 +6,14 @@ import { useOcrStore } from '../stores/ocrStore';
 import { useSettingsStore } from '../stores/settingsStore';
 import { runOcr } from '../plugins';
 
+/**
+ * 把主窗口显示 + 取消最小化 + 置顶夺焦点（实现在原生侧，见 Rust 的 focus_main_window）。
+ * 失败不处理：这只是「让用户看见结果」，做不到也不该影响识别本身。
+ */
+function focusMain() {
+  return invoke('focus_main_window').catch(() => {});
+}
+
 function ScreenshotTool() {
   const { isCapturing, setCapturing } = useScreenshotStore();
   const { setProcessing, setResult, addToHistory } = useOcrStore();
@@ -46,23 +54,20 @@ function ScreenshotTool() {
     } catch (err) {
       setError(String(err));
       setCapturing(false);
-      // 失败时恢复窗口
-      if (screenshot.hideMainWindow) {
-        try { await invoke('focus_main_window'); } catch {}
-      }
+      await focusMain();
     }
   }, [setCapturing, screenshot.hideMainWindow]);
 
   useEffect(() => {
+    // 三种收尾都无条件把主窗口拉到前台。原先这几处挂在 hideMainWindow 上，可那个设置只管
+    // 「截图前要不要先把窗口藏起来」：关掉它时窗口即使被缩到托盘最小化，结果出来也不会回到
+    // 前台，用户根本看不到这次识别。取消/错误一并统一，顺带省掉三个分支。
     const unlisten1 = listen<string>('screenshot-cropped', async (event) => {
       const imagePath = event.payload;
       setCaptureSuccess(true);
       setCapturing(false);
       setTimeout(() => setCaptureSuccess(false), 1500);
-      // 截图后恢复主窗口
-      if (screenshot.hideMainWindow) {
-        try { await invoke('focus_main_window'); } catch {}
-      }
+      focusMain();
       // 按设置决定是否自动识别
       if (screenshot.autoRecognize) {
         await doOcr(imagePath);
@@ -70,20 +75,16 @@ function ScreenshotTool() {
     });
     const unlisten2 = listen('screenshot-cancel', async () => {
       setCapturing(false);
-      if (screenshot.hideMainWindow) {
-        try { await invoke('focus_main_window'); } catch {}
-      }
+      focusMain();
     });
     const unlisten3 = listen<string>('screenshot-error', async (event) => {
       setError(event.payload);
       setCapturing(false);
-      if (screenshot.hideMainWindow) {
-        try { await invoke('focus_main_window'); } catch {}
-      }
+      focusMain();
     });
     const unlisten4 = listen('screenshot-triggered', () => handleScreenshot());
     return () => { unlisten1.then(fn => fn()); unlisten2.then(fn => fn()); unlisten3.then(fn => fn()); unlisten4.then(fn => fn()); };
-  }, [handleScreenshot, setCapturing, doOcr, screenshot.autoRecognize, screenshot.hideMainWindow]);
+  }, [handleScreenshot, setCapturing, doOcr, screenshot.autoRecognize]);
 
   return (
     <div style={{ padding: 12 }}>

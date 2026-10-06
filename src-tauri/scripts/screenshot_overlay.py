@@ -547,6 +547,13 @@ class ScreenshotOverlay(QWidget):
         
         # 裁剪选区：坐标要换算成位图像素，否则截到的是错位且只有一半大小的区域
         sx, sy, sw, sh = self.to_pixmap_rect(x, y, w, h)
+        
+        # 宽或高为 0 时必须拦住：QPixmap.copy 拿到 0 尺寸**返回的是整张图**（实测 800x600
+        # 的画布 copy(250, 50, 0, 200) 仍是 800x600，而且 save() 成功），于是「把左边把手
+        # 拉到与右边重合」会把整个虚拟桌面当识别结果送出去。负数同理。
+        if sw <= 0 or sh <= 0:
+            return
+        
         cropped = self.screenshot_pixmap.copy(sx, sy, sw, sh)
         
         # 保存裁剪结果
