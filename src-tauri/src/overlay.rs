@@ -124,6 +124,8 @@ pub const MISSING_HINT: &str =
 
 pub struct OverlayManager {
     target: OverlayTarget,
+    /// 框选松开鼠标直接识别（不显示工具栏）。传给覆盖层进程 —— 它读不到 webview 的 localStorage。
+    instant: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -133,10 +135,11 @@ pub enum OverlayResult {
 }
 
 impl OverlayManager {
-    pub fn new(app: &tauri::AppHandle) -> Self {
+    pub fn new(app: &tauri::AppHandle, instant: bool) -> Self {
         if let Some(program) = bundled_overlay() {
             return Self {
                 target: OverlayTarget::Bundled(program),
+                instant,
             };
         }
 
@@ -147,11 +150,13 @@ impl OverlayManager {
                 .unwrap_or_else(|| PathBuf::from("screenshot_overlay.py"));
             return Self {
                 target: OverlayTarget::PrivatePython { python, script },
+                instant,
             };
         }
 
         Self {
             target: OverlayTarget::SystemPython(find_script("screenshot_overlay.py")),
+            instant,
         }
     }
 
@@ -175,6 +180,9 @@ impl OverlayManager {
                 cmd
             }
         };
+        if self.instant {
+            cmd.arg("--instant");
+        }
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::piped());
         #[cfg(windows)]
@@ -250,6 +258,27 @@ impl OverlayManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 造一个覆盖层管理器（不碰真实可执行文件查找），取出它会传给子进程的参数。
+    fn overlay_args(instant: bool) -> Vec<String> {
+        OverlayManager {
+            target: OverlayTarget::SystemPython("screenshot_overlay.py".to_string()),
+            instant,
+        }
+        .configure()
+        .get_args()
+        .map(|arg| arg.to_string_lossy().to_string())
+        .collect()
+    }
+
+    /// `--instant` 是 Rust 和覆盖层进程之间唯一的模式约定（Python 侧读
+    /// `'--instant' in sys.argv`）。这条钉住「前端设置 → 覆盖层命令行」这一段：
+    /// 名字写错、忘了透传，都会在这里失败，而 Python 侧的自测覆盖不到它。
+    #[test]
+    fn instant_flag_is_passed_to_overlay() {
+        assert!(overlay_args(true).iter().any(|arg| arg == "--instant"));
+        assert!(!overlay_args(false).iter().any(|arg| arg == "--instant"));
+    }
 
     /// 安装版把覆盖层放在 <安装目录>/binaries/screenshot_overlay/ 下
     /// （见 tauri.conf.json 的 bundle.resources 与 NSIS 脚本里的 $INSTDIR 路径），

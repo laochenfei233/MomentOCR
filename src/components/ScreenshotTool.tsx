@@ -48,7 +48,7 @@ function ScreenshotTool() {
       setCapturing(false);
       // 失败时恢复窗口
       if (screenshot.hideMainWindow) {
-        try { const { getCurrentWindow } = await import('@tauri-apps/api/window'); await getCurrentWindow().show(); } catch {}
+        try { await invoke('focus_main_window'); } catch {}
       }
     }
   }, [setCapturing, screenshot.hideMainWindow]);
@@ -61,7 +61,7 @@ function ScreenshotTool() {
       setTimeout(() => setCaptureSuccess(false), 1500);
       // 截图后恢复主窗口
       if (screenshot.hideMainWindow) {
-        try { const { getCurrentWindow } = await import('@tauri-apps/api/window'); await getCurrentWindow().show(); } catch {}
+        try { await invoke('focus_main_window'); } catch {}
       }
       // 按设置决定是否自动识别
       if (screenshot.autoRecognize) {
@@ -71,14 +71,14 @@ function ScreenshotTool() {
     const unlisten2 = listen('screenshot-cancel', async () => {
       setCapturing(false);
       if (screenshot.hideMainWindow) {
-        try { const { getCurrentWindow } = await import('@tauri-apps/api/window'); await getCurrentWindow().show(); } catch {}
+        try { await invoke('focus_main_window'); } catch {}
       }
     });
     const unlisten3 = listen<string>('screenshot-error', async (event) => {
       setError(event.payload);
       setCapturing(false);
       if (screenshot.hideMainWindow) {
-        try { const { getCurrentWindow } = await import('@tauri-apps/api/window'); await getCurrentWindow().show(); } catch {}
+        try { await invoke('focus_main_window'); } catch {}
       }
     });
     const unlisten4 = listen('screenshot-triggered', () => handleScreenshot());

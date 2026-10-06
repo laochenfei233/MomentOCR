@@ -270,6 +270,8 @@ function Settings({ shortcutIssues = {}, autostartIssue = null }: {
             <SettingsCard title="截图设置">
               <CheckboxItem label="截图时隐藏主窗口" checked={screenshot.hideMainWindow} onChange={(v) => setScreenshot({ hideMainWindow: v })} />
               <CheckboxItem label="截图后自动识别" checked={screenshot.autoRecognize} onChange={(v) => setScreenshot({ autoRecognize: v })} />
+              {/* 老用户的 localStorage 里没有这个键，persist 浅合并后会读到 undefined */}
+              <CheckboxItem label="框选后松开鼠标直接识别（不显示工具栏）" checked={screenshot.instantRecognize ?? false} onChange={(v) => setScreenshot({ instantRecognize: v })} />
             </SettingsCard>
           </div>
         )}

@@ -16,9 +16,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 /// 常驻行为的开关。设置在渲染进程的 localStorage 里，但「关闭窗口」和「点托盘」
 /// 都发生在原生侧，跨 IPC 回读前端状态又要处理前端未就绪的情况，所以镜像一份。
+///
+/// `instant_recognize` 同理：截图覆盖层是独立子进程，三条入口（界面按钮 / 全局快捷键 /
+/// 托盘菜单）里托盘那条完全不过前端，模式只能在原生侧读。
 struct AppState {
     close_to_tray: AtomicBool,
     show_on_tray_click: AtomicBool,
+    /// 截图模式：框选松开鼠标直接识别（不显示工具栏）
+    instant_recognize: AtomicBool,
     /// 正在主动退出。置位后关闭请求不再被拦成「驻留托盘」，
     /// 否则「退出」会被自己的拦截吃掉，软件再也关不掉。
     quitting: AtomicBool,
@@ -31,6 +36,8 @@ impl Default for AppState {
             // 行为不该和设置里显示的反着来
             close_to_tray: AtomicBool::new(true),
             show_on_tray_click: AtomicBool::new(true),
+            // 与设置项默认值（现在的模式）对齐
+            instant_recognize: AtomicBool::new(false),
             quitting: AtomicBool::new(false),
         }
     }
@@ -52,9 +59,10 @@ fn exit_now(app: &tauri::AppHandle) {
 }
 
 fn run_screenshot_overlay(app: &tauri::AppHandle) {
+    let instant = app.state::<AppState>().instant_recognize.load(Ordering::SeqCst);
     let app_handle = app.clone();
     tauri::async_runtime::spawn(async move {
-        let manager = OverlayManager::new(&app_handle);
+        let manager = OverlayManager::new(&app_handle, instant);
         let result = tokio::task::spawn_blocking(move || manager.start_overlay()).await;
         match result {
             Ok(Ok(OverlayResult::Ocr { path })) => { let _ = app_handle.emit("screenshot-cropped", path); }
@@ -76,6 +84,23 @@ fn set_tray_behavior(app: tauri::AppHandle, close_to_tray: bool, show_on_click: 
     let state = app.state::<AppState>();
     state.close_to_tray.store(close_to_tray, Ordering::SeqCst);
     state.show_on_tray_click.store(show_on_click, Ordering::SeqCst);
+}
+
+/// 截图模式由前端推过来并镜像在原生侧（见 AppState 的说明）。
+#[tauri::command]
+fn set_screenshot_mode(app: tauri::AppHandle, instant: bool) {
+    app.state::<AppState>()
+        .instant_recognize
+        .store(instant, Ordering::SeqCst);
+}
+
+/// 把主窗口显示、取消最小化并置顶夺焦点。
+///
+/// 前端只调 `getCurrentWindow().show()` 的话，缩到托盘的最小化窗口不会回到前台，
+/// 用户就看不到这次识别的结果。这里复用托盘那条路径已经在用的 show_main_window()。
+#[tauri::command]
+fn focus_main_window(app: tauri::AppHandle) {
+    show_main_window(&app);
 }
 
 #[tauri::command]
@@ -338,7 +363,7 @@ pub fn run() {
             ocr_paddleocr, ocr_rapidocr, get_local_components_status, install_local_component, remove_local_component,
             ocr_openai, ocr_ollama, translate_google, translate_custom, translate_claude,
             ocr_custom_vision, ocr_claude, list_models, set_autostart, get_autostart, clear_temp_cache,
-            register_shortcuts, set_tray_behavior, quit_app
+            register_shortcuts, set_tray_behavior, set_screenshot_mode, focus_main_window, quit_app
         ])
         .setup(|app| {
             // 注入资源目录：安装版把 OCR/截图脚本随包发布到此处（见 tauri.conf.json 的 bundle.resources）
