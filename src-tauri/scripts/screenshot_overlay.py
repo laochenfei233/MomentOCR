@@ -204,12 +204,29 @@ def hide_from_dock():
         pass
 
 
+# 选区把手的判定容差（像素）：按在边/角这么近的范围内就算抓到了把手
+HANDLE = 6
+
+# 抓在不同部位时给的光标提示，让「松开之后还能拉大」这件事看得出来
+HANDLE_CURSORS = {
+    'lt': Qt.SizeFDiagCursor,
+    'rb': Qt.SizeFDiagCursor,
+    'rt': Qt.SizeBDiagCursor,
+    'lb': Qt.SizeBDiagCursor,
+    'l': Qt.SizeHorCursor,
+    'r': Qt.SizeHorCursor,
+    't': Qt.SizeVerCursor,
+    'b': Qt.SizeVerCursor,
+    'move': Qt.SizeAllCursor,
+}
+
+
 class ScreenshotOverlay(QWidget):
     TOOLBAR_W = 130
     TOOLBAR_H = 36
     GAP = 8
 
-    def __init__(self):
+    def __init__(self, instant=False):
         super().__init__()
         
         self.setWindowFlags(
@@ -238,6 +255,12 @@ class ScreenshotOverlay(QWidget):
         self.selection_end = None
         self.is_selecting = False
         self.toolbar = None
+        # 松手即识别：不显示工具栏，松开鼠标直接裁切出结果
+        self.instant = instant
+        # 正在调整已确定的选区（拖边角放大缩小 / 拖内部平移）
+        self.drag_handle = None
+        self.drag_origin = None
+        self.drag_rect = None
         
         self.setMouseTracking(True)
     
@@ -275,6 +298,13 @@ class ScreenshotOverlay(QWidget):
                 # 尺寸标签
                 painter.setPen(QColor(255, 255, 255))
                 painter.drawText(x + w // 2 - 30, y - 8, f"{w} x {h}")
+                
+                # 四角把手：工具栏还在时选区可以继续调，得让人看得出来
+                if self.toolbar:
+                    painter.setPen(QPen(QColor(0, 122, 255), 1))
+                    painter.setBrush(QColor(255, 255, 255))
+                    for hx, hy in ((x, y), (x + w, y), (x, y + h), (x + w, y + h)):
+                        painter.drawRect(hx - 4, hy - 4, 8, 8)
         
         # 4. 提示文字
         if not self.is_selecting and not self.selection_start:
@@ -284,30 +314,62 @@ class ScreenshotOverlay(QWidget):
         painter.end()
     
     def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton:
-            if self.toolbar:
-                self.toolbar.close()
-                self.toolbar = None
-            self.is_selecting = True
-            self.selection_start = QPoint(event.x(), event.y())
-            self.selection_end = QPoint(event.x(), event.y())
-            self.update()
+        if event.button() != Qt.LeftButton:
+            return
+        
+        # 选区已确定（工具栏还在）时，先看是不是要调整它 —— 不能一按就重新框选，
+        # 否则「拉大一点」会把整个选区作废
+        if self.toolbar:
+            handle = self.hit_test(event.pos())
+            if handle:
+                self.drag_handle = handle
+                self.drag_origin = QPoint(event.x(), event.y())
+                self.drag_rect = self.get_selection_rect()
+                return
+            self.toolbar.close()
+            self.toolbar = None
+        
+        self.is_selecting = True
+        self.selection_start = QPoint(event.x(), event.y())
+        self.selection_end = QPoint(event.x(), event.y())
+        self.update()
     
     def mouseMoveEvent(self, event):
+        if self.drag_handle:
+            self.apply_drag(event.pos())
+            return
+        
         if self.is_selecting:
             self.selection_end = QPoint(event.x(), event.y())
             self.update()
+            return
+        
+        handle = self.hit_test(event.pos()) if self.toolbar else None
+        self.setCursor(HANDLE_CURSORS.get(handle, Qt.CrossCursor))
     
     def mouseReleaseEvent(self, event):
-        if event.button() == Qt.LeftButton and self.is_selecting:
-            self.is_selecting = False
-            rect = self.get_selection_rect()
-            if rect and rect[2] > 10 and rect[3] > 10:
-                self.show_toolbar(rect)
+        if event.button() != Qt.LeftButton:
+            return
+        
+        # 调整结束：选区和工具栏都留着，用户接着还能再拉
+        if self.drag_handle:
+            self.drag_handle = None
+            return
+        
+        if not self.is_selecting:
+            return
+        
+        self.is_selecting = False
+        rect = self.get_selection_rect()
+        if rect and rect[2] > 10 and rect[3] > 10:
+            if self.instant:
+                self.do_ocr()
             else:
-                self.selection_start = None
-                self.selection_end = None
-                self.update()
+                self.show_toolbar(rect)
+        else:
+            self.selection_start = None
+            self.selection_end = None
+            self.update()
     
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_Escape:
@@ -321,6 +383,67 @@ class ScreenshotOverlay(QWidget):
         w = abs(self.selection_end.x() - self.selection_start.x())
         h = abs(self.selection_end.y() - self.selection_start.y())
         return (x, y, w, h)
+
+    def hit_test(self, pos):
+        """按在选区的哪个部位：'move' 平移、'l'/'r'/'t'/'b' 及其组合是边/角把手。
+
+        判定都基于归一化矩形（left/top/right/bottom），所以四个角自然就是两个方向
+        同时命中；容差 HANDLE 让「贴着边按」也能抓到，不必精确压在那 2px 边框上。
+        """
+        rect = self.get_selection_rect()
+        if not rect:
+            return None
+        x, y, w, h = rect
+        left, top, right, bottom = x, y, x + w, y + h
+        px, py = pos.x(), pos.y()
+        
+        if px < left - HANDLE or px > right + HANDLE or py < top - HANDLE or py > bottom + HANDLE:
+            return None
+        
+        near_left = abs(px - left) <= HANDLE
+        near_right = abs(px - right) <= HANDLE
+        near_top = abs(py - top) <= HANDLE
+        near_bottom = abs(py - bottom) <= HANDLE
+        
+        if near_left or near_right or near_top or near_bottom:
+            flags = ('l' if near_left else 'r' if near_right else '')
+            flags += ('t' if near_top else 'b' if near_bottom else '')
+            return flags
+        
+        return 'move' if left < px < right and top < py < bottom else None
+
+    def apply_drag(self, pos):
+        """把拖拽落到选区上：平移整体挪，命中把手则只改对应的边。
+
+        写回用 selection_start / selection_end 这对点，归一化交给 get_selection_rect ——
+        所以把左边拖过右边只是翻转，不会算出负宽。
+        """
+        px, py = pos.x(), pos.y()
+        
+        if self.drag_handle == 'move':
+            x, y, w, h = self.drag_rect
+            left = x + px - self.drag_origin.x()
+            top = y + py - self.drag_origin.y()
+            right, bottom = left + w, top + h
+        else:
+            x, y, w, h = self.drag_rect
+            left, top, right, bottom = x, y, x + w, y + h
+            if 'l' in self.drag_handle:
+                left = px
+            elif 'r' in self.drag_handle:
+                right = px
+            if 't' in self.drag_handle:
+                top = py
+            elif 'b' in self.drag_handle:
+                bottom = py
+        
+        self.selection_start = QPoint(int(left), int(top))
+        self.selection_end = QPoint(int(right), int(bottom))
+        
+        # 工具栏跟着选区走，否则拉大之后按钮会离得很远
+        if self.toolbar:
+            self.toolbar.move(self.toolbar_position(self.get_selection_rect()))
+        self.update()
 
     def to_pixmap_rect(self, x, y, w, h):
         """逻辑坐标（窗口 / 鼠标事件）→ 位图像素矩形 (x, y, w, h)。
@@ -395,7 +518,7 @@ class ScreenshotOverlay(QWidget):
             QPushButton { background: #007AFF; color: white; border: none; border-radius: 4px; font-size: 12px; }
             QPushButton:hover { background: #0066DD; }
         """)
-        ocr_btn.clicked.connect(lambda: self.do_ocr(rect))
+        ocr_btn.clicked.connect(lambda: self.do_ocr())
         
         cancel_btn = QPushButton("取消")
         cancel_btn.setFixedSize(56, 28)
@@ -414,7 +537,12 @@ class ScreenshotOverlay(QWidget):
         # 工具栏是独立顶层窗口，得比覆盖层更高，否则会被定格画面整个盖住
         set_window_level(self.toolbar, TOOLBAR_WINDOW_LEVEL)
     
-    def do_ocr(self, rect):
+    def do_ocr(self):
+        # 现取当前选区，而不是松手那一刻的 rect：工具栏显示期间选区还能被拉大，
+        # 闭包捕获的旧 rect 会让「识别」裁到过期区域
+        rect = self.get_selection_rect()
+        if not rect:
+            return
         x, y, w, h = rect
         
         # 裁剪选区：坐标要换算成位图像素，否则截到的是错位且只有一半大小的区域
@@ -455,7 +583,8 @@ def main():
 
     app = QApplication(sys.argv)
     hide_from_dock()
-    overlay = ScreenshotOverlay()
+    # 模式由 Rust 侧透传：覆盖层是独立进程，读不到前端的 localStorage
+    overlay = ScreenshotOverlay('--instant' in sys.argv)
     overlay.show()
     # 截图先定格（__init__ 里抓的），再抬到系统 UI 之上：顺序反过来没影响，
     # 但抬层级要在 show() 之后，窗口还没创建时 winId() 拿不到 NSWindow。
