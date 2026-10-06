@@ -33,7 +33,7 @@ sys.path.insert(0, str(REPO / "src-tauri" / "scripts"))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt5.QtCore import QEvent, QPoint, Qt  # noqa: E402
-from PyQt5.QtGui import QKeyEvent, QMouseEvent, QPixmap  # noqa: E402
+from PyQt5.QtGui import QColor, QKeyEvent, QMouseEvent, QPixmap  # noqa: E402
 from PyQt5.QtWidgets import QApplication  # noqa: E402
 
 import screenshot_overlay as overlay_mod  # noqa: E402
@@ -86,7 +86,7 @@ def make_overlay(instant=False):
     o = overlay_mod.ScreenshotOverlay(instant=instant)
     o.resize(800, 600)
     o.screenshot_pixmap = QPixmap(o.width(), o.height())
-    o.screenshot_pixmap.fill()
+    o.screenshot_pixmap.fill(Qt.black)   # 固定底色，画出来的像素才可比
     assert o.screenshot_pixmap.width() > 0, "离屏平台下没拿到窗口尺寸"
     return o
 
@@ -206,6 +206,30 @@ def test_tiny_selection_does_nothing_in_either_mode():
         assert cap.lines == [], "5×5 选区不该出结果：%r" % (cap.lines,)
         assert o.toolbar is None, instant
         assert o.get_selection_rect() is None, instant
+
+
+@case
+def test_paint_marks_the_handles_that_make_resizing_discoverable():
+    """paintEvent 里那段画四角把手的代码没有别的入口，只能这样渲染出来看像素。"""
+    o = make_overlay()
+    drag(o, (50, 50), (150, 150))
+    assert o.toolbar is not None
+
+    canvas = QPixmap(o.width(), o.height())
+    canvas.fill(Qt.black)
+    o.render(canvas)
+    with_toolbar = canvas.toImage().pixelColor(50, 50)
+
+    # 同一个选区，把工具栏拿掉：把手就不该再画，角上只剩蓝色选框边
+    o.toolbar.close()
+    o.toolbar = None
+    canvas2 = QPixmap(o.width(), o.height())
+    canvas2.fill(Qt.black)
+    o.render(canvas2)
+    without_toolbar = canvas2.toImage().pixelColor(50, 50)
+
+    assert with_toolbar == QColor(255, 255, 255), with_toolbar.name()
+    assert without_toolbar != with_toolbar, "把手的绘制应由工具栏是否在决定"
 
 
 @case
