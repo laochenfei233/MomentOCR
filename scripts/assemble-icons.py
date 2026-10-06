@@ -8,6 +8,7 @@ Windows 的 16/32/48px 图标直接取这些帧，而不是把 1024 缩下来；
 macOS 的 icns 用 PNG 载荷（Apple 从 10.7 起支持 icp4/icp5 等 PNG 条目）。
 """
 
+import io
 import os
 import struct
 
@@ -43,15 +44,47 @@ def frame(size, mac=False):
 
 
 def write_ico():
-    frames = [frame(size) for size in ICO_SIZES]
+    """自己拼 ICO 目录，不走 Pillow 的 ICO 保存。
+
+    原因：tauri-codegen 生成 default_window_icon 时只读目录的第 0 帧
+    （tauri-codegen/src/image.rs 的 icon_dir.entries()[0]），把那**一帧**转成 RGBA
+    交给窗口和托盘。所以第 0 帧是 16x16 时，运行时图标永远是一张 16px 位图，
+    在 150% 缩放下被系统放大到 24/48px，必然发糊。
+
+    Pillow 的 _save 对 sizes 做 sorted()，写出来必然升序，没法把 256 放到最前，
+    所以这里直接按目标顺序写目录：最大帧置前，其余升序。
+    Windows 是按目录里的尺寸字节挑帧的，与顺序无关，改顺序不影响资源管理器。
+    """
+    order = (256,) + tuple(size for size in ICO_SIZES if size != 256)
+
+    payloads = []
+    for size in order:
+        buf = io.BytesIO()
+        frame(size).save(buf, "png")
+        payloads.append(buf.getvalue())
+
+    header = struct.pack("<HHH", 0, 1, len(order))
+    offset = len(header) + 16 * len(order)
+
+    entries = b""
+    for size, payload in zip(order, payloads):
+        entries += struct.pack(
+            "<BBBBHHII",
+            size if size < 256 else 0,  # 256 在目录里记作 0
+            size if size < 256 else 0,
+            0,                          # 调色板色数：32bpp PNG 载荷不适用
+            0,                          # reserved
+            0,                          # color planes
+            32,                         # bits per pixel
+            len(payload),
+            offset,
+        )
+        offset += len(payload)
+
     path = os.path.join(ICON_DIR, "icon.ico")
-    frames[-1].save(
-        path,
-        format="ICO",
-        sizes=[(s, s) for s in ICO_SIZES],
-        append_images=frames,
-    )
-    print(f"已写入 icon.ico：{ICO_SIZES}")
+    with open(path, "wb") as f:
+        f.write(header + entries + b"".join(payloads))
+    print(f"已写入 icon.ico：{order}（最大帧置前，供运行时窗口/托盘取用）")
 
 
 def write_icns():
