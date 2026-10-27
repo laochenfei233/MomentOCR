@@ -17,7 +17,7 @@ interface ComponentStatus {
   disk_mb: number;
 }
 
-/** 本地组件总览：两个组件共用同一个隔离运行时 */
+/** 本地组件总览：OCR/截图共用隔离运行时，translate（HY-MT 翻译）独立装配 */
 interface ComponentsStatus {
   runtime_installed: boolean;
   runtime_download_mb: number;
@@ -25,6 +25,7 @@ interface ComponentsStatus {
   /** Windows 安装包自带覆盖层，截图组件就不必再下载 */
   screenshot_bundled: boolean;
   screenshot: ComponentStatus;
+  translate: ComponentStatus;
   runtime_bytes: number;
 }
 
@@ -105,7 +106,7 @@ function Settings({ shortcutIssues = {}, autostartIssue = null }: {
     return () => { unlisten.then((fn) => fn()); };
   }, []);
 
-  const installComponent = async (id: 'ocr' | 'screenshot') => {
+  const installComponent = async (id: 'ocr' | 'screenshot' | 'translate') => {
     setEngineBusy(id);
     setEngineMsg((m) => ({ ...m, [id]: null }));
     setEngineProgress({ stage: 'python', percent: 0, detail: '正在准备下载…' });
@@ -121,7 +122,7 @@ function Settings({ shortcutIssues = {}, autostartIssue = null }: {
     }
   };
 
-  const removeComponent = async (id: 'ocr' | 'screenshot', label: string) => {
+  const removeComponent = async (id: 'ocr' | 'screenshot' | 'translate', label: string) => {
     if (!window.confirm(`移除${label}？需要时再重新下载。`)) return;
     setEngineBusy(id);
     setEngineMsg((m) => ({ ...m, [id]: null }));
@@ -395,6 +396,17 @@ function Settings({ shortcutIssues = {}, autostartIssue = null }: {
               <p style={{ fontSize: 12, color: '#8E8E93', marginTop: 8 }}>
                 {translationPlugins.find((p) => p.id === activeTranslationPlugin)?.description}
               </p>
+              {activeTranslationPlugin === 'hymt-translate' && (
+                <TranslateComponentPanel
+                  status={components?.translate ?? null}
+                  busy={engineBusy === 'translate'}
+                  progress={engineBusy === 'translate' ? engineProgress : null}
+                  msg={engineMsg.translate ?? null}
+                  onInstall={() => installComponent('translate')}
+                  onRemove={() => removeComponent('translate', '本地翻译模型')}
+                  onRefresh={refreshComponents}
+                />
+              )}
               {activeTranslationPlugin === 'openai-translate' && (
                 <PluginApiKeyConfig pluginId="openai-translate" listProvider="openai" defaultBaseUrl="https://api.openai.com/v1" fields={[
                   { key: 'apiKey', label: 'API Key', required: true },
@@ -857,6 +869,75 @@ function LocalComponentPanel({ id, title, description, status, bundled, runtimeI
           {description} 按需下载：约 {status?.download_mb ?? 0} MB
           {runtimeInstalled ? '' : `，首次还需下载共享运行时约 ${runtimeDownloadMb} MB`}
           ，磁盘约 {status?.disk_mb ?? 0} MB，不改动也不需要系统里预先装 Python。
+        </p>
+      ))}
+    </div>
+  );
+}
+
+/** 本地翻译（HY-MT）的安装面板：装配线不依赖 Python 运行时，文案与 LocalComponentPanel 分开 */
+function TranslateComponentPanel({ status, busy, progress, msg, onInstall, onRemove, onRefresh }: {
+  status: ComponentStatus | null;
+  busy: boolean;
+  progress: LocalEngineProgress | null;
+  msg: string | null;
+  onInstall: () => void;
+  onRemove: () => void;
+  onRefresh: () => void;
+}) {
+  const installed = !!status?.installed;
+  const failed = !!msg && (msg.startsWith('安装失败') || msg.startsWith('移除失败'));
+  const toMb = (bytes: number) => Math.round(bytes / 1048576);
+  const buttonStyle: React.CSSProperties = {
+    padding: '6px 12px', border: 'none', borderRadius: 12, fontSize: 12, fontWeight: 600,
+  };
+
+  return (
+    <div data-component="translate" style={{ marginTop: 12, padding: 12, background: '#F2F2F7', borderRadius: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <span style={{ fontSize: 13, color: '#1c1c1e' }}>
+          本地翻译模型：
+          {status === null ? '读取中…' : installed ? `已安装 ${status.version || '已就绪'}` : '未安装'}
+        </span>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button onClick={onRefresh} disabled={busy}
+            style={{ ...buttonStyle, background: '#E5E5EA', color: '#1c1c1e', cursor: busy ? 'default' : 'pointer' }}>
+            检测
+          </button>
+          {installed ? (
+            <button onClick={onRemove} disabled={busy}
+              style={{ ...buttonStyle, background: '#E5E5EA', color: '#FF3B30', cursor: busy ? 'default' : 'pointer' }}>
+              移除
+            </button>
+          ) : (
+            <button onClick={onInstall} disabled={busy}
+              style={{ ...buttonStyle, background: busy ? '#AEAEB2' : '#007AFF', color: 'white', cursor: busy ? 'default' : 'pointer' }}>
+              {busy ? '下载中…' : `下载并安装（约 ${status?.download_mb ?? 0} MB）`}
+            </button>
+          )}
+        </div>
+      </div>
+
+      {progress && (
+        <div style={{ marginTop: 10 }}>
+          <div style={{ height: 6, borderRadius: 3, background: '#E5E5EA', overflow: 'hidden' }}>
+            <div style={{ width: `${progress.percent}%`, height: '100%', background: '#007AFF', transition: 'width 200ms ease-out' }} />
+          </div>
+          <p style={{ fontSize: 11, color: '#636366', marginTop: 6 }}>{progress.detail}</p>
+        </div>
+      )}
+
+      {msg && <p style={{ fontSize: 12, color: failed ? '#FF3B30' : '#34C759', marginTop: 8 }}>{msg}</p>}
+
+      {!progress && (installed ? (
+        <p style={{ fontSize: 11, color: '#AEAEB2', marginTop: 8, lineHeight: 1.6 }}>
+          占用磁盘约 {toMb(status?.disk_bytes ?? 0)} MB，翻译离线可用、不上传文本；
+          模型装在应用自己的目录里，不动系统环境，移除时按清单精确删除。
+        </p>
+      ) : (
+        <p style={{ fontSize: 11, color: '#8E8E93', marginTop: 8, lineHeight: 1.6 }}>
+          下载腾讯混元 HY-MT1.5-1.8B 翻译模型（33 语互译，量化后约 1.1 GB）
+          和 llama.cpp 推理器，支持中文/英文/日文/韩文互译，安装后离线可用、无需 API Key。
         </p>
       ))}
     </div>

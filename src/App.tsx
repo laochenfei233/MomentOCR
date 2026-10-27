@@ -162,6 +162,9 @@ function App() {
       if (activeTranslationPlugin === 'google-translate') {
         // Google 用语言代码，大模型用中文名
         result = await invoke<string>('translate_google', { text: ocrText, targetLang: targetCode });
+      } else if (activeTranslationPlugin === 'hymt-translate') {
+        // 本地模型：不需要 Key/BaseURL/模型名，目标语言同样用中文名
+        result = await invoke<string>('translate_hymt', { text: ocrText, targetLang: targetName });
       } else if (plugin?.type !== 'translation') {
         result = `未知翻译服务: ${activeTranslationPlugin}`;
       } else if (!apiKey) {

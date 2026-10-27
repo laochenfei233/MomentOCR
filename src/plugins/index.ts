@@ -36,6 +36,7 @@ export const builtinPlugins: PluginInfo[] = [
   { id: 'mimo-translate', name: 'MiMo 翻译', type: 'translation', description: '小米 MiMo 大模型翻译（OpenAI 兼容协议）', defaultBaseUrl: 'https://api.xiaomimimo.com/v1', defaultModel: '' },
   { id: 'deepseek-translate', name: 'DeepSeek 翻译', type: 'translation', description: 'DeepSeek 大模型翻译（OpenAI 兼容协议）', defaultBaseUrl: 'https://api.deepseek.com/v1', defaultModel: 'deepseek-chat' },
   { id: 'claude-translate', name: 'Claude 翻译', type: 'translation', description: 'Anthropic Claude 大模型翻译（Messages API）', defaultBaseUrl: 'https://api.anthropic.com/v1', defaultModel: 'claude-sonnet-4-5' },
+  { id: 'hymt-translate', name: '腾讯 HY-MT 翻译', type: 'translation', description: '腾讯混元 HY-MT1.5-1.8B 本地翻译模型（离线运行，无需 API Key；在下方下载安装）' },
 ];
 
 export const findPlugin = (id: string) => builtinPlugins.find((p) => p.id === id);
