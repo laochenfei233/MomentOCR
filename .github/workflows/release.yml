@@ -216,3 +216,21 @@ jobs:
           path: dist-installers/*
           if-no-files-found: error
           retention-days: 14
+
+      # 发布说明由 .changelog/ 片段生成：取 CHANGELOG.md 里该版本的段落，
+      # 后面拼上下载表与签名提示（.github/release-notes-footer.md）。
+      # 四个平台 job 改的是同一份草稿，只让 windows-x64 改一次，避免并发互踩。
+      - name: Rewrite release notes from changelog
+        if: github.event_name == 'push' && matrix.label == 'windows-x64'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          {
+            python3 .changelog/changelogger.py notes "$VERSION"
+            cat .github/release-notes-footer.md
+          } > release-body.md
+          gh release edit "v$VERSION" --notes-file release-body.md
