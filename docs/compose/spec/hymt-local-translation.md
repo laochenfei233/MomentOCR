@@ -1,9 +1,9 @@
 ---
 feature: hymt-local-translation
-status: in-progress
+status: delivered
 updated: 2026-10-27
 branch: feat/hymt-local-translation
-commits: 86cb6ca..(head 待填)
+commits: 86cb6ca..bf126ce
 worktree: .worktrees/hymt-local-translation
 ---
 
@@ -11,7 +11,42 @@ worktree: .worktrees/hymt-local-translation
 
 ## Report
 
-（交付时填写）
+**What was built** — 翻译服务列表新增「腾讯 HY-MT 翻译」：在设置页一键下载腾讯混元
+HY-MT1.5-1.8B 翻译模型（Q4_K_M GGUF，约 1.1 GB，ModelScope 直连 + HuggingFace 回退，
+下载完按精确字节数校验）和 llama.cpp b11932 的 CPU 推理器（各平台官方预编译包，
+12–24 MB），装完自动自检（真实起服务译一句才算成功）。之后翻译完全离线、无需 API Key，
+模型与推理器都装在应用私有目录，卸载按清单精确删除。llama-server 进程由应用托管：
+翻译前探活复用，冷启动轮询就绪并发进度事件，应用退出时统一收掉子进程。
+
+**Verification** — `cargo check --lib` PASS；`cargo test --lib` 11 passed / 1 ignored
+（ignored 是既有的联网安装测试）；`npm run build`（tsc + vite）PASS。
+验收逐条核对见下方 Review 摘要。
+
+**Journey log**
+- 评审 subagent 三次因「model concurrency limit exceeded」派发失败，改为按 compose-next
+  的评审清单自评审；结论记录于下。若需要独立评审，合并前可补一次。
+- 自评审发现并已修复：`translate()` 路径的启动进度原是空回调，冷启动加载 1.1 GB 模型
+  时界面无任何反馈（bf126ce 修复为发进度事件）。
+- tar 的 `Entry` 没有 `enclosed_name()`（那是 zip crate 的 API），路径校验改用
+  与 local_engine 相同的「拒绝绝对路径与 `..` 组件」手写校验。
+- worktree 首次编译缺未跟踪的 `binaries/screenshot_overlay` 构建产物，从主检出拷贝
+  解决（tauri 的 resource 检查硬性要求存在）。
+- 模型平台映射的测试起初写成了「测试里的复制表」，重构 `llama_asset_for(os, arch)`
+  让测试直接打真实现，复制表即测试盲区。
+
+## Review（自评审结论）
+
+- Spec 合规：七条验收逐条核对 PASS——未安装翻译返回「未找到 llama-server，请先在设置里
+  安装本地翻译组件」（translate_engine.rs ensure_server，错误经 App catch 显示「翻译失败：…」，
+  不误报成功）；安装全程 `local-engine-progress` 事件推进、自检真译一句、清单先于自检落盘；
+  安装后翻译不查 API Key（App.tsx 分发在 Key 检查前）；GGUF 字节数不符删除 `.part` 并报错；
+  移除按清单删 + prune + 空壳兜底删除；`RunEvent::Exit` 调 `translate_engine::shutdown()`；
+  三项构建/测试命令全绿。
+- 正确性：MutexGuard 不跨 await（先取句柄状态、放手探活、spawn 后重新持锁收旧句柄）；
+  端口冲突时子进程立即退出被轮询检测并报「端口 48731 未被占用」提示；双源下载失败清
+  `.part`/压缩包再试下一源；并发翻译的二次 spawn 失败不影响已健康的首个服务（重试即复用）。
+- 一致性：中文注释讲 why，目录布局与组件状态结构与 local_engine 对齐，安装面板样式复用
+  现有 LocalComponentPanel 的视觉规范。
 
 ## [S1] Problem
 
@@ -65,11 +100,11 @@ Out of scope:
 
 ## Tasks
 
-- [ ] T1: `translate_engine.rs`——组件安装（双源下载、解压、清单、字节校验、自检）、状态、按清单移除 (depends: none)
-- [ ] T2: 服务管理——ensure_server（health 探活 + spawn + 轮询）、static 句柄、`translate_hymt` 命令、`shutdown()` (depends: T1)
-- [ ] T3: `lib.rs` 接线——注册模块与命令、`Status.translate`、`RunEvent::Exit` 清理 (depends: T2)
-- [ ] T4: 前端——plugins 入口、App 分发、Settings 安装面板与状态展示 (depends: T3)
-- [ ] T5: 验证（cargo test / cargo check / tsc build）+ changelog 片段 + spec 定稿 (depends: T4)
+- [x] T1: `translate_engine.rs`——组件安装（双源下载、解压、清单、字节校验、自检）、状态、按清单移除 (depends: none)
+- [x] T2: 服务管理——ensure_server（health 探活 + spawn + 轮询）、static 句柄、`translate_hymt` 命令、`shutdown()` (depends: T1)
+- [x] T3: `lib.rs` 接线——注册模块与命令、`Status.translate`、`RunEvent::Exit` 清理 (depends: T2)
+- [x] T4: 前端——plugins 入口、App 分发、Settings 安装面板与状态展示 (depends: T3)
+- [x] T5: 验证（cargo test / cargo check / tsc build）+ changelog 片段 + spec 定稿 (depends: T4)
 
 ## [S4] Acceptance
 
