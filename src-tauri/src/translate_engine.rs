@@ -561,7 +561,8 @@ async fn do_chat(client: &reqwest::Client, text: &str, target_lang: &str) -> Res
 pub async fn translate(app: &AppHandle, text: &str, target_lang: &str) -> Result<String> {
     let root = resolve_root(app)?;
     let layout = Layout { root };
-    let report = |_stage: &str, _percent: u8, _detail: &str| {};
+    // 冷启动要加载 1.1 GB 模型，进度发到事件里，界面至少能看到「正在启动」
+    let report = |stage: &str, percent: u8, detail: &str| emit(app, stage, percent, detail);
     let client = ensure_server(&layout, &report).await?;
     let out = do_chat(&client, text, target_lang).await?;
     if out.trim().is_empty() {
