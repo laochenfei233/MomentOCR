@@ -2,6 +2,7 @@ mod api;
 mod local_engine;
 mod overlay;
 mod recognizer;
+mod translate_engine;
 
 use overlay::{OverlayManager, OverlayResult};
 use tauri::{
@@ -190,6 +191,10 @@ fn get_local_components_status(app: tauri::AppHandle) -> local_engine::Status {
 
 #[tauri::command]
 async fn install_local_component(app: tauri::AppHandle, component: String) -> Result<String, String> {
+    // 本地翻译不走 Python 运行时，装配线完全独立
+    if component == "translate" {
+        return translate_engine::install(&app).await.map_err(|e| e.to_string());
+    }
     let component = local_engine::Component::parse(&component).map_err(|e| e.to_string())?;
     let scripts_dir = overlay::scripts_dir().ok_or("找不到随应用分发的脚本")?;
     local_engine::install(&app, component, &scripts_dir)
@@ -199,6 +204,9 @@ async fn install_local_component(app: tauri::AppHandle, component: String) -> Re
 
 #[tauri::command]
 fn remove_local_component(app: tauri::AppHandle, component: String) -> Result<String, String> {
+    if component == "translate" {
+        return translate_engine::remove(&app).map_err(|e| e.to_string());
+    }
     let component = local_engine::Component::parse(&component).map_err(|e| e.to_string())?;
     let (freed, runtime_removed) =
         local_engine::remove_component(&app, component).map_err(|e| e.to_string())?;
@@ -243,6 +251,15 @@ async fn ocr_custom_vision(base_url: String, api_key: String, model: String, ima
 async fn translate_google(text: String, target_lang: String) -> Result<String, String> {
     api::call_google_translate(&text, &target_lang).await.map_err(|e| e.to_string())
 }
+
+/// 本地翻译（HY-MT1.5-1.8B）：目标语言用设置里的中文名（中文/英文/日文/韩文）
+#[tauri::command]
+async fn translate_hymt(app: tauri::AppHandle, text: String, target_lang: String) -> Result<String, String> {
+    translate_engine::translate(&app, &text, &target_lang)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 async fn translate_claude(base_url: String, api_key: String, model: String, text: String, target_lang: String) -> Result<String, String> {
     api::call_claude_translate(&base_url, &api_key, &model, &text, &target_lang).await.map_err(|e| e.to_string())
@@ -361,7 +378,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             start_screenshot_overlay, select_image_files, save_temp_files,
             ocr_paddleocr, ocr_rapidocr, get_local_components_status, install_local_component, remove_local_component,
-            ocr_openai, ocr_ollama, translate_google, translate_custom, translate_claude,
+            ocr_openai, ocr_ollama, translate_google, translate_custom, translate_claude, translate_hymt,
             ocr_custom_vision, ocr_claude, list_models, set_autostart, get_autostart, clear_temp_cache,
             register_shortcuts, set_tray_behavior, set_screenshot_mode, focus_main_window, quit_app
         ])
@@ -379,6 +396,12 @@ pub fn run() {
             setup_tray(app)?;
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app, event| {
+            // 退出时收掉本地翻译的 llama-server 子进程，别让它变成孤儿进程继续占内存
+            if let tauri::RunEvent::Exit = event {
+                let _ = translate_engine::shutdown();
+            }
+        });
 }

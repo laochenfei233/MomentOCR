@@ -169,6 +169,8 @@ pub struct Status {
     /// Windows 安装包随包自带覆盖层，这个组件就不必下载
     pub screenshot_bundled: bool,
     pub screenshot: ComponentStatus,
+    /// 本地翻译模型（HY-MT），不依赖 Python 运行时，见 translate_engine
+    pub translate: ComponentStatus,
     pub runtime_bytes: u64,
 }
 
@@ -249,7 +251,7 @@ impl Layout {
     }
 }
 
-fn dir_size(dir: &Path) -> u64 {
+pub(crate) fn dir_size(dir: &Path) -> u64 {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return 0;
     };
@@ -344,6 +346,7 @@ pub fn status(app: &AppHandle) -> Status {
         ocr: component_status(Component::Ocr),
         screenshot_bundled: super::overlay::bundled_overlay().is_some(),
         screenshot: component_status(Component::Screenshot),
+        translate: crate::translate_engine::status(app),
         runtime_bytes: layout.as_ref().map(|l| l.size()).unwrap_or(0),
     }
 }
@@ -864,7 +867,7 @@ fn read_versions(app: &AppHandle, packages: &[&str]) -> std::collections::HashMa
         .unwrap_or_default()
 }
 
-fn hide_console(command: &mut std::process::Command) {
+pub(crate) fn hide_console(command: &mut std::process::Command) {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -872,7 +875,7 @@ fn hide_console(command: &mut std::process::Command) {
     }
 }
 
-async fn download(
+pub(crate) async fn download(
     client: &reqwest::Client,
     url: &str,
     dest: &Path,
@@ -903,7 +906,7 @@ async fn download(
     Ok(())
 }
 
-fn extract_zip(archive: &Path, dest: &Path) -> Result<()> {
+pub(crate) fn extract_zip(archive: &Path, dest: &Path) -> Result<()> {
     let file = std::fs::File::open(archive)
         .with_context(|| format!("打开 {} 失败", archive.display()))?;
     let mut zip = zip::ZipArchive::new(file).context("压缩包无法解析")?;
