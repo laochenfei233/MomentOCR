@@ -3,7 +3,7 @@ feature: hymt-local-translation
 status: delivered
 updated: 2026-10-27
 branch: feat/hymt-local-translation
-commits: 86cb6ca..bf126ce
+commits: 86cb6ca..3e5652d
 worktree: .worktrees/hymt-local-translation
 ---
 
@@ -18,21 +18,28 @@ HY-MT1.5-1.8B 翻译模型（Q4_K_M GGUF，约 1.1 GB，ModelScope 直连 + Hugg
 模型与推理器都装在应用私有目录，卸载按清单精确删除。llama-server 进程由应用托管：
 翻译前探活复用，冷启动轮询就绪并发进度事件，应用退出时统一收掉子进程。
 
-**Verification** — `cargo check --lib` PASS；`cargo test --lib` 11 passed / 1 ignored
-（ignored 是既有的联网安装测试）；`npm run build`（tsc + vite）PASS。
-验收逐条核对见下方 Review 摘要。
+**Verification** — `cargo check --lib` PASS；`cargo test --lib` 12 passed / 2 ignored；
+`npm run build`（tsc + vite）PASS。**联网端到端测试真机通过**（`cargo test --lib
+installs_translation -- --ignored --nocapture`）：真下 1.1 GB 模型（ModelScope，约 1 分钟）→
+下载 llama.cpp → 解压 → 自检（「你好，世界」→「Hello, world.」）→ 冷重启复翻
+（「Hello, world!」→「大家好！」）→ 按清单卸载释放 1140 MB，全程无人工干预。
 
 **Journey log**
-- 评审 subagent 三次因「model concurrency limit exceeded」派发失败，改为按 compose-next
-  的评审清单自评审；结论记录于下。若需要独立评审，合并前可补一次。
-- 自评审发现并已修复：`translate()` 路径的启动进度原是空回调，冷启动加载 1.1 GB 模型
-  时界面无任何反馈（bf126ce 修复为发进度事件）。
+- **联网端到端测试立了大功**：GitHub release 资产的 CDN 在国内直连不通
+  （api.github.com 通、下载必失败），初版只用官方源必然全挂。补了 gh-proxy.com /
+  ghproxy.net 双代理 + 官方回退；代理格式是「代理域名 + 完整原始 URL」，少拼
+  `https://github.com/` 前缀就是 404——这条已写成单测钉死。
+- 选 b11932 前核对过架构支持：模型 GGUF 的 `general.architecture` 是
+  `hunyuan-dense`（本地解析 GGUF 头确认），llama.cpp 支持于 PR #14878（2025-07），
+  ModelScope 社区镜像里最旧的现成包 b9893（2026-07-07）也已包含，固定 b11932 没问题。
 - tar 的 `Entry` 没有 `enclosed_name()`（那是 zip crate 的 API），路径校验改用
   与 local_engine 相同的「拒绝绝对路径与 `..` 组件」手写校验。
 - worktree 首次编译缺未跟踪的 `binaries/screenshot_overlay` 构建产物，从主检出拷贝
   解决（tauri 的 resource 检查硬性要求存在）。
 - 模型平台映射的测试起初写成了「测试里的复制表」，重构 `llama_asset_for(os, arch)`
   让测试直接打真实现，复制表即测试盲区。
+- 评审 subagent 三次因「model concurrency limit exceeded」派发失败，改为按 compose-next
+  的评审清单自评审（结论记录于下）；随后以真机端到端测试补上了最有分量的验证。
 
 ## Review（自评审结论）
 
@@ -108,10 +115,10 @@ Out of scope:
 
 ## [S4] Acceptance
 
-- [ ] 未安装时选 HY-MT 翻译并点翻译：得到「先安装」类明确提示，不 panic、不误报翻译成功
-- [ ] 安装流程：进度事件推进；装完自检（真实翻译一句）通过；`state/translate.json` 记录清单
-- [ ] 安装后翻译：设置目标语言后翻译返回译文，全程无需 API Key
-- [ ] GGUF 下载字节数与 1,133,080,512 不符时安装报错而不是静默通过
-- [ ] 移除组件后磁盘空间释放、状态回到未安装
-- [ ] 应用退出后 llama-server 子进程被结束（代码路径存在并有测试或断言覆盖）
-- [ ] `cargo test`、`cargo check`、`npm run build` 全部通过
+- [x] 未安装时选 HY-MT 翻译并点翻译：得到「先安装」类明确提示，不 panic、不误报翻译成功
+- [x] 安装流程：进度事件推进；装完自检（真实翻译一句）通过；`state/translate.json` 记录清单
+- [x] 安装后翻译：设置目标语言后翻译返回译文，全程无需 API Key
+- [x] GGUF 下载字节数与 1,133,080,512 不符时安装报错而不是静默通过
+- [x] 移除组件后磁盘空间释放、状态回到未安装
+- [x] 应用退出后 llama-server 子进程被结束（代码路径存在并有测试或断言覆盖）
+- [x] `cargo test`、`cargo check`、`npm run build` 全部通过
