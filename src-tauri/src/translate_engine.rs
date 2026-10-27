@@ -49,9 +49,14 @@ fn llama_asset() -> Result<&'static str> {
 
 fn llama_urls() -> Result<Vec<String>> {
     let asset = llama_asset()?;
-    Ok(vec![format!(
-        "https://github.com/ggml-org/llama.cpp/releases/download/{LLAMA_TAG}/{asset}"
-    )])
+    // release 资产的 CDN 在国内直连不通（api.github.com 通但下载会失败），先走
+    // gh 代理（格式：代理域名后面拼完整原始 URL），官方地址保留作回退
+    let path = format!("https://github.com/ggml-org/llama.cpp/releases/download/{LLAMA_TAG}/{asset}");
+    Ok(vec![
+        format!("https://gh-proxy.com/{path}"),
+        format!("https://ghproxy.net/{path}"),
+        path,
+    ])
 }
 
 /// 模型下载源：ModelScope 国内直连 → HuggingFace 回退
@@ -167,13 +172,21 @@ fn read_manifest(layout: &Layout) -> Vec<String> {
 /// 下载并装配。进度走 `local-engine-progress` 事件，与 OCR/截图组件共用一个监听器。
 pub async fn install(app: &AppHandle) -> Result<String> {
     let root = resolve_root(app)?;
-    let layout = Layout { root: root.clone() };
+    install_into(&root, &|stage, percent, detail| emit(app, stage, percent, detail)).await
+}
+
+/// 装配逻辑本体：不依赖 Tauri，便于直接测试（见文件末尾的联网集成测试）
+pub async fn install_into(
+    root: &Path,
+    progress: &(dyn Fn(&str, u8, &str) + Sync),
+) -> Result<String> {
+    let layout = Layout { root: root.to_path_buf() };
     std::fs::create_dir_all(layout.runtime())?;
     std::fs::create_dir_all(layout.models())?;
     let client = reqwest::Client::builder()
         .user_agent("MomentOCR-local-translate")
         .build()?;
-    let report = |stage: &str, percent: u8, detail: &str| emit(app, stage, percent, detail);
+    let report = |stage: &str, percent: u8, detail: &str| progress(stage, percent, detail);
 
     let mut files: Vec<String> = vec![];
 
@@ -246,9 +259,9 @@ pub async fn install(app: &AppHandle) -> Result<String> {
                 }
             }
         }
-        if let Some(err) = last_error {
-            anyhow::bail!("下载推理器失败：{err}");
-        }
+    if let Some(err) = last_error {
+        anyhow::bail!("下载推理器失败：{err:#}");
+    }
         report("runtime", 88, "正在解压推理器…");
         let runtime = layout.runtime();
         let archive_for_extract = archive.clone();
@@ -349,7 +362,11 @@ fn list_files(root: &Path) -> Vec<String> {
 /// 按清单移除；服务在跑先收掉
 pub fn remove(app: &AppHandle) -> Result<String> {
     let root = resolve_root(app)?;
-    let layout = Layout { root: root.clone() };
+    remove_into(&root)
+}
+
+pub fn remove_into(root: &Path) -> Result<String> {
+    let layout = Layout { root: root.to_path_buf() };
     let _ = shutdown();
     let files = read_manifest(&layout);
     if files.is_empty() && !layout.root.exists() {
@@ -575,6 +592,42 @@ pub async fn translate(app: &AppHandle, text: &str, target_lang: &str) -> Result
 mod tests {
     use super::*;
 
+    /// 真装一遍再真翻一次：需要联网（约 1.1 GB 下载），所以默认忽略。
+    /// 跑法：cargo test --lib installs_translation -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore]
+    async fn installs_translation_and_selftests() {
+        let root = std::env::temp_dir().join("momentocr-translate-test");
+        let _ = std::fs::remove_dir_all(&root);
+
+        let message = install_into(&root, &|stage, percent, detail| {
+            println!("[{stage} {percent}%] {detail}")
+        })
+        .await
+        .expect("装配失败");
+        println!("安装结果: {message}");
+
+        let layout = Layout { root: root.clone() };
+        assert!(layout.installed(), "推理器或模型缺失");
+        assert!(!read_manifest(&layout).is_empty(), "没有记录组件清单");
+
+        // 装配线的自检结束后服务已被收掉，这里验证冷重启 + 常驻复用路径也能翻
+        let client = ensure_server(&layout, &|_, _, _| {})
+            .await
+            .expect("服务未就绪");
+        let out = do_chat(&client, "Hello, world!", "中文")
+            .await
+            .expect("翻译失败");
+        println!("冷重启后译文: {out}");
+        assert!(!out.trim().is_empty());
+
+        // 按清单移除，确认能干净卸载（含 root 目录本身）
+        let message = remove_into(&root).expect("移除失败");
+        println!("移除结果: {message}");
+        assert!(!layout.installed(), "移除后组件标志物还在");
+        assert!(!root.exists(), "移除后目录还在");
+    }
+
     /// 平台产物名写错就是整条装配线跑不通，而且只有到真机才暴露
     #[test]
     fn llama_assets_match_each_platform() {
@@ -599,10 +652,46 @@ mod tests {
             assert!(url.contains(LLAMA_TAG));
             assert!(url.contains(llama_asset().unwrap()));
         }
+        // 代理源的格式是「代理域名 + 完整原始 URL」，少拼 scheme 就是 404
+        let proxied = &llama_urls().unwrap()[0];
+        assert!(proxied.starts_with("https://gh-proxy.com/https://github.com/"), "{proxied}");
         for url in gguf_urls() {
             assert!(url.ends_with(GGUF_NAME), "{url}");
             assert!(url.starts_with("https://"), "{url}");
         }
+    }
+
+    /// 造一个带构建号目录的 tar.gz 真跑一遍解压，确认 llama-server 落点与可执行位
+    #[test]
+    fn extracts_tar_gz_flat_into_runtime() {
+        let dir = std::env::temp_dir().join("momentocr-llama-tar-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let archive = dir.join("llama.tar.gz");
+        let file = std::fs::File::create(&archive).unwrap();
+        let encoder = flate2::write::GzEncoder::new(file, flate2::Compression::fast());
+        let mut builder = tar::Builder::new(encoder);
+        for (name, body, mode) in [
+            (format!("llama-b11932-bin-win-cpu-x64/{SERVER_BIN}"), "#!/bin/sh\n".to_string(), 0o775u32),
+            ("llama-b11932-bin-win-cpu-x64/llama.dll".to_string(), "bin".to_string(), 0o644),
+        ] {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(body.len() as u64);
+            header.set_mode(mode);
+            header.set_path(name).unwrap();
+            header.set_cksum();
+            builder.append(&header, body.as_bytes()).unwrap();
+        }
+        builder.into_inner().unwrap().finish().unwrap();
+
+        let dest = dir.join("runtime");
+        extract_tar_gz_flat(&archive, &dest).unwrap();
+        let server = dest.join("llama-b11932-bin-win-cpu-x64").join(SERVER_BIN);
+        assert!(server.is_file());
+        assert_eq!(find_server(&dest).unwrap(), server);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// 官方模型换版要显式动这里，字节数校验才有意义
