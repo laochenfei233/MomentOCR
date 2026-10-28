@@ -76,32 +76,32 @@ const MODEL_MB: u64 = 1081;
 const RUNTIME_DOWNLOAD_MB: u64 = 24;
 const RUNTIME_DISK_MB: u64 = 60;
 
-/// `-local-inference` 变体把 llama.cpp 打进了资源目录的 llama-runtime/ 下
-const BUNDLED_DIR: &str = "llama-runtime";
+/// `-local-inference` 变体把 llama.cpp 打进了安装包资源；tauri 按资源在
+/// src-tauri 下的相对路径原样安装，所以装好的布局是 `<资源目录>/resources/llama-runtime`
+const BUNDLED_RELATIVES: [&str; 2] = ["resources/llama-runtime", "llama-runtime"];
 
-/// 探测安装包内置的推理器。依次找：资源目录、exe 相对路径向上三级
+/// 探测安装包内置的推理器。基目录依次是：资源目录、exe 相对路径向上三级
 /// （安装版资源与 exe 同级，开发期 target/debug 向上能到 src-tauri）、
-/// CARGO_MANIFEST_DIR（测试/编译期）。
+/// CARGO_MANIFEST_DIR（测试/编译期）；每个基目录下找两种相对布局。
 fn bundled_runtime(resource_hint: Option<&Path>) -> Option<PathBuf> {
-    let mut candidates: Vec<PathBuf> = Vec::new();
+    let mut bases: Vec<PathBuf> = Vec::new();
     if let Some(hint) = resource_hint {
-        candidates.push(hint.join(BUNDLED_DIR));
+        bases.push(hint.to_path_buf());
     }
     if let Ok(exe) = std::env::current_exe() {
         let mut dir = exe.parent().map(|d| d.to_path_buf());
         for _ in 0..3 {
             let Some(current) = dir else { break };
-            candidates.push(current.join(BUNDLED_DIR));
             dir = current.parent().map(|d| d.to_path_buf());
+            bases.push(current);
         }
     }
     if let Ok(manifest) = std::env::var("CARGO_MANIFEST_DIR") {
-        let base = PathBuf::from(manifest);
-        candidates.push(base.join("resources").join(BUNDLED_DIR));
-        candidates.push(base.join(BUNDLED_DIR));
+        bases.push(PathBuf::from(manifest));
     }
-    candidates
-        .into_iter()
+    bases
+        .iter()
+        .flat_map(|base| BUNDLED_RELATIVES.map(|relative| base.join(relative)))
         .find(|dir| find_server(dir).is_some())
 }
 
@@ -779,6 +779,28 @@ mod tests {
         assert!(find_server(&found).is_some());
 
         std::env::remove_var("CARGO_MANIFEST_DIR");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 回归：安装版里 tauri 按相对路径把资源装到 <资源目录>/resources/llama-runtime，
+    /// 探测只找裸 llama-runtime 时会漏掉，用户就会被误导去联网下载推理器
+    #[test]
+    fn bundled_runtime_found_under_installed_resource_layout() {
+        let dir = std::env::temp_dir().join("momentocr-bundled-installed-layout-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        let fake = dir.join("resources").join("llama-runtime");
+        std::fs::create_dir_all(&fake).unwrap();
+        std::fs::write(fake.join(SERVER_BIN), b"x").unwrap();
+
+        let found = bundled_runtime(Some(&dir)).expect("应按安装版布局探测到内置推理器");
+        assert!(find_server(&found).is_some());
+
+        // 裸 llama-runtime 布局（手工摆放）也要能命中
+        let flat = dir.join("llama-runtime");
+        std::fs::create_dir_all(&flat).unwrap();
+        std::fs::write(flat.join(SERVER_BIN), b"x").unwrap();
+        assert!(bundled_runtime(Some(&dir)).is_some());
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 
