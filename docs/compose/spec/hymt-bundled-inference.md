@@ -12,20 +12,34 @@ worktree: .worktrees/local-inference-variant
 ## Report
 
 **What was built** — 发布流水线新增 `-local-inference` 安装包变体（四平台各一份，
-与标准包同发一个 draft release，靠文件名区分）：CI 在构建前直连 GitHub 下载
-llama.cpp b11932 CPU 包解进资源目录（gitignored 构建产物），node 从基础
-tauri.conf.json 生成 override（productName 加 `-local-inference` 后缀 + resources
-追加），经 `tauri build --config` 生效。运行时侧：Rust 按资源目录 → exe 相对路径 →
-CARGO_MANIFEST_DIR 探测内置推理器，装配与启动服务时优先内置、免下载那 23 MB；
-设置页按 `translate_runtime_bundled` 调整文案与体积估算（bundled 时只按模型 1081 MB
-计）。两个变体共用 bundle identifier（应用数据目录相同，模型只需下一次）。
+与标准包同发一个 draft release，**只区分安装包文件名，软件本体与标准版完全一致**）：
+CI 在构建前直连 GitHub 下载 llama.cpp b11932 CPU 包解进资源目录（gitignored 构建
+产物），node 从基础 tauri.conf.json 生成 override（只追加 resources），经
+`tauri build --config` 构建；产物文件名仍与标准版相同（productName 未动），在
+Collect 步骤统一重命名加 `-local-inference` 后缀，变体产物跳过 tauri-action 上传
+（同名会撞 release 资产），改在重命名后 `gh release upload` 补传草稿。运行时侧：
+Rust 按资源目录 → exe 相对路径 → CARGO_MANIFEST_DIR 探测内置推理器（每个基目录
+下同时找 `resources/llama-runtime` 与裸 `llama-runtime` 两种布局），装配与启动
+服务时优先内置、免下载那 23 MB；设置页按 `translate_runtime_bundled` 调整文案与
+体积估算（bundled 时只按模型 1081 MB 计）。
 
-**Verification** — `cargo test --lib` 14 passed（新增 bundled 探测与优先级对照单测）；
-`npm run build` PASS；CI 的 conf 生成片段已在本地演练并断言产物 JSON（productName、
-resources 三项齐全）；YAML 解析通过。变体打包的完整链路（8 job 矩阵、NSIS/DMG/
-AppImage 体积变化）需在下次 tag 构建时由 CI 实证，本地无法等价演练。
+**Verification** — `cargo test --lib` 15 passed（bundled 探测、优先级对照、
+安装版布局回归测试）；`npm run build` PASS；YAML 解析通过。**真机验证抓出并修复
+一个关键 bug**：首版探测只找裸 `llama-runtime`，漏掉 tauri 实际的安装布局
+`<资源目录>/resources/llama-runtime`，安装版必走联网下载（用户截图实锤），已修复
+并重建。变体打包的完整 CI 链路（8 job 矩阵、重命名与补传）需在下次 tag 构建时由
+CI 实证。
 
 **Journey log**
+- **productName 是「文件名 + 软件名」的耦合开关**：最初改 productName 区分变体，
+  被纠正——用户要的是只区分安装包文件名，装出来的软件必须还是 MomentOCR。
+  Tauri 没有单独的安装包文件名开关，最终方案是构建用原名、产物在 Collect 步骤
+  重命名；代价是变体产物不能走 tauri-action 的 release 上传（同名撞资产），
+  改为手动 `gh release upload`。
+- **「资源收集对了」≠「运行时找得到」**：构建时验证过 bundler 把
+  `resources/llama-runtime` 收进产物，但运行时探测却按裸 `llama-runtime` 找——
+  tauri 安装资源时保留 `src-tauri` 下的相对路径前缀。这类布局契约必须用「模拟
+  安装布局」的回归测试钉死，而不是看构建产物目录想当然。
 - **TUNA/conda-forge 路线验证失败，评估结论反转**：conda 包里有 llama-server.exe
   （当时只验证了"存在"），但实际运行报 STATUS_DLL_NOT_FOUND——conda 构建把
   libcurl/mkl/vulkan 全部链到 conda 环境而不随包。补齐要拖整条依赖链，放弃；
@@ -45,20 +59,26 @@ CDN 在国内直连不通，现有 gh 代理源速度不稳（实测几百 B/s ~
 
 ## [S2] Design
 
-- **变体命名**：`productName` 改为 `MomentOCR-local-inference`，安装包文件名随之区分
-  （如 `MomentOCR-local-inference_0.2.0_x64-setup.exe`）；bundle identifier 不变，
-  两个变体共用同一应用数据目录（模型只需下载一次）。已知取舍：同 identifier 意味着
-  两个变体不能同时运行（单实例插件按 identifier 互斥），对测试用途可接受。
+- **变体命名**：**只区分安装包文件名，不改软件名**。Tauri 的安装包文件名、安装
+  目录、卸载项都由 `productName` 派生且没有单独的文件名开关，因此构建时保持
+  `productName = MomentOCR`（软件本体与标准版逐字节同源），变体产物在 CI 的
+  Collect 步骤统一重命名（`MomentOCR_*` → `MomentOCR-local-inference_*`，含
+  rpm 的连字符命名）。两个变体安装位置、应用数据目录完全一致，互相替换等于
+  覆盖升级。
 - **CI**：release.yml 的 4 平台矩阵扩成 ×2（standard / local-inference 各 4 个 job）。
   local-inference job 在构建前用 runner 直连 GitHub 下载对应平台的 llama.cpp b11932
   CPU 包（runner 上不限速），解压到 `src-tauri/resources/llama-runtime/`（gitignored
-  构建产物），并用 node 从基础 tauri.conf.json 生成 override（productName 补丁 +
-  resources 追加 `resources/llama-runtime/`），经 `tauri build --config` 生效。
-  基础 conf 的 resources 变化时 override 自动跟随，无双份维护。
+  构建产物），并用 node 从基础 tauri.conf.json 生成 override（只追加
+  `resources/llama-runtime/`），经 `tauri build --config` 生效。基础 conf 的
+  resources 变化时 override 自动跟随，无双份维护。变体产物跳过 tauri-action 的
+  release 上传（与标准版同名会撞资产），重命名后由 `gh release upload` 补传草稿
+  （草稿不存在则先建）。
 - **运行时解析**：Rust 侧新增内置推理器探测（资源目录 → exe 相对路径向上 3 级 →
-  CARGO_MANIFEST_DIR），`ensure_server` 优先用内置、回落到已下载目录，最后才需要
-  下载路径。`Status` 增加 `translate_runtime_bundled` 标记，bundled 时
-  `download_mb`/`disk_mb` 只按模型计（约 1081 MB），前端安装面板据此改提示文案。
+  CARGO_MANIFEST_DIR；每个基目录下找 `resources/llama-runtime` 与裸
+  `llama-runtime` 两种布局——tauri 安装资源时保留 src-tauri 下的相对路径前缀），
+  `ensure_server` 优先用已下载目录、其次内置，最后才走下载。`Status` 增加
+  `translate_runtime_bundled` 标记，bundled 时 `download_mb`/`disk_mb` 只按模型计
+  （约 1081 MB），前端安装面板据此改提示文案。
 - **标准变体的下载路径不变**：gh-proxy.com → ghproxy.net → github.com 三级回退。
 - **卸载**：清单只覆盖应用数据目录，内置推理器在资源目录里不受卸载影响，天然正确。
 

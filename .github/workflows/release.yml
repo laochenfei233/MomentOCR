@@ -97,10 +97,11 @@ jobs:
           test -n "$(find src-tauri/resources/llama-runtime -name 'llama-server*')" \
             || { echo "::error title=llama.cpp extract::没解出 llama-server"; exit 1; }
           du -sh src-tauri/resources/llama-runtime
+          # 只改 resources，不动 productName：软件本体（应用名/安装目录/卸载项）
+          # 必须与标准版一致，安装包文件名在 Collect 步骤重命名做区分
           node -e '
             const fs = require("fs");
             const conf = JSON.parse(fs.readFileSync("src-tauri/tauri.conf.json", "utf8"));
-            conf.productName = "MomentOCR-local-inference";
             conf.bundle.resources.push("resources/llama-runtime/");
             fs.writeFileSync("src-tauri/tauri.local-inference.conf.json", JSON.stringify(conf, null, 2));
           '
@@ -218,8 +219,10 @@ jobs:
           APPIMAGE_EXTRACT_AND_RUN: 1
         with:
           # 只有推 tag 才生成（草稿）release；手动触发仅构建并上传运行页产物，
-          # 避免测试运行反复产生草稿，装包直接从 Actions 运行页下载即可
-          tagName: ${{ github.event_name == 'push' && 'v__VERSION__' || '' }}
+          # 避免测试运行反复产生草稿，装包直接从 Actions 运行页下载即可。
+          # local-inference 变体的产物名与标准版相同，不能直接传（会撞 release 资产），
+          # 改为跳过 tauri-action 上传，由下面的重命名步骤改完名再传
+          tagName: ${{ github.event_name == 'push' && matrix.variant == 'standard' && 'v__VERSION__' || '' }}
           releaseName: 须臾OCR v__VERSION__
           releaseBody: |
             ## 须臾OCR v__VERSION__
@@ -235,7 +238,7 @@ jobs:
             > macOS 安装包未做代码签名，首次打开需在「系统设置 → 隐私与安全性」中点击「仍要打开」。
           releaseDraft: true
           prerelease: false
-          # -local-inference 变体用生成的 override：productName 加后缀 + 打进 llama-runtime 资源
+          # -local-inference 变体用生成的 override（只追加资源）+ 打进 llama-runtime 资源
           args: --target ${{ matrix.target }} --verbose ${{ matrix.variant == 'local-inference' && '--config src-tauri/tauri.local-inference.conf.json' || '' }}
 
       # 把安装包汇总到运行页摘要并作为运行产物上传：不用再翻 Releases 里的草稿
@@ -250,6 +253,14 @@ jobs:
               \( -name '*.exe' -o -name '*.msi' -o -name '*.dmg' \
                  -o -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' \) \
               -exec cp {} dist-installers/ \;
+          fi
+          # 变体的软件名与标准版一致，产物文件名在这里加后缀做区分
+          if [ "${{ matrix.variant }}" = "local-inference" ]; then
+            for f in dist-installers/MomentOCR*; do
+              [ -e "$f" ] || continue
+              mv "$f" "${f/MomentOCR/MomentOCR-local-inference}"
+            done
+          fi
           fi
           count=$(find dist-installers -type f | wc -l)
           echo "收集到 $count 个安装包"
@@ -277,6 +288,20 @@ jobs:
           path: dist-installers/*
           if-no-files-found: error
           retention-days: 14
+
+      # 变体产物跳过了 tauri-action 上传，在这里把重命名后的安装包补传到草稿 release。
+      # 各平台文件名不同不会互撞；草稿由标准版 job 的 tauri-action 创建，
+      # 变体 job 先跑完时这里兜底建一个（已有则忽略）。
+      - name: Upload variant installers to release
+        if: github.event_name == 'push' && matrix.variant == 'local-inference'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="$GITHUB_REF_NAME"
+          gh release create "$TAG" --draft --verify-tag --title "须臾OCR ${TAG#v}" --notes "" >/dev/null 2>&1 || true
+          gh release upload "$TAG" dist-installers/* --clobber
 
       # 发布说明由 .changelog/ 片段生成：取 CHANGELOG.md 里该版本的段落，
       # 后面拼上下载表与签名提示（.github/release-notes-footer.md）。
