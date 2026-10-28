@@ -132,10 +132,6 @@ impl Layout {
         self.root.join("state").join("translate.json")
     }
 
-    fn installed(&self) -> bool {
-        find_server(&self.runtime()).is_some() && self.gguf().is_file()
-    }
-
     fn size(&self) -> u64 {
         crate::local_engine::dir_size(&self.root)
     }
@@ -659,7 +655,7 @@ mod tests {
         println!("安装结果: {message}");
 
         let layout = Layout { root: root.clone() };
-        assert!(layout.installed(), "推理器或模型缺失");
+        assert!(find_server(&layout.runtime()).is_some() && layout.gguf().is_file(), "推理器或模型缺失");
         assert!(!read_manifest(&layout).is_empty(), "没有记录组件清单");
 
         // 装配线的自检结束后服务已被收掉，这里验证冷重启 + 常驻复用路径也能翻
@@ -675,7 +671,7 @@ mod tests {
         // 按清单移除，确认能干净卸载（含 root 目录本身）
         let message = remove_into(&root).expect("移除失败");
         println!("移除结果: {message}");
-        assert!(!layout.installed(), "移除后组件标志物还在");
+        assert!(!(find_server(&layout.runtime()).is_some() && layout.gguf().is_file()), "移除后组件标志物还在");
         assert!(!root.exists(), "移除后目录还在");
     }
 

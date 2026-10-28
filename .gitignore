@@ -41,3 +41,5 @@ src-tauri/binaries/
 # 图标预览是构建产物，由 scripts/build-icons.mjs 生成
 docs/icon-preview/
 src-tauri/resources/llama-runtime/
+# 变体构建的 override 由 CI（或本地构建脚本）从基础 conf 生成，不进仓库
+src-tauri/tauri.local-inference.conf.json
