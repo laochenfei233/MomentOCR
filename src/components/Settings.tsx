@@ -6,6 +6,7 @@ import { useOcrStore } from '../stores/ocrStore';
 import { builtinPlugins } from '../plugins';
 import { Logo } from './Logo';
 import { DEFAULT_SHORTCUTS, formatShortcut, isModifierKeyEvent, shortcutFromKeyboardEvent, validateShortcut } from '../utils/shortcut';
+import { TRANSLATE_TARGETS } from '../utils/languages';
 type SettingsTab = 'general' | 'config' | 'screenshot' | 'api' | 'shortcuts' | 'update' | 'about';
 
 /** 一个可独立安装的本地组件的状态 */
@@ -213,7 +214,7 @@ function Settings({ shortcutIssues = {}, autostartIssue = null }: {
               <CheckboxItem label="识别后复制到剪贴板" checked={afterRecognize.autoCopy} onChange={(v) => setAfterRecognize({ autoCopy: v })} />
             </SettingsCard>
             <SettingsCard title="语言设置">
-              <SelectItem label="翻译目标" value={language.translateTarget} options={['中文', '英文', '日文', '韩文']} onChange={(v) => setLanguage({ translateTarget: v })} />
+              <SelectItem label="翻译目标" value={language.translateTarget} options={TRANSLATE_TARGETS} onChange={(v) => setLanguage({ translateTarget: v })} />
               <SelectItem label="翻译结果显示" value={language.translateLayout || '下方'} options={['下方', '右侧']} onChange={(v) => setLanguage({ translateLayout: v })} />
               <p style={{ fontSize: 11, color: '#AEAEB2', marginTop: 4 }}>翻译结果独立成框，显示在识别原文的下方或右侧</p>
             </SettingsCard>

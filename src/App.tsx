@@ -8,6 +8,7 @@ import { listen } from '@tauri-apps/api/event';
 import { useOcrStore } from './stores/ocrStore';
 import { useSettingsStore } from './stores/settingsStore';
 import { builtinPlugins, findPlugin } from './plugins';
+import { GOOGLE_TARGET_CODES } from './utils/languages';
 import { validateShortcut, type ShortcutRegistration } from './utils/shortcut';
 
 type Tab = 'screenshot' | 'file' | 'settings';
@@ -150,8 +151,7 @@ function App() {
     if (!ocrText.trim()) { showTranslateFeedback(false, '请先识别文字'); return; }
     // 翻译目标语言：设置里的「翻译目标」（大模型用中文名，Google 用语言代码）
     const targetName = language.translateTarget || '中文';
-    const targetCodeMap: Record<string, string> = { '中文': 'zh-CN', '英文': 'en', '日文': 'ja', '韩文': 'ko' };
-    const targetCode = targetCodeMap[targetName] || 'zh-CN';
+    const targetCode = GOOGLE_TARGET_CODES[targetName] || 'zh-CN';
     try {
       let result = '';
       const plugin = findPlugin(activeTranslationPlugin);
@@ -325,7 +325,6 @@ function App() {
             onTextChange={setOcrText}
             translation={translation}
             translationLayout={language.translateLayout || '下方'}
-            translationTarget={language.translateTarget || '中文'}
           />
         </div>
       </main>
