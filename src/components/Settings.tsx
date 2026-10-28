@@ -945,7 +945,7 @@ function TranslateComponentPanel({ status, bundledRuntime, busy, progress, msg, 
         <p style={{ fontSize: 11, color: '#8E8E93', marginTop: 8, lineHeight: 1.6 }}>
           下载腾讯混元 HY-MT1.5-1.8B 翻译模型（33 语互译，量化后约 1.1 GB）
           {bundledRuntime ? '（推理器已内置，无需下载）' : '和 llama.cpp 推理器'}，
-          支持中文/英文/日文/韩文互译，安装后离线可用、无需 API Key。
+          支持界面提供的 10 种目标语言，安装后离线可用、无需 API Key。
         </p>
       ))}
     </div>
