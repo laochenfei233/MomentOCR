@@ -25,25 +25,85 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # 标准变体：推理器在设置里按需下载
           - platform: windows-latest
             target: x86_64-pc-windows-msvc
             overlay_arch: x86_64
             label: windows-x64
+            variant: standard
           - platform: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             overlay_arch: x86_64
             label: linux-x64
+            variant: standard
           - platform: macos-latest
             target: aarch64-apple-darwin
             overlay_arch: arm64
             label: macos-arm64
+            variant: standard
           - platform: macos-latest
             target: x86_64-apple-darwin
             overlay_arch: x86_64
             label: macos-x64
+            variant: standard
+          # -local-inference 变体：llama.cpp 推理器打进安装包（国内免下 23MB，规避不稳的代理源）
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+            overlay_arch: x86_64
+            label: windows-x64-local-inference
+            variant: local-inference
+          - platform: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            overlay_arch: x86_64
+            label: linux-x64-local-inference
+            variant: local-inference
+          - platform: macos-latest
+            target: aarch64-apple-darwin
+            overlay_arch: arm64
+            label: macos-arm64-local-inference
+            variant: local-inference
+          - platform: macos-latest
+            target: x86_64-apple-darwin
+            overlay_arch: x86_64
+            label: macos-x64-local-inference
+            variant: local-inference
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      # 变体构建：下载 llama.cpp 官方预编译 CPU 包解进资源目录，并生成
+      # 带 productName 后缀与额外 resources 的 tauri 配置 override。
+      # runner 直连 GitHub 不限速；标准变体不做任何事，构建路径完全不受影响。
+      - name: Prepare bundled inference runtime
+        if: matrix.variant == 'local-inference'
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${{ matrix.target }}" in
+            x86_64-pc-windows-msvc)   ASSET=llama-b11932-bin-win-cpu-x64.zip ;;
+            aarch64-apple-darwin)     ASSET=llama-b11932-bin-macos-arm64.tar.gz ;;
+            x86_64-apple-darwin)      ASSET=llama-b11932-bin-macos-x64.tar.gz ;;
+            x86_64-unknown-linux-gnu) ASSET=llama-b11932-bin-ubuntu-x64.tar.gz ;;
+            *) echo "::error title=llama.cpp asset::未映射的目标 ${{ matrix.target }}"; exit 1 ;;
+          esac
+          mkdir -p src-tauri/resources/llama-runtime
+          curl -fL --retry 3 -o llama-runtime-archive \
+            "https://github.com/ggml-org/llama.cpp/releases/download/b11932/$ASSET"
+          case "$ASSET" in
+            *.zip)   tar -xf llama-runtime-archive -C src-tauri/resources/llama-runtime ;;
+            *.tar.gz) tar -xzf llama-runtime-archive -C src-tauri/resources/llama-runtime ;;
+          esac
+          rm llama-runtime-archive
+          test -n "$(find src-tauri/resources/llama-runtime -name 'llama-server*')" \
+            || { echo "::error title=llama.cpp extract::没解出 llama-server"; exit 1; }
+          du -sh src-tauri/resources/llama-runtime
+          node -e '
+            const fs = require("fs");
+            const conf = JSON.parse(fs.readFileSync("src-tauri/tauri.conf.json", "utf8"));
+            conf.productName = "MomentOCR-local-inference";
+            conf.bundle.resources.push("resources/llama-runtime/");
+            fs.writeFileSync("src-tauri/tauri.local-inference.conf.json", JSON.stringify(conf, null, 2));
+          '
 
       - name: Install Linux dependencies
         if: matrix.platform == 'ubuntu-22.04'
@@ -175,7 +235,8 @@ jobs:
             > macOS 安装包未做代码签名，首次打开需在「系统设置 → 隐私与安全性」中点击「仍要打开」。
           releaseDraft: true
           prerelease: false
-          args: --target ${{ matrix.target }} --verbose
+          # -local-inference 变体用生成的 override：productName 加后缀 + 打进 llama-runtime 资源
+          args: --target ${{ matrix.target }} --verbose ${{ matrix.variant == 'local-inference' && '--config src-tauri/tauri.local-inference.conf.json' || '' }}
 
       # 把安装包汇总到运行页摘要并作为运行产物上传：不用再翻 Releases 里的草稿
       - name: Collect installers
