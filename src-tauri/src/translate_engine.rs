@@ -128,9 +128,6 @@ impl Layout {
     fn gguf(&self) -> PathBuf {
         self.models().join(GGUF_NAME)
     }
-    fn manifest(&self) -> PathBuf {
-        self.root.join("state").join("translate.json")
-    }
 
     fn size(&self) -> u64 {
         crate::local_engine::dir_size(&self.root)
@@ -187,23 +184,6 @@ pub fn status(app: &AppHandle) -> crate::local_engine::ComponentStatus {
     }
 }
 
-/// 记录本次安装写入的文件（相对 root），卸载时按清单删
-fn write_manifest(layout: &Layout, files: &[String]) -> Result<()> {
-    let path = layout.manifest();
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(path, serde_json::to_string_pretty(files)?)?;
-    Ok(())
-}
-
-fn read_manifest(layout: &Layout) -> Vec<String> {
-    std::fs::read_to_string(layout.manifest())
-        .ok()
-        .and_then(|raw| serde_json::from_str(&raw).ok())
-        .unwrap_or_default()
-}
-
 /// 下载并装配。进度走 `local-engine-progress` 事件，与 OCR/截图组件共用一个监听器。
 pub async fn install(app: &AppHandle) -> Result<String> {
     let root = resolve_root(app)?;
@@ -230,12 +210,9 @@ pub async fn install_into(
     let report = |stage: &str, percent: u8, detail: &str| progress(stage, percent, detail);
     let bundled = bundled_runtime(resource_hint);
 
-    let mut files: Vec<String> = vec![];
-
     // 1) 模型（大头，1.1 GB）：两源逐个试，装完校验字节数
     if layout.gguf().is_file() {
         report("model", 10, "模型已存在，跳过下载");
-        files.push(format!("models/{GGUF_NAME}"));
     } else {
         let dest = layout.gguf();
         let partial = layout.models().join(format!("{GGUF_NAME}.part"));
@@ -276,7 +253,6 @@ pub async fn install_into(
             anyhow::bail!("模型文件大小不符（{bytes} / {GGUF_BYTES} 字节），下载可能被截断，请重试");
         }
         std::fs::rename(&partial, &dest)?;
-        files.push(format!("models/{GGUF_NAME}"));
     }
 
     // 2) 推理器（约 12–24 MB）：变体安装包已内置时跳过；解压到 runtime/，解完删压缩包
@@ -327,11 +303,7 @@ pub async fn install_into(
         }
     }
 
-    // 3) 清单：把 root 下现有文件全记下来（模型 + 解压产物）
-    files = list_files(&layout.root);
-    write_manifest(&layout, &files)?;
-
-    // 4) 自检：装了就得能翻——真起一次服务、译一句、再收掉
+    // 3) 自检：装了就得能翻——真起一次服务、译一句、再收掉
     report("selftest", 95, "正在自检（首次加载模型约需数十秒）…");
     let text = ensure_server(&layout, bundled.as_deref(), &report).await?;
     let sample = do_chat(&text, "你好，世界", "英文").await;
@@ -384,74 +356,23 @@ fn extract_tar_gz_flat(archive: &Path, dest: &Path) -> Result<()> {
     Ok(())
 }
 
-/// root 下的所有文件（相对路径）
-fn list_files(root: &Path) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut stack = vec![root.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-                stack.push(path);
-            } else if let Ok(relative) = path.strip_prefix(root) {
-                out.push(relative.to_string_lossy().replace('\\', "/"));
-            }
-        }
-    }
-    out.sort();
-    out
-}
-
-/// 按清单移除；服务在跑先收掉
+/// 移除组件。`local-translate/` 目录被本组件独占，整目录删除即可；
+/// 不依赖清单——清单在「装了一半/跨版本共享应用数据」时会缺失或过期，
+/// 按清单删会静默变成 0 字节假移除（真机踩过）。服务在跑先收掉。
 pub fn remove(app: &AppHandle) -> Result<String> {
     let root = resolve_root(app)?;
     remove_into(&root)
 }
 
 pub fn remove_into(root: &Path) -> Result<String> {
-    let layout = Layout { root: root.to_path_buf() };
     let _ = shutdown();
-    let files = read_manifest(&layout);
-    if files.is_empty() && !layout.root.exists() {
+    if !root.exists() {
         anyhow::bail!("本地翻译尚未安装");
     }
-    let mut freed = 0u64;
-    for relative in &files {
-        let path = root.join(relative);
-        if let Ok(meta) = path.metadata() {
-            freed += meta.len();
-        }
-        if path.is_dir() {
-            let _ = std::fs::remove_dir_all(&path);
-        } else {
-            let _ = std::fs::remove_file(&path);
-        }
-    }
-    let _ = std::fs::remove_file(layout.manifest());
-    prune_empty_dirs(&root);
-    // 剩个空壳也一并删掉（清单缺失时兜底）
-    if dir_is_empty(&root) {
-        let extra = crate::local_engine::dir_size(&root);
-        let _ = std::fs::remove_dir_all(&root);
-        freed += extra;
-    }
+    let freed = crate::local_engine::dir_size(root);
+    std::fs::remove_dir_all(root)
+        .with_context(|| format!("删除 {} 失败", root.display()))?;
     Ok(format!("已移除本地翻译组件，释放 {:.0} MB", freed as f64 / 1_048_576.0))
-}
-
-fn prune_empty_dirs(root: &Path) {
-    let Ok(entries) = std::fs::read_dir(root) else { return };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            prune_empty_dirs(&path);
-            let _ = std::fs::remove_dir(&path); // 非空会失败，正好跳过
-        }
-    }
-}
-
-fn dir_is_empty(dir: &Path) -> bool {
-    std::fs::read_dir(dir).map(|mut d| d.next().is_none()).unwrap_or(true)
 }
 
 // ===== llama-server 进程管理 =====
@@ -656,7 +577,6 @@ mod tests {
 
         let layout = Layout { root: root.clone() };
         assert!(find_server(&layout.runtime()).is_some() && layout.gguf().is_file(), "推理器或模型缺失");
-        assert!(!read_manifest(&layout).is_empty(), "没有记录组件清单");
 
         // 装配线的自检结束后服务已被收掉，这里验证冷重启 + 常驻复用路径也能翻
         let client = ensure_server(&layout, None, &|_, _, _| {})
@@ -668,11 +588,36 @@ mod tests {
         println!("冷重启后译文: {out}");
         assert!(!out.trim().is_empty());
 
-        // 按清单移除，确认能干净卸载（含 root 目录本身）
+        // 整目录移除，确认能干净卸载（含 root 目录本身）
         let message = remove_into(&root).expect("移除失败");
         println!("移除结果: {message}");
         assert!(!(find_server(&layout.runtime()).is_some() && layout.gguf().is_file()), "移除后组件标志物还在");
         assert!(!root.exists(), "移除后目录还在");
+    }
+
+    /// 回归（真机踩过）：装了一半的旧版本留下模型文件但没写清单时，
+    /// 按清单移除会静默变成「释放 0 MB」的假移除，状态永远卡在已安装、
+    /// 没有下载按钮。整目录删除后必须真实释放并回到未安装。
+    #[test]
+    fn removes_whole_dir_even_without_manifest() {
+        let root = std::env::temp_dir().join("momentocr-remove-no-manifest-test");
+        let _ = std::fs::remove_dir_all(&root);
+        let gguf = root.join("models").join(GGUF_NAME);
+        std::fs::create_dir_all(gguf.parent().unwrap()).unwrap();
+        // 2 MB：释放量按 MB 取整显示，太小的假文件会显示「释放 0 MB」干扰断言
+        std::fs::write(&gguf, vec![0u8; 2 * 1024 * 1024]).unwrap();
+        // 半截下载的归档这类杂质也要一并清掉
+        std::fs::write(root.join("llama-b11932-bin-win-cpu-x64.zip"), b"junk").unwrap();
+
+        let message = remove_into(&root).expect("移除失败");
+        assert!(message.contains("MB"), "{message}");
+        assert!(!message.contains("释放 0 MB"), "不能是假移除：{message}");
+        assert!(!root.exists(), "移除后目录还在");
+
+        // 未安装时移除要明确报错，而不是假装成功
+        assert!(remove_into(&root).is_err());
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// 平台产物名写错就是整条装配线跑不通，而且只有到真机才暴露

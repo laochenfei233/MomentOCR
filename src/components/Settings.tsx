@@ -938,7 +938,7 @@ function TranslateComponentPanel({ status, bundledRuntime, busy, progress, msg, 
         <p style={{ fontSize: 11, color: '#AEAEB2', marginTop: 8, lineHeight: 1.6 }}>
           占用磁盘约 {toMb(status?.disk_bytes ?? 0)} MB，翻译离线可用、不上传文本
           {bundledRuntime ? '（本安装包已内置 llama.cpp 推理器，无需下载）' : ''}；
-          模型装在应用自己的目录里，不动系统环境，移除时按清单精确删除。
+          模型装在应用自己的目录里，不动系统环境，移除时整个删除、需要时重新下载。
         </p>
       ) : (
         <p style={{ fontSize: 11, color: '#8E8E93', marginTop: 8, lineHeight: 1.6 }}>
