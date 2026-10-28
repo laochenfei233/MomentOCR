@@ -786,6 +786,42 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// bundled 回退的优先级：runtime/ 为空但内置目录有 llama-server 时，
+    /// ensure_server 的报错应推进到「模型未下载」；无内置时才报「未找到 llama-server」。
+    /// find_server 只认文件名，假文件即可驱动到该分支，无需真模型。
+    #[tokio::test]
+    async fn bundled_server_takes_precedence_over_missing_runtime() {
+        let client = localhost_client();
+        if healthy(&client).await {
+            // 本机 48731 恰好有服务在跑（比如应用正开着）时探活直接通过，无法走该分支
+            eprintln!("跳过：48731 已有服务在监听");
+            return;
+        }
+
+        let root = std::env::temp_dir().join("momentocr-bundled-precedence-test");
+        let _ = std::fs::remove_dir_all(&root);
+        let layout = Layout { root: root.clone() };
+        std::fs::create_dir_all(layout.models()).unwrap();
+
+        let bundled = root.join("sim-bundled");
+        std::fs::create_dir_all(bundled.join("llama-b11932-bin-sim")).unwrap();
+        std::fs::write(bundled.join("llama-b11932-bin-sim").join(SERVER_BIN), b"x").unwrap();
+
+        let err = ensure_server(&layout, Some(&bundled), &|_, _, _| {})
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("模型尚未下载"), "{err}");
+
+        let err = ensure_server(&layout, None, &|_, _, _| {})
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("未找到 llama-server"), "{err}");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     /// 指令格式是给模型看的契约，写死了才好回归
     #[test]
     fn prompt_keeps_target_language_and_text() {
