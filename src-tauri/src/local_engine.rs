@@ -171,6 +171,8 @@ pub struct Status {
     pub screenshot: ComponentStatus,
     /// 本地翻译模型（HY-MT），不依赖 Python 运行时，见 translate_engine
     pub translate: ComponentStatus,
+    /// -local-inference 变体把 llama.cpp 打进了安装包，推理器无需下载
+    pub translate_runtime_bundled: bool,
     pub runtime_bytes: u64,
 }
 
@@ -347,6 +349,7 @@ pub fn status(app: &AppHandle) -> Status {
         screenshot_bundled: super::overlay::bundled_overlay().is_some(),
         screenshot: component_status(Component::Screenshot),
         translate: crate::translate_engine::status(app),
+        translate_runtime_bundled: crate::translate_engine::runtime_bundled(app),
         runtime_bytes: layout.as_ref().map(|l| l.size()).unwrap_or(0),
     }
 }

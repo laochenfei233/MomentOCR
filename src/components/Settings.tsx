@@ -26,6 +26,8 @@ interface ComponentsStatus {
   screenshot_bundled: boolean;
   screenshot: ComponentStatus;
   translate: ComponentStatus;
+  /** -local-inference 变体把 llama.cpp 打进了安装包，推理器无需下载 */
+  translate_runtime_bundled: boolean;
   runtime_bytes: number;
 }
 
@@ -399,6 +401,7 @@ function Settings({ shortcutIssues = {}, autostartIssue = null }: {
               {activeTranslationPlugin === 'hymt-translate' && (
                 <TranslateComponentPanel
                   status={components?.translate ?? null}
+                  bundledRuntime={components?.translate_runtime_bundled ?? false}
                   busy={engineBusy === 'translate'}
                   progress={engineBusy === 'translate' ? engineProgress : null}
                   msg={engineMsg.translate ?? null}
@@ -876,8 +879,10 @@ function LocalComponentPanel({ id, title, description, status, bundled, runtimeI
 }
 
 /** 本地翻译（HY-MT）的安装面板：装配线不依赖 Python 运行时，文案与 LocalComponentPanel 分开 */
-function TranslateComponentPanel({ status, busy, progress, msg, onInstall, onRemove, onRefresh }: {
+function TranslateComponentPanel({ status, bundledRuntime, busy, progress, msg, onInstall, onRemove, onRefresh }: {
   status: ComponentStatus | null;
+  /** 安装包是否已内置 llama.cpp 推理器（-local-inference 变体） */
+  bundledRuntime: boolean;
   busy: boolean;
   progress: LocalEngineProgress | null;
   msg: string | null;
@@ -931,13 +936,15 @@ function TranslateComponentPanel({ status, busy, progress, msg, onInstall, onRem
 
       {!progress && (installed ? (
         <p style={{ fontSize: 11, color: '#AEAEB2', marginTop: 8, lineHeight: 1.6 }}>
-          占用磁盘约 {toMb(status?.disk_bytes ?? 0)} MB，翻译离线可用、不上传文本；
+          占用磁盘约 {toMb(status?.disk_bytes ?? 0)} MB，翻译离线可用、不上传文本
+          {bundledRuntime ? '（本安装包已内置 llama.cpp 推理器，无需下载）' : ''}；
           模型装在应用自己的目录里，不动系统环境，移除时按清单精确删除。
         </p>
       ) : (
         <p style={{ fontSize: 11, color: '#8E8E93', marginTop: 8, lineHeight: 1.6 }}>
           下载腾讯混元 HY-MT1.5-1.8B 翻译模型（33 语互译，量化后约 1.1 GB）
-          和 llama.cpp 推理器，支持中文/英文/日文/韩文互译，安装后离线可用、无需 API Key。
+          {bundledRuntime ? '（推理器已内置，无需下载）' : '和 llama.cpp 推理器'}，
+          支持中文/英文/日文/韩文互译，安装后离线可用、无需 API Key。
         </p>
       ))}
     </div>

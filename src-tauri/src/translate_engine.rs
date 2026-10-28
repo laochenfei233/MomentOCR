@@ -71,9 +71,39 @@ const GGUF_NAME: &str = "HY-MT1.5-1.8B-Q4_K_M.gguf";
 /// llama-server 的可执行名（Windows 带 .exe）
 const SERVER_BIN: &str = if cfg!(windows) { "llama-server.exe" } else { "llama-server" };
 
-/// 界面展示用的下载/磁盘估算（GGUF 1080.6 MiB + 压缩包约 23 MiB / 解压后约 60 MiB）
-const DOWNLOAD_MB: u64 = 1105;
-const DISK_MB: u64 = 1150;
+/// 界面展示用的体积估算（模型 1080.6 MiB；推理器官方包约 12–24 MB，解压后约 60 MB）
+const MODEL_MB: u64 = 1081;
+const RUNTIME_DOWNLOAD_MB: u64 = 24;
+const RUNTIME_DISK_MB: u64 = 60;
+
+/// `-local-inference` 变体把 llama.cpp 打进了资源目录的 llama-runtime/ 下
+const BUNDLED_DIR: &str = "llama-runtime";
+
+/// 探测安装包内置的推理器。依次找：资源目录、exe 相对路径向上三级
+/// （安装版资源与 exe 同级，开发期 target/debug 向上能到 src-tauri）、
+/// CARGO_MANIFEST_DIR（测试/编译期）。
+fn bundled_runtime(resource_hint: Option<&Path>) -> Option<PathBuf> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Some(hint) = resource_hint {
+        candidates.push(hint.join(BUNDLED_DIR));
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        let mut dir = exe.parent().map(|d| d.to_path_buf());
+        for _ in 0..3 {
+            let Some(current) = dir else { break };
+            candidates.push(current.join(BUNDLED_DIR));
+            dir = current.parent().map(|d| d.to_path_buf());
+        }
+    }
+    if let Ok(manifest) = std::env::var("CARGO_MANIFEST_DIR") {
+        let base = PathBuf::from(manifest);
+        candidates.push(base.join("resources").join(BUNDLED_DIR));
+        candidates.push(base.join(BUNDLED_DIR));
+    }
+    candidates
+        .into_iter()
+        .find(|dir| find_server(dir).is_some())
+}
 
 /// 组件根目录，与 local_engine 的 local-engine/ 平级
 fn resolve_root(app: &AppHandle) -> Result<PathBuf> {
@@ -139,16 +169,25 @@ fn emit(app: &AppHandle, stage: &str, percent: u8, detail: &str) {
     );
 }
 
+/// -local-inference 变体是否内置了推理器（Status 展示与下载估算用）
+pub fn runtime_bundled(app: &AppHandle) -> bool {
+    bundled_runtime(app.path().resource_dir().ok().as_deref()).is_some()
+}
+
 /// 设置页展示用的组件状态（与 local_engine::ComponentStatus 同形）
 pub fn status(app: &AppHandle) -> crate::local_engine::ComponentStatus {
     let layout = resolve_root(app).map(|root| Layout { root }).ok();
-    let installed = layout.as_ref().map(|l| l.installed()).unwrap_or(false);
+    let bundled = runtime_bundled(app);
+    let has_model = layout.as_ref().map(|l| l.gguf().is_file()).unwrap_or(false);
+    let has_server = layout.as_ref().map(|l| find_server(&l.runtime()).is_some()).unwrap_or(false) || bundled;
+    let installed = has_model && has_server;
+    // bundled 时推理器不占应用数据、也不必下载，估算只按模型计
     crate::local_engine::ComponentStatus {
         installed,
         version: if installed { "HY-MT1.5-1.8B（Q4_K_M）".to_string() } else { String::new() },
         disk_bytes: layout.as_ref().map(|l| l.size()).unwrap_or(0),
-        download_mb: DOWNLOAD_MB,
-        disk_mb: DISK_MB,
+        download_mb: MODEL_MB + if bundled { 0 } else { RUNTIME_DOWNLOAD_MB },
+        disk_mb: MODEL_MB + if bundled { 0 } else { RUNTIME_DISK_MB },
     }
 }
 
@@ -172,12 +211,18 @@ fn read_manifest(layout: &Layout) -> Vec<String> {
 /// 下载并装配。进度走 `local-engine-progress` 事件，与 OCR/截图组件共用一个监听器。
 pub async fn install(app: &AppHandle) -> Result<String> {
     let root = resolve_root(app)?;
-    install_into(&root, &|stage, percent, detail| emit(app, stage, percent, detail)).await
+    let hint = app.path().resource_dir().ok();
+    install_into(&root, hint.as_deref(), &|stage, percent, detail| {
+        emit(app, stage, percent, detail)
+    })
+    .await
 }
 
-/// 装配逻辑本体：不依赖 Tauri，便于直接测试（见文件末尾的联网集成测试）
+/// 装配逻辑本体：不依赖 Tauri，便于直接测试（见文件末尾的联网集成测试）。
+/// `resource_hint` 是安装包资源目录，供探测内置推理器（-local-inference 变体）。
 pub async fn install_into(
     root: &Path,
+    resource_hint: Option<&Path>,
     progress: &(dyn Fn(&str, u8, &str) + Sync),
 ) -> Result<String> {
     let layout = Layout { root: root.to_path_buf() };
@@ -187,6 +232,7 @@ pub async fn install_into(
         .user_agent("MomentOCR-local-translate")
         .build()?;
     let report = |stage: &str, percent: u8, detail: &str| progress(stage, percent, detail);
+    let bundled = bundled_runtime(resource_hint);
 
     let mut files: Vec<String> = vec![];
 
@@ -237,9 +283,11 @@ pub async fn install_into(
         files.push(format!("models/{GGUF_NAME}"));
     }
 
-    // 2) 推理器（约 12–24 MB）：解压到 runtime/，解完删压缩包
+    // 2) 推理器（约 12–24 MB）：变体安装包已内置时跳过；解压到 runtime/，解完删压缩包
     if find_server(&layout.runtime()).is_some() {
         report("runtime", 85, "推理器已存在，跳过下载");
+    } else if bundled.is_some() {
+        report("runtime", 85, "使用安装包内置的推理器");
     } else {
         let archive_name = llama_asset()?.to_string();
         let archive = layout.root.join(&archive_name);
@@ -289,7 +337,7 @@ pub async fn install_into(
 
     // 4) 自检：装了就得能翻——真起一次服务、译一句、再收掉
     report("selftest", 95, "正在自检（首次加载模型约需数十秒）…");
-    let text = ensure_server(&layout, &report).await?;
+    let text = ensure_server(&layout, bundled.as_deref(), &report).await?;
     let sample = do_chat(&text, "你好，世界", "英文").await;
     let _ = shutdown();
     match sample {
@@ -443,9 +491,10 @@ async fn healthy(client: &reqwest::Client) -> bool {
 }
 
 /// 确保服务在跑：探活，没起就 spawn 并轮询到就绪（模型加载可能要几十秒）。
-/// 返回请求用的客户端。
+/// 推理器优先用应用数据里已下载的，其次用安装包内置的。返回请求用的客户端。
 async fn ensure_server(
     layout: &Layout,
+    bundled: Option<&Path>,
     report: &(dyn Fn(&str, u8, &str) + Sync),
 ) -> Result<reqwest::Client> {
     let client = localhost_client();
@@ -454,6 +503,7 @@ async fn ensure_server(
     }
 
     let server = find_server(&layout.runtime())
+        .or_else(|| bundled.and_then(|dir| find_server(dir)))
         .context("未找到 llama-server，请先在设置里安装本地翻译组件")?;
     let gguf = layout.gguf();
     if !gguf.is_file() {
@@ -580,7 +630,8 @@ pub async fn translate(app: &AppHandle, text: &str, target_lang: &str) -> Result
     let layout = Layout { root };
     // 冷启动要加载 1.1 GB 模型，进度发到事件里，界面至少能看到「正在启动」
     let report = |stage: &str, percent: u8, detail: &str| emit(app, stage, percent, detail);
-    let client = ensure_server(&layout, &report).await?;
+    let bundled = bundled_runtime(app.path().resource_dir().ok().as_deref());
+    let client = ensure_server(&layout, bundled.as_deref(), &report).await?;
     let out = do_chat(&client, text, target_lang).await?;
     if out.trim().is_empty() {
         anyhow::bail!("本地翻译返回为空");
@@ -600,7 +651,7 @@ mod tests {
         let root = std::env::temp_dir().join("momentocr-translate-test");
         let _ = std::fs::remove_dir_all(&root);
 
-        let message = install_into(&root, &|stage, percent, detail| {
+        let message = install_into(&root, None, &|stage, percent, detail| {
             println!("[{stage} {percent}%] {detail}")
         })
         .await
@@ -612,7 +663,7 @@ mod tests {
         assert!(!read_manifest(&layout).is_empty(), "没有记录组件清单");
 
         // 装配线的自检结束后服务已被收掉，这里验证冷重启 + 常驻复用路径也能翻
-        let client = ensure_server(&layout, &|_, _, _| {})
+        let client = ensure_server(&layout, None, &|_, _, _| {})
             .await
             .expect("服务未就绪");
         let out = do_chat(&client, "Hello, world!", "中文")
@@ -710,9 +761,28 @@ mod tests {
         std::fs::create_dir_all(&nested).unwrap();
         assert!(find_server(&dir.join("runtime")).is_none());
 
-        let name = if cfg!(windows) { "llama-server.exe" } else { "llama-server" };
-        std::fs::write(nested.join(name), b"x").unwrap();
+        std::fs::write(nested.join(SERVER_BIN), b"x").unwrap();
         assert!(find_server(&dir.join("runtime")).is_some());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 内置推理器探测：CARGO_MANIFEST_DIR 下的 resources/llama-runtime/ 命中
+    #[test]
+    fn bundled_runtime_found_via_manifest_probe() {
+        let dir = std::env::temp_dir().join("momentocr-bundled-probe-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        let fake = dir.join("resources").join("llama-runtime");
+        std::fs::create_dir_all(&fake).unwrap();
+
+        // 探测失败不该 panic；命中前不误报
+        std::env::set_var("CARGO_MANIFEST_DIR", &dir);
+        assert!(bundled_runtime(None).is_none());
+
+        std::fs::write(fake.join(SERVER_BIN), b"x").unwrap();
+        let found = bundled_runtime(None).expect("应探测到内置推理器");
+        assert!(find_server(&found).is_some());
+
+        std::env::remove_var("CARGO_MANIFEST_DIR");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
