@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { useOcrStore } from '../stores/ocrStore';
 import { useSettingsStore } from '../stores/settingsStore';
+import { TRANSLATE_TARGETS } from '../utils/languages';
 import { Logo } from './Logo';
 
 interface OcrResultProps {
@@ -9,16 +10,16 @@ interface OcrResultProps {
   translation?: string;
   /** 翻译框位置：'下方' | '右侧' */
   translationLayout?: string;
-  /** 翻译目标语言（标签展示） */
-  translationTarget?: string;
 }
 
 const FONT_SIZE_MAP: Record<string, string> = { '小四': '16px', '小三': '19px', '四号': '18px', '五号': '14px' };
 const FONT_FAMILY_MAP: Record<string, string> = { '新罗马': '"Times New Roman", serif', '宋体': '"SimSun", serif', '微软雅黑': '"Microsoft YaHei", sans-serif', '黑体': '"SimHei", sans-serif' };
 
-function OcrResult({ onTextChange, translation, translationLayout, translationTarget }: OcrResultProps) {
+function OcrResult({ onTextChange, translation, translationLayout }: OcrResultProps) {
   const { isProcessing, result } = useOcrStore();
-  const { style, translateSplit, setTranslateSplit } = useSettingsStore();
+  const { style, translateSplit, setTranslateSplit, language, setLanguage } = useSettingsStore();
+  // 目标语言与设置页的「翻译目标」共用同一个 store 键，两处自然同步
+  const translationTarget = language.translateTarget || '中文';
   const [copied, setCopied] = useState(false);
   const [translationCopied, setTranslationCopied] = useState(false);
   const [editableText, setEditableText] = useState('');
@@ -192,7 +193,17 @@ function OcrResult({ onTextChange, translation, translationLayout, translationTa
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 16px', borderBottom: '0.5px solid #E5E5EA' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                       <span style={{ fontSize: 13, fontWeight: 600, color: '#1c1c1e' }}>翻译结果</span>
-                      <span style={{ padding: '2px 6px', fontSize: 10, background: '#E8F0FE', color: '#007AFF', borderRadius: 6 }}>→ {translationTarget}</span>
+                      {/* 目标语言即选即换：样式沿用原徽标，仅从展示变可交互 */}
+                      <select
+                        value={translationTarget}
+                        onChange={(e) => setLanguage({ translateTarget: e.target.value })}
+                        title="点击切换目标语言"
+                        style={{ padding: '2px 4px', fontSize: 10, background: '#E8F0FE', color: '#007AFF', borderRadius: 6, border: 'none', outline: 'none', cursor: 'pointer' }}
+                      >
+                        {TRANSLATE_TARGETS.map((lang) => (
+                          <option key={lang} value={lang}>→ {lang}</option>
+                        ))}
+                      </select>
                     </div>
                     <button onClick={handleCopyTranslation} style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '4px 8px', fontSize: 12, color: '#007AFF', background: 'none', border: 'none', borderRadius: 6, cursor: 'pointer' }}>
                       {translationCopied ? '✓ 已复制' : '复制'}
