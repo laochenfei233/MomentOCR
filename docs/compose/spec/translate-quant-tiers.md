@@ -3,7 +3,7 @@ feature: translate-quant-tiers
 status: delivered
 updated: 2026-10-28
 branch: feat/translate-quant-tiers
-commits: 60129aa..a9d602d
+commits: 60129aa..fa0bc86
 worktree: .worktrees/translate-quant-tiers
 ---
 
@@ -17,10 +17,14 @@ worktree: .worktrees/translate-quant-tiers
 实际档位并提示换档需移除重装。已装档位按 `models/` 下的文件名判定，翻译始终用已装
 那档的模型；换档安装会清掉另一档文件避免状态分叉。
 
-**Verification** — `cargo test --lib` 18 passed（含档位 id 回环、按文件判定档位、
-两档文件名互斥、缺省档最小）；`npm run build` PASS；**联网端到端真机通过**：缺省档
+**Verification** — `cargo test --lib` 19 passed（含档位 id 回环、按文件判定档位、两档文件名互斥、
+缺省档最小、两档并存判定确定、跳过下载也互斥清理）；`npm run build` PASS；**联网端到端真机通过**：缺省档
 下载 IQ3_XXS → 自检翻译（「Hello, world.」→「大家好！」）→ 冷重启复翻 → 卸载释放
 848 MB（Q4 档同流程为 1140 MB）。
+
+**独立评审** — subagent 逐条核对 6 条验收全部 PASS，无关键缺陷；提出 4 项非阻塞问题
+（安装按钮体积不跟档位走、互斥清理漏了「目标档已存在」分支、`Quant.label` 死代码警告、
+过时单档注释）均已修复（fa0bc86）并补了对应单测。
 
 **Journey log**
 - **内存大头不是模型体积**：Q4_K_M 权重 1081 MB 却占 2.1 GB 内存（llama.cpp 对
