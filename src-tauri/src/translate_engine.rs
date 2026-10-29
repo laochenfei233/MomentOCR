@@ -3,8 +3,8 @@
 //! 与 `local_engine` 的 Python 组件不同，这条链路不需要解释器：
 //!   · 推理器 = llama.cpp 官方预编译 CPU 版（固定 b11932，晚于混元架构的支持，
 //!     GGUF 开箱即用），按平台从 GitHub Releases 取对应压缩包，约 12–24 MB
-//!   · 模型 = `tencent/HY-MT1.5-1.8B-GGUF` 的 Q4_K_M（1,133,080,512 字节），
-//!     ModelScope（国内直连快）→ HuggingFace（回退）
+//!   · 模型 = HY-MT1.5-1.8B 的 GGUF，两档可选（见 `Quant`）：缺省轻量 IQ3_XXS
+//!     （789 MB），标准 Q4_K_M（1081 MB）。ModelScope（国内直连快）→ HuggingFace（回退）
 //!
 //! 目录布局（`<app_local_data>/local-translate/`）：
 //!   runtime/   llama.cpp 解压产物（llama-server 在里面，启动时按名字查找，
@@ -65,10 +65,8 @@ fn llama_urls() -> Result<Vec<String>> {
 /// IQ3_XXS 仅 1.1 GB、翻译质量几乎无差、速度慢约一半；Q2_K 质量明显退化不提供。
 pub struct Quant {
     pub id: &'static str,
-    /// 短名，装在版本号/一行文案里用
+    /// 短名，装在版本号里用（面板上的档位说明在 TS 侧，避免两份文案漂移）
     pub name: &'static str,
-    /// 界面上的一句话说明（体积与内存差异是选它的唯一理由）
-    pub label: &'static str,
     pub gguf_name: &'static str,
     /// 装完按字节数校验（下载截断/镜像损坏会直接报错）
     pub bytes: u64,
@@ -80,7 +78,6 @@ pub struct Quant {
 const QUANT_LIGHT: Quant = Quant {
     id: "light",
     name: "轻量",
-    label: "轻量：内存约 1.1 GB、翻译稍慢",
     gguf_name: "HY-MT1.5-1.8B-iq3_xxs.gguf",
     bytes: 826_831_648,
     urls: &[
@@ -93,7 +90,6 @@ const QUANT_LIGHT: Quant = Quant {
 const QUANT_STANDARD: Quant = Quant {
     id: "standard",
     name: "标准",
-    label: "标准：内存约 2.1 GB、翻译最快",
     gguf_name: "HY-MT1.5-1.8B-Q4_K_M.gguf",
     bytes: 1_133_080_512,
     urls: &[
@@ -175,7 +171,8 @@ impl Layout {
         self.models().join(quant.gguf_name)
     }
 
-    /// 已装的档位：models/ 下哪个文件在就是哪个（两档在同名互斥，不会并存）
+    /// 已装的档位：models/ 下哪个文件在就是哪个（安装流程保证两档互斥；
+    /// 万一并存，按 QUANTS 顺序取第一个）
     fn installed_quant(&self) -> Option<&'static Quant> {
         QUANTS
             .iter()
@@ -322,9 +319,16 @@ pub async fn install_into(
             );
         }
         std::fs::rename(&partial, &dest)?;
-        // 两档在同目录下互斥：换档时清掉另一档，避免 status 与磁盘各说各话
-        for other in QUANTS.iter().copied().filter(|q| q.id != quant.id) {
-            let _ = std::fs::remove_file(layout.gguf(other));
+    }
+
+    // 两档互斥：不管本次是否真下载（目标档已存在时跳过下载），都清掉另一档。
+    // 否则「两档并存」时 installed_quant 会挑到另一档，自检与翻译都用错模型。
+    // 删不掉就报错：留着两档会让状态判定长期不可信。
+    for other in QUANTS.iter().copied().filter(|q| q.id != quant.id) {
+        let stale = layout.gguf(other);
+        if stale.is_file() {
+            std::fs::remove_file(&stale)
+                .with_context(|| format!("清理旧档位 {} 失败", stale.display()))?;
         }
     }
 
@@ -536,7 +540,7 @@ async fn ensure_server(
         *guard = Some(ServerHandle { child, root: layout.root.clone() });
     }
 
-    // 轮询到就绪；上限 90 秒（冷启动从磁盘读 1.1 GB 模型在机械盘上会更慢）
+    // 轮询到就绪；上限 90 秒（冷启动从磁盘读 0.8~1.1 GB 模型在机械盘上会更慢）
     report("server", 0, "正在启动本地翻译服务…");
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
     loop {
@@ -619,7 +623,7 @@ async fn do_chat(client: &reqwest::Client, text: &str, target_lang: &str) -> Res
 pub async fn translate(app: &AppHandle, text: &str, target_lang: &str) -> Result<String> {
     let root = resolve_root(app)?;
     let layout = Layout { root };
-    // 冷启动要加载 1.1 GB 模型，进度发到事件里，界面至少能看到「正在启动」
+    // 冷启动要加载近 GB 级模型，进度发到事件里，界面至少能看到「正在启动」
     let report = |stage: &str, percent: u8, detail: &str| emit(app, stage, percent, detail);
     let bundled = bundled_runtime(app.path().resource_dir().ok().as_deref());
     let client = ensure_server(&layout, bundled.as_deref(), &report).await?;
@@ -634,7 +638,7 @@ pub async fn translate(app: &AppHandle, text: &str, target_lang: &str) -> Result
 mod tests {
     use super::*;
 
-    /// 真装一遍再真翻一次：需要联网（约 1.1 GB 下载），所以默认忽略。
+    /// 真装一遍再真翻一次：需要联网（缺省档约 789 MB 下载），所以默认忽略。
     /// 跑法：cargo test --lib installs_translation -- --ignored --nocapture
     #[tokio::test]
     #[ignore]
@@ -762,6 +766,34 @@ mod tests {
 
         std::fs::write(layout.gguf(&QUANT_LIGHT), b"x").unwrap();
         std::fs::remove_file(layout.gguf(&QUANT_STANDARD)).unwrap();
+        assert_eq!(layout.installed_quant().map(|q| q.id), Some("light"));
+
+        // 异常态（两档并存，如手工拷贝/删除失败）：判定要确定，不能随机
+        std::fs::write(layout.gguf(&QUANT_STANDARD), b"x").unwrap();
+        assert_eq!(layout.installed_quant().map(|q| q.id), Some("light"));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 装档位时必须清掉另一档：否则两档并存，自检/翻译会用错模型。
+    /// 目标档文件已存在（跳过下载）的路径也要清——这是此前漏掉的分支。
+    #[tokio::test]
+    async fn install_removes_the_other_tier() {
+        let root = std::env::temp_dir().join("momentocr-quant-exclusive-test");
+        let _ = std::fs::remove_dir_all(&root);
+        let layout = Layout { root: root.clone() };
+        std::fs::create_dir_all(layout.models()).unwrap();
+        std::fs::write(layout.gguf(&QUANT_STANDARD), b"old").unwrap();
+        std::fs::write(layout.gguf(&QUANT_LIGHT), b"new").unwrap();
+        // 预置假的 llama-server，跳过联网下载推理器；自检会失败（假二进制跑不起来），
+        // 但互斥清理发生在自检之前，断言依然有效
+        let sim = layout.runtime().join("llama-b11932-bin-sim");
+        std::fs::create_dir_all(&sim).unwrap();
+        std::fs::write(sim.join(SERVER_BIN), b"x").unwrap();
+
+        let _ = install_into(&root, None, &QUANT_LIGHT, &|_, _, _| {}).await;
+
+        assert!(!layout.gguf(&QUANT_STANDARD).is_file(), "另一档没被清掉");
         assert_eq!(layout.installed_quant().map(|q| q.id), Some("light"));
 
         let _ = std::fs::remove_dir_all(&root);

@@ -20,10 +20,10 @@ interface ComponentStatus {
   disk_mb: number;
 }
 
-/** 本地翻译的模型档位（与 Rust 侧 QUANTS 对应；内存数字来自实测） */
+/** 本地翻译的模型档位（与 Rust 侧 QUANTS 对应；体积/内存数字来自实测） */
 const TRANSLATE_QUANTS = [
-  { id: 'light', label: '轻量（约 789 MB，内存约 1.1 GB，翻译稍慢）' },
-  { id: 'standard', label: '标准（约 1081 MB，内存约 2.1 GB，翻译最快）' },
+  { id: 'light', label: '轻量（约 789 MB，内存约 1.1 GB，翻译稍慢）', download_mb: 789 },
+  { id: 'standard', label: '标准（约 1081 MB，内存约 2.1 GB，翻译最快）', download_mb: 1081 },
 ];
 
 /** 本地组件总览：OCR/截图共用隔离运行时，translate（HY-MT 翻译）独立装配 */
@@ -912,6 +912,8 @@ function TranslateComponentPanel({ status, bundledRuntime, quant, onQuantChange,
   const installed = !!status?.installed;
   const failed = !!msg && (msg.startsWith('安装失败') || msg.startsWith('移除失败'));
   const toMb = (bytes: number) => Math.round(bytes / 1048576);
+  // 未安装时按用户所选档位估体积；localStorage 里存的脏值回落到第一档
+  const selected = TRANSLATE_QUANTS.find((q) => q.id === quant) ?? TRANSLATE_QUANTS[0];
   const buttonStyle: React.CSSProperties = {
     padding: '6px 12px', border: 'none', borderRadius: 12, fontSize: 12, fontWeight: 600,
   };
@@ -936,7 +938,7 @@ function TranslateComponentPanel({ status, bundledRuntime, quant, onQuantChange,
           ) : (
             <button onClick={onInstall} disabled={busy}
               style={{ ...buttonStyle, background: busy ? '#AEAEB2' : '#007AFF', color: 'white', cursor: busy ? 'default' : 'pointer' }}>
-              {busy ? '下载中…' : `下载并安装（约 ${status?.download_mb ?? 0} MB）`}
+              {busy ? '下载中…' : `下载并安装（约 ${selected.download_mb} MB）`}
             </button>
           )}
         </div>
@@ -984,7 +986,8 @@ function TranslateComponentPanel({ status, bundledRuntime, quant, onQuantChange,
         </p>
       ) : (
         <p style={{ fontSize: 11, color: '#8E8E93', marginTop: 8, lineHeight: 1.6 }}>
-          下载腾讯混元 HY-MT1.5-1.8B 翻译模型（33 语互译，量化后约 1.1 GB）
+          下载腾讯混元 HY-MT1.5-1.8B 翻译模型（33 语互译，{selected.label.split('（')[0]}
+          档约 {selected.download_mb} MB）
           {bundledRuntime ? '（推理器已内置，无需下载）' : '和 llama.cpp 推理器'}，
           支持界面提供的 10 种目标语言，安装后离线可用、无需 API Key。
         </p>
