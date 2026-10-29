@@ -13,10 +13,18 @@ type SettingsTab = 'general' | 'config' | 'screenshot' | 'api' | 'shortcuts' | '
 interface ComponentStatus {
   installed: boolean;
   version: string;
+  /** 本地翻译的已装模型档位（"light"/"standard"）；其他组件为空串 */
+  quant: string;
   disk_bytes: number;
   download_mb: number;
   disk_mb: number;
 }
+
+/** 本地翻译的模型档位（与 Rust 侧 QUANTS 对应；内存数字来自实测） */
+const TRANSLATE_QUANTS = [
+  { id: 'light', label: '轻量（约 789 MB，内存约 1.1 GB，翻译稍慢）' },
+  { id: 'standard', label: '标准（约 1081 MB，内存约 2.1 GB，翻译最快）' },
+];
 
 /** 本地组件总览：OCR/截图共用隔离运行时，translate（HY-MT 翻译）独立装配 */
 interface ComponentsStatus {
@@ -87,7 +95,12 @@ function Settings({ shortcutIssues = {}, autostartIssue = null }: {
     setScreenshot,
     shortcuts,
     setShortcuts,
+    pluginSettings,
+    setPluginSetting,
   } = store;
+
+  // 档位选择存进插件设置（缺省轻量），安装时传给后端
+  const selectedQuant = (pluginSettings['hymt-translate']?.quant as string) || 'light';
 
   const ocrPlugins = builtinPlugins.filter((p) => p.type === 'ocr');
   const translationPlugins = builtinPlugins.filter((p) => p.type === 'translation');
@@ -109,12 +122,12 @@ function Settings({ shortcutIssues = {}, autostartIssue = null }: {
     return () => { unlisten.then((fn) => fn()); };
   }, []);
 
-  const installComponent = async (id: 'ocr' | 'screenshot' | 'translate') => {
+  const installComponent = async (id: 'ocr' | 'screenshot' | 'translate', quant?: string) => {
     setEngineBusy(id);
     setEngineMsg((m) => ({ ...m, [id]: null }));
     setEngineProgress({ stage: 'python', percent: 0, detail: '正在准备下载…' });
     try {
-      const message = await invoke<string>('install_local_component', { component: id });
+      const message = await invoke<string>('install_local_component', { component: id, quant });
       setEngineMsg((m) => ({ ...m, [id]: message }));
     } catch (err) {
       setEngineMsg((m) => ({ ...m, [id]: `安装失败：${err}` }));
@@ -403,10 +416,12 @@ function Settings({ shortcutIssues = {}, autostartIssue = null }: {
                 <TranslateComponentPanel
                   status={components?.translate ?? null}
                   bundledRuntime={components?.translate_runtime_bundled ?? false}
+                  quant={selectedQuant}
+                  onQuantChange={(q) => setPluginSetting('hymt-translate', 'quant', q)}
                   busy={engineBusy === 'translate'}
                   progress={engineBusy === 'translate' ? engineProgress : null}
                   msg={engineMsg.translate ?? null}
-                  onInstall={() => installComponent('translate')}
+                  onInstall={() => installComponent('translate', selectedQuant)}
                   onRemove={() => removeComponent('translate', '本地翻译模型')}
                   onRefresh={refreshComponents}
                 />
@@ -880,10 +895,13 @@ function LocalComponentPanel({ id, title, description, status, bundled, runtimeI
 }
 
 /** 本地翻译（HY-MT）的安装面板：装配线不依赖 Python 运行时，文案与 LocalComponentPanel 分开 */
-function TranslateComponentPanel({ status, bundledRuntime, busy, progress, msg, onInstall, onRemove, onRefresh }: {
+function TranslateComponentPanel({ status, bundledRuntime, quant, onQuantChange, busy, progress, msg, onInstall, onRemove, onRefresh }: {
   status: ComponentStatus | null;
   /** 安装包是否已内置 llama.cpp 推理器（-local-inference 变体） */
   bundledRuntime: boolean;
+  /** 用户选择的档位（未安装时生效；已安装则展示后端回报的实际档位） */
+  quant: string;
+  onQuantChange: (q: string) => void;
   busy: boolean;
   progress: LocalEngineProgress | null;
   msg: string | null;
@@ -923,6 +941,29 @@ function TranslateComponentPanel({ status, bundledRuntime, busy, progress, msg, 
           )}
         </div>
       </div>
+
+      {/* 档位只在未安装时可选：已装的档位由后端回报，换档需移除重装（避免隐藏的大流量下载） */}
+      {!installed && status !== null && (
+        <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <label style={{ fontSize: 12, color: '#636366', whiteSpace: 'nowrap' }}>模型精度:</label>
+          <select
+            value={quant}
+            onChange={(e) => onQuantChange(e.target.value)}
+            disabled={busy}
+            style={{ flex: 1, padding: '4px 8px', fontSize: 12, border: '0.5px solid #D1D1D6', borderRadius: 8, background: '#FFFFFF', outline: 'none' }}
+          >
+            {TRANSLATE_QUANTS.map((q) => (
+              <option key={q.id} value={q.id}>{q.label}</option>
+            ))}
+          </select>
+        </div>
+      )}
+      {installed && status?.quant && (
+        <p style={{ fontSize: 11, color: '#8E8E93', marginTop: 8 }}>
+          当前精度：{TRANSLATE_QUANTS.find((q) => q.id === status.quant)?.label ?? status.quant}
+          　换档需先移除再重新安装。
+        </p>
+      )}
 
       {progress && (
         <div style={{ marginTop: 10 }}>
