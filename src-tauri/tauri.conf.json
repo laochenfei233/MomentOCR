@@ -51,7 +51,8 @@
         "languages": [
           "SimpChinese",
           "English"
-        ]
+        ],
+        "installerHooks": "windows/installer.nsh"
       },
       "wix": {
         "language": "zh-CN"
