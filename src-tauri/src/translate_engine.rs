@@ -65,6 +65,8 @@ fn llama_urls() -> Result<Vec<String>> {
 /// IQ3_XXS 仅 1.1 GB、翻译质量几乎无差、速度慢约一半；Q2_K 质量明显退化不提供。
 pub struct Quant {
     pub id: &'static str,
+    /// 短名，装在版本号/一行文案里用
+    pub name: &'static str,
     /// 界面上的一句话说明（体积与内存差异是选它的唯一理由）
     pub label: &'static str,
     pub gguf_name: &'static str,
@@ -77,6 +79,7 @@ pub struct Quant {
 
 const QUANT_LIGHT: Quant = Quant {
     id: "light",
+    name: "轻量",
     label: "轻量：内存约 1.1 GB、翻译稍慢",
     gguf_name: "HY-MT1.5-1.8B-iq3_xxs.gguf",
     bytes: 826_831_648,
@@ -89,6 +92,7 @@ const QUANT_LIGHT: Quant = Quant {
 
 const QUANT_STANDARD: Quant = Quant {
     id: "standard",
+    name: "标准",
     label: "标准：内存约 2.1 GB、翻译最快",
     gguf_name: "HY-MT1.5-1.8B-Q4_K_M.gguf",
     bytes: 1_133_080_512,
@@ -229,7 +233,7 @@ pub fn status(app: &AppHandle) -> crate::local_engine::ComponentStatus {
     // bundled 时推理器不占应用数据、也不必下载，估算只按模型计
     crate::local_engine::ComponentStatus {
         installed,
-        version: if installed { format!("HY-MT1.5-1.8B（{}）", effective.label) } else { String::new() },
+        version: if installed { format!("HY-MT1.5-1.8B · {}", effective.name) } else { String::new() },
         quant: quant.map(|q| q.id.to_string()).unwrap_or_default(),
         disk_bytes: layout.as_ref().map(|l| l.size()).unwrap_or(0),
         download_mb: effective.download_mb + if bundled { 0 } else { RUNTIME_DOWNLOAD_MB },
