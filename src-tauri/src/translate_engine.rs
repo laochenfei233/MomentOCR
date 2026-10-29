@@ -25,8 +25,6 @@ use tauri::{AppHandle, Emitter, Manager};
 
 /// llama.cpp 版本固定，换版本要连带确认 GGUF 兼容与各平台产物名
 const LLAMA_TAG: &str = "b11932";
-/// 官方 GGUF 的 Q4_K_M 量化，装完按字节数校验（下载截断/镜像损坏会直接报错）
-const GGUF_BYTES: u64 = 1_133_080_512;
 /// llama-server 监听端口。固定值：冲突时提示用户即可，不值得做成配置项
 const PORT: u16 = 48731;
 
@@ -59,20 +57,64 @@ fn llama_urls() -> Result<Vec<String>> {
     ])
 }
 
-/// 模型下载源：ModelScope 国内直连 → HuggingFace 回退
-fn gguf_urls() -> Vec<String> {
-    vec![
-        "https://modelscope.cn/models/Tencent-Hunyuan/HY-MT1.5-1.8B-GGUF/resolve/master/HY-MT1.5-1.8B-Q4_K_M.gguf".to_string(),
-        "https://huggingface.co/tencent/HY-MT1.5-1.8B-GGUF/resolve/main/HY-MT1.5-1.8B-Q4_K_M.gguf".to_string(),
-    ]
+/// 模型档位。都是标准 llama.cpp 量化，现有 runtime 直接支持；
+/// 腾讯官方的 1.25bit/2bit 压缩版用自定义量化类型（STQ1_0/Q2_0c），
+/// 对应 llama.cpp PR 未合并且是 ARM 专用内核，桌面跑不了，故不提供。
+///
+/// 实测（同机同组句子）：Q4_K_M 启动占内存 2.1 GB（大头是 AVX2 权重重排副本），
+/// IQ3_XXS 仅 1.1 GB、翻译质量几乎无差、速度慢约一半；Q2_K 质量明显退化不提供。
+pub struct Quant {
+    pub id: &'static str,
+    /// 界面上的一句话说明（体积与内存差异是选它的唯一理由）
+    pub label: &'static str,
+    pub gguf_name: &'static str,
+    /// 装完按字节数校验（下载截断/镜像损坏会直接报错）
+    pub bytes: u64,
+    /// ModelScope 国内直连 → HuggingFace 回退
+    pub urls: &'static [&'static str],
+    pub download_mb: u64,
 }
 
-const GGUF_NAME: &str = "HY-MT1.5-1.8B-Q4_K_M.gguf";
+const QUANT_LIGHT: Quant = Quant {
+    id: "light",
+    label: "轻量：内存约 1.1 GB、翻译稍慢",
+    gguf_name: "HY-MT1.5-1.8B-iq3_xxs.gguf",
+    bytes: 826_831_648,
+    urls: &[
+        "https://modelscope.cn/models/Mungert/HY-MT1.5-1.8B-GGUF/resolve/master/HY-MT1.5-1.8B-iq3_xxs.gguf",
+        "https://huggingface.co/Mungert/HY-MT1.5-1.8B-GGUF/resolve/main/HY-MT1.5-1.8B-iq3_xxs.gguf",
+    ],
+    download_mb: 789,
+};
+
+const QUANT_STANDARD: Quant = Quant {
+    id: "standard",
+    label: "标准：内存约 2.1 GB、翻译最快",
+    gguf_name: "HY-MT1.5-1.8B-Q4_K_M.gguf",
+    bytes: 1_133_080_512,
+    urls: &[
+        "https://modelscope.cn/models/Tencent-Hunyuan/HY-MT1.5-1.8B-GGUF/resolve/master/HY-MT1.5-1.8B-Q4_K_M.gguf",
+        "https://huggingface.co/tencent/HY-MT1.5-1.8B-GGUF/resolve/main/HY-MT1.5-1.8B-Q4_K_M.gguf",
+    ],
+    download_mb: 1081,
+};
+
+pub const QUANTS: [&Quant; 2] = [&QUANT_LIGHT, &QUANT_STANDARD];
+/// 缺省用轻量档：内存占用是用户最先感知到的成本
+const DEFAULT_QUANT: &Quant = &QUANT_LIGHT;
+
+fn quant_by_id(id: &str) -> &'static Quant {
+    QUANTS
+        .iter()
+        .copied()
+        .find(|q| q.id == id)
+        .unwrap_or(DEFAULT_QUANT)
+}
+
 /// llama-server 的可执行名（Windows 带 .exe）
 const SERVER_BIN: &str = if cfg!(windows) { "llama-server.exe" } else { "llama-server" };
 
-/// 界面展示用的体积估算（模型 1080.6 MiB；推理器官方包约 12–24 MB，解压后约 60 MB）
-const MODEL_MB: u64 = 1081;
+/// 推理器的体积估算（官方包约 12–24 MB，解压后约 60 MB）
 const RUNTIME_DOWNLOAD_MB: u64 = 24;
 const RUNTIME_DISK_MB: u64 = 60;
 
@@ -125,8 +167,16 @@ impl Layout {
     fn models(&self) -> PathBuf {
         self.root.join("models")
     }
-    fn gguf(&self) -> PathBuf {
-        self.models().join(GGUF_NAME)
+    fn gguf(&self, quant: &Quant) -> PathBuf {
+        self.models().join(quant.gguf_name)
+    }
+
+    /// 已装的档位：models/ 下哪个文件在就是哪个（两档在同名互斥，不会并存）
+    fn installed_quant(&self) -> Option<&'static Quant> {
+        QUANTS
+            .iter()
+            .copied()
+            .find(|q| self.gguf(q).is_file())
     }
 
     fn size(&self) -> u64 {
@@ -171,26 +221,33 @@ pub fn runtime_bundled(app: &AppHandle) -> bool {
 pub fn status(app: &AppHandle) -> crate::local_engine::ComponentStatus {
     let layout = resolve_root(app).map(|root| Layout { root }).ok();
     let bundled = runtime_bundled(app);
-    let has_model = layout.as_ref().map(|l| l.gguf().is_file()).unwrap_or(false);
+    let quant = layout.as_ref().and_then(|l| l.installed_quant());
     let has_server = layout.as_ref().map(|l| find_server(&l.runtime()).is_some()).unwrap_or(false) || bundled;
-    let installed = has_model && has_server;
+    let installed = quant.is_some() && has_server;
+    // 未安装时按缺省档位报体积；已装则按实际那档
+    let effective = quant.unwrap_or(DEFAULT_QUANT);
     // bundled 时推理器不占应用数据、也不必下载，估算只按模型计
     crate::local_engine::ComponentStatus {
         installed,
-        version: if installed { "HY-MT1.5-1.8B（Q4_K_M）".to_string() } else { String::new() },
+        version: if installed { format!("HY-MT1.5-1.8B（{}）", effective.label) } else { String::new() },
+        quant: quant.map(|q| q.id.to_string()).unwrap_or_default(),
         disk_bytes: layout.as_ref().map(|l| l.size()).unwrap_or(0),
-        download_mb: MODEL_MB + if bundled { 0 } else { RUNTIME_DOWNLOAD_MB },
-        disk_mb: MODEL_MB + if bundled { 0 } else { RUNTIME_DISK_MB },
+        download_mb: effective.download_mb + if bundled { 0 } else { RUNTIME_DOWNLOAD_MB },
+        disk_mb: effective.download_mb + if bundled { 0 } else { RUNTIME_DISK_MB },
     }
 }
 
 /// 下载并装配。进度走 `local-engine-progress` 事件，与 OCR/截图组件共用一个监听器。
-pub async fn install(app: &AppHandle) -> Result<String> {
+/// `quant` 是用户在面板上选的档位（未知值回落到缺省轻量档）。
+pub async fn install(app: &AppHandle, quant: Option<&str>) -> Result<String> {
     let root = resolve_root(app)?;
     let hint = app.path().resource_dir().ok();
-    install_into(&root, hint.as_deref(), &|stage, percent, detail| {
-        emit(app, stage, percent, detail)
-    })
+    install_into(
+        &root,
+        hint.as_deref(),
+        quant_by_id(quant.unwrap_or_default()),
+        &|stage, percent, detail| emit(app, stage, percent, detail),
+    )
     .await
 }
 
@@ -199,6 +256,7 @@ pub async fn install(app: &AppHandle) -> Result<String> {
 pub async fn install_into(
     root: &Path,
     resource_hint: Option<&Path>,
+    quant: &'static Quant,
     progress: &(dyn Fn(&str, u8, &str) + Sync),
 ) -> Result<String> {
     let layout = Layout { root: root.to_path_buf() };
@@ -210,24 +268,28 @@ pub async fn install_into(
     let report = |stage: &str, percent: u8, detail: &str| progress(stage, percent, detail);
     let bundled = bundled_runtime(resource_hint);
 
-    // 1) 模型（大头，1.1 GB）：两源逐个试，装完校验字节数
-    if layout.gguf().is_file() {
+    // 1) 模型（大头）：两源逐个试，装完校验字节数
+    if layout.gguf(quant).is_file() {
         report("model", 10, "模型已存在，跳过下载");
     } else {
-        let dest = layout.gguf();
-        let partial = layout.models().join(format!("{GGUF_NAME}.part"));
+        let dest = layout.gguf(quant);
+        let partial = layout.models().join(format!("{}.part", quant.gguf_name));
         let mut last_error = None;
-        for url in gguf_urls() {
-            report("model", 10, "正在下载翻译模型（约 1.1 GB）…");
-            let result = crate::local_engine::download(&client, &url, &partial, |done, total| {
+        for url in quant.urls {
+            report(
+                "model",
+                10,
+                &format!("正在下载翻译模型（约 {} MB）…", quant.download_mb),
+            );
+            let result = crate::local_engine::download(&client, url, &partial, |done, total| {
                 let percent = if total > 0 { done * 100 / total } else { 0 };
                 report(
                     "model",
                     (10 + percent * 70 / 100).min(80) as u8,
                     &format!(
-                        "正在下载翻译模型… {:.1} / {:.1} GB",
-                        done as f64 / 1_073_741_824.0,
-                        total as f64 / 1_073_741_824.0
+                        "正在下载翻译模型… {:.0} / {:.0} MB",
+                        done as f64 / 1_048_576.0,
+                        total as f64 / 1_048_576.0
                     ),
                 );
             })
@@ -248,11 +310,18 @@ pub async fn install_into(
         }
         // 精确字节数校验：GGUF 截断时 llama.cpp 只会在加载时报错，提前拦下来好排查
         let bytes = partial.metadata().map(|m| m.len()).unwrap_or(0);
-        if bytes != GGUF_BYTES {
+        if bytes != quant.bytes {
             let _ = std::fs::remove_file(&partial);
-            anyhow::bail!("模型文件大小不符（{bytes} / {GGUF_BYTES} 字节），下载可能被截断，请重试");
+            anyhow::bail!(
+                "模型文件大小不符（{bytes} / {} 字节），下载可能被截断，请重试",
+                quant.bytes
+            );
         }
         std::fs::rename(&partial, &dest)?;
+        // 两档在同目录下互斥：换档时清掉另一档，避免 status 与磁盘各说各话
+        for other in QUANTS.iter().copied().filter(|q| q.id != quant.id) {
+            let _ = std::fs::remove_file(layout.gguf(other));
+        }
     }
 
     // 2) 推理器（约 12–24 MB）：变体安装包已内置时跳过；解压到 runtime/，解完删压缩包
@@ -422,10 +491,11 @@ async fn ensure_server(
     let server = find_server(&layout.runtime())
         .or_else(|| bundled.and_then(|dir| find_server(dir)))
         .context("未找到 llama-server，请先在设置里安装本地翻译组件")?;
-    let gguf = layout.gguf();
-    if !gguf.is_file() {
+    // 用已装档位的模型：翻译不能因为面板上选的是另一档就找不到文件
+    let Some(quant) = layout.installed_quant() else {
         anyhow::bail!("翻译模型尚未下载，请先在设置里安装本地翻译组件");
-    }
+    };
+    let gguf = layout.gguf(quant);
 
     {
         // 并发调用时可能别人已经起了：先看句柄，再放手探活（MutexGuard 不能跨 await）
@@ -568,7 +638,7 @@ mod tests {
         let root = std::env::temp_dir().join("momentocr-translate-test");
         let _ = std::fs::remove_dir_all(&root);
 
-        let message = install_into(&root, None, &|stage, percent, detail| {
+        let message = install_into(&root, None, DEFAULT_QUANT, &|stage, percent, detail| {
             println!("[{stage} {percent}%] {detail}")
         })
         .await
@@ -576,7 +646,8 @@ mod tests {
         println!("安装结果: {message}");
 
         let layout = Layout { root: root.clone() };
-        assert!(find_server(&layout.runtime()).is_some() && layout.gguf().is_file(), "推理器或模型缺失");
+        assert_eq!(layout.installed_quant().map(|q| q.id), Some(DEFAULT_QUANT.id), "缺省档位没装上");
+        assert!(find_server(&layout.runtime()).is_some(), "推理器缺失");
 
         // 装配线的自检结束后服务已被收掉，这里验证冷重启 + 常驻复用路径也能翻
         let client = ensure_server(&layout, None, &|_, _, _| {})
@@ -591,7 +662,7 @@ mod tests {
         // 整目录移除，确认能干净卸载（含 root 目录本身）
         let message = remove_into(&root).expect("移除失败");
         println!("移除结果: {message}");
-        assert!(!(find_server(&layout.runtime()).is_some() && layout.gguf().is_file()), "移除后组件标志物还在");
+        assert!(layout.installed_quant().is_none(), "移除后模型还在");
         assert!(!root.exists(), "移除后目录还在");
     }
 
@@ -602,7 +673,7 @@ mod tests {
     fn removes_whole_dir_even_without_manifest() {
         let root = std::env::temp_dir().join("momentocr-remove-no-manifest-test");
         let _ = std::fs::remove_dir_all(&root);
-        let gguf = root.join("models").join(GGUF_NAME);
+        let gguf = root.join("models").join(DEFAULT_QUANT.gguf_name);
         std::fs::create_dir_all(gguf.parent().unwrap()).unwrap();
         // 2 MB：释放量按 MB 取整显示，太小的假文件会显示「释放 0 MB」干扰断言
         std::fs::write(&gguf, vec![0u8; 2 * 1024 * 1024]).unwrap();
@@ -637,7 +708,8 @@ mod tests {
         assert!(llama_asset_for("freebsd", "x86_64").is_err());
     }
 
-    /// 下载源与产物名要对得上：路径拼错 404 只有装机时才炸
+    /// 下载源与产物名要对得上：路径拼错 404 只有装机时才炸。
+    /// 档位还要覆盖「两个档都配置了源与字节数」与「缺省档最小（用户最省钱）」。
     #[test]
     fn download_urls_contain_asset_and_gguf_name() {
         for url in llama_urls().unwrap() {
@@ -647,10 +719,48 @@ mod tests {
         // 代理源的格式是「代理域名 + 完整原始 URL」，少拼 scheme 就是 404
         let proxied = &llama_urls().unwrap()[0];
         assert!(proxied.starts_with("https://gh-proxy.com/https://github.com/"), "{proxied}");
-        for url in gguf_urls() {
-            assert!(url.ends_with(GGUF_NAME), "{url}");
-            assert!(url.starts_with("https://"), "{url}");
+
+        for quant in QUANTS {
+            assert!(!quant.urls.is_empty(), "{} 没有下载源", quant.id);
+            for url in quant.urls {
+                assert!(url.ends_with(quant.gguf_name), "{url}");
+                assert!(url.starts_with("https://"), "{url}");
+            }
+            assert!(quant.bytes > 500 * 1024 * 1024, "{} 字节数不合常理", quant.id);
         }
+        assert_eq!(DEFAULT_QUANT.id, "light", "缺省档应是省内存的轻量档");
+        let smallest = QUANTS.iter().map(|q| q.bytes).min().unwrap();
+        assert_eq!(DEFAULT_QUANT.bytes, smallest, "缺省档应是最小的那个");
+        // 两档文件名必须不同，否则 installed_quant 会互相误判
+        assert_ne!(QUANT_LIGHT.gguf_name, QUANT_STANDARD.gguf_name);
+    }
+
+    /// 档位解析：未知/空 id 回落到缺省，正常 id 精确命中
+    #[test]
+    fn quant_ids_round_trip() {
+        assert_eq!(quant_by_id("light").id, "light");
+        assert_eq!(quant_by_id("standard").id, "standard");
+        assert_eq!(quant_by_id("").id, DEFAULT_QUANT.id);
+        assert_eq!(quant_by_id("q2_k").id, DEFAULT_QUANT.id, "不存在的档位不能当合法值");
+    }
+
+    /// 已装档位按文件存在判断：写入哪档的 gguf 就报哪档
+    #[test]
+    fn installed_quant_follows_present_file() {
+        let root = std::env::temp_dir().join("momentocr-quant-detect-test");
+        let _ = std::fs::remove_dir_all(&root);
+        let layout = Layout { root: root.clone() };
+        std::fs::create_dir_all(layout.models()).unwrap();
+        assert!(layout.installed_quant().is_none(), "空目录不该报已装");
+
+        std::fs::write(layout.gguf(&QUANT_STANDARD), b"x").unwrap();
+        assert_eq!(layout.installed_quant().map(|q| q.id), Some("standard"));
+
+        std::fs::write(layout.gguf(&QUANT_LIGHT), b"x").unwrap();
+        std::fs::remove_file(layout.gguf(&QUANT_STANDARD)).unwrap();
+        assert_eq!(layout.installed_quant().map(|q| q.id), Some("light"));
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// 造一个带构建号目录的 tar.gz 真跑一遍解压，确认 llama-server 落点与可执行位
@@ -688,9 +798,11 @@ mod tests {
 
     /// 官方模型换版要显式动这里，字节数校验才有意义
     #[test]
-    fn gguf_size_is_the_pinned_quant() {
-        assert_eq!(GGUF_BYTES, 1_133_080_512);
-        assert_eq!(GGUF_NAME, "HY-MT1.5-1.8B-Q4_K_M.gguf");
+    fn gguf_sizes_are_the_pinned_quants() {
+        assert_eq!(QUANT_LIGHT.bytes, 826_831_648);
+        assert_eq!(QUANT_LIGHT.gguf_name, "HY-MT1.5-1.8B-iq3_xxs.gguf");
+        assert_eq!(QUANT_STANDARD.bytes, 1_133_080_512);
+        assert_eq!(QUANT_STANDARD.gguf_name, "HY-MT1.5-1.8B-Q4_K_M.gguf");
     }
 
     /// 按名字找 llama-server，不依赖解压出来的目录叫什么

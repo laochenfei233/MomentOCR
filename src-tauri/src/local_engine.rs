@@ -155,6 +155,8 @@ pub struct Progress {
 pub struct ComponentStatus {
     pub installed: bool,
     pub version: String,
+    /// 本地翻译的已装模型档位（"light"/"standard"）；其他组件为空串
+    pub quant: String,
     pub disk_bytes: u64,
     pub download_mb: u64,
     pub disk_mb: u64,
@@ -333,6 +335,8 @@ pub fn status(app: &AppHandle) -> Status {
             } else {
                 String::new()
             },
+            // 档位只对本地翻译有意义，其余组件留空
+            quant: String::new(),
             disk_bytes: layout
                 .as_ref()
                 .map(|l| manifest_bytes(&l.manifest(component)))

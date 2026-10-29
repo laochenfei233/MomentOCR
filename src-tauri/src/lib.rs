@@ -190,10 +190,16 @@ fn get_local_components_status(app: tauri::AppHandle) -> local_engine::Status {
 }
 
 #[tauri::command]
-async fn install_local_component(app: tauri::AppHandle, component: String) -> Result<String, String> {
+async fn install_local_component(
+    app: tauri::AppHandle,
+    component: String,
+    quant: Option<String>,
+) -> Result<String, String> {
     // 本地翻译不走 Python 运行时，装配线完全独立
     if component == "translate" {
-        return translate_engine::install(&app).await.map_err(|e| e.to_string());
+        return translate_engine::install(&app, quant.as_deref())
+            .await
+            .map_err(|e| e.to_string());
     }
     let component = local_engine::Component::parse(&component).map_err(|e| e.to_string())?;
     let scripts_dir = overlay::scripts_dir().ok_or("找不到随应用分发的脚本")?;
