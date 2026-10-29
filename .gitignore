@@ -43,3 +43,6 @@ docs/icon-preview/
 src-tauri/resources/llama-runtime/
 # 变体构建的 override 由 CI（或本地构建脚本）从基础 conf 生成，不进仓库
 src-tauri/tauri.local-inference.conf.json
+
+# 本地打包的安装包产物（CI 也用这个目录名，不进仓库）
+dist-installers/
