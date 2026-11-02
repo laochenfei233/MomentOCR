@@ -86,6 +86,14 @@ def main():
     assert ocr_text.merge_paragraph(["Hello world", "from OCR"]) == "Hello world from OCR"
     assert ocr_text.merge_paragraph(["今天天气", "一起去公园"]) == "今天天气一起去公园"
     assert ocr_text.merge_paragraph(["consist-", "ency"]) == "consistency"
+    # 表格行（行内有大间隔）保持独立成行，不被并进段落
+    table = [
+        ([[10, 10], [60, 10], [60, 30], [10, 30]], "姓名"),
+        ([[200, 10], [260, 10], [260, 30], [200, 30]], "年龄"),
+        ([[10, 40], [60, 40], [60, 60], [10, 60]], "张三"),
+        ([[200, 40], [260, 40], [260, 60], [200, 60]], "25"),
+    ]
+    assert ocr_text.merge_boxes(table) == "姓名 年龄\n张三 25"
     with tempfile.TemporaryDirectory(prefix="momentocr-selftest-") as tmp:
         image = os.path.join(tmp, "selftest.png")
         expected = make_image(image)

@@ -6,8 +6,9 @@
 直接按框换行，英文就会变成 "HelloWorldfromMomentOCR" 这种连体字。
 
 这里按纵向重叠把文本框归并成行，行内按横向顺序拼接：
-中文之间不加空格，西文之间补回空格。行与行最后再拼成一整段，
-识别结果才能随窗口宽度自动换行铺满，而不是每行后面空一大块。
+中文之间不加空格，西文之间补回空格。相邻的普通行最后拼成一整段，
+识别结果才能随窗口宽度自动换行铺满，而不是每行后面空一大块；
+表格行、分栏这类行内带大间隔的行保持独立成行，版面结构不被打散。
 2.x / 3.x 引擎共用这一套整理逻辑。
 """
 
@@ -42,8 +43,19 @@ def _needs_space(left_text, right_text, gap, height):
     return True
 
 
+def _has_wide_gap(line):
+    """行内相邻框之间出现明显大于字高的空隙：表格行、分栏或目录页。
+
+    这类行承载版面结构，行与行之间不并入段落。
+    """
+    for left, right in zip(line, line[1:]):
+        if right["x0"] - left["x1"] > 1.5 * max(right["h"], left["h"]):
+            return True
+    return False
+
+
 def merge_paragraph(lines):
-    """把识别出的各行拼成一整段，让结果能随窗口宽度自动换行铺满。
+    """把连续的普通文本行拼成一整段，让结果能随窗口宽度自动换行铺满。
 
     行间沿用 _needs_space 的判断：任一侧是中日韩等非 ASCII 字符就直接
     相接，两侧都是西文才补一个空格；行尾连字符 + 小写行首视为换行时
@@ -67,7 +79,8 @@ def merge_paragraph(lines):
 def merge_boxes(items):
     """items 为 [(box, text), ...]，box 是四个角点坐标。
 
-    返回按阅读顺序拼好的一整段文本：行内按框间距补空格，行间拼成段落。
+    返回按阅读顺序拼好的文本：相邻的普通行拼成段落；行内带大间隔的
+    （表格行、分栏、目录页）保持独立成行，行与行之间用换行符分开。
     """
     entries = []
     for box, text in items:
@@ -118,7 +131,21 @@ def merge_boxes(items):
                     parts.append(" ")
             parts.append(entry["text"])
         rendered.append("".join(parts))
-    return merge_paragraph(rendered)
+
+    # 表格行/分栏行独立成行，只有相邻的普通行才拼进同一段
+    paragraphs = []
+    prose = []
+    for line, text in zip(lines, rendered):
+        if _has_wide_gap(line):
+            if prose:
+                paragraphs.append(merge_paragraph(prose))
+                prose = []
+            paragraphs.append(text)
+        else:
+            prose.append(text)
+    if prose:
+        paragraphs.append(merge_paragraph(prose))
+    return "\n".join(paragraphs)
 
 
 def configure_stdout():
