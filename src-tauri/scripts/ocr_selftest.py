@@ -82,6 +82,10 @@ def make_image(path):
 
 def main():
     ocr_text.configure_stdout()
+    # 段落合并是纯文本逻辑，不依赖引擎：先自证打包的 ocr_text.py 没坏
+    assert ocr_text.merge_paragraph(["Hello world", "from OCR"]) == "Hello world from OCR"
+    assert ocr_text.merge_paragraph(["今天天气", "一起去公园"]) == "今天天气一起去公园"
+    assert ocr_text.merge_paragraph(["consist-", "ency"]) == "consistency"
     with tempfile.TemporaryDirectory(prefix="momentocr-selftest-") as tmp:
         image = os.path.join(tmp, "selftest.png")
         expected = make_image(image)

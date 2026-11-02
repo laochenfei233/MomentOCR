@@ -8,7 +8,7 @@
      会吞掉英文空格，识别纯英文时请升级到 3.x。
 
 两个版本的返回结构不同（3.x 返回 RapidOCROutput 对象，2.x 返回 (result, elapse)），
-这里统一成一串 (box, text) 后交给 ocr_text.merge_boxes 整理成行。
+这里统一成一串 (box, text) 后交给 ocr_text.merge_boxes 整理成段。
 """
 
 import json

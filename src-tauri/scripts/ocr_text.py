@@ -6,7 +6,9 @@
 直接按框换行，英文就会变成 "HelloWorldfromMomentOCR" 这种连体字。
 
 这里按纵向重叠把文本框归并成行，行内按横向顺序拼接：
-中文之间不加空格，西文之间补回空格。2.x / 3.x 引擎共用这一套整理逻辑。
+中文之间不加空格，西文之间补回空格。行与行最后再拼成一整段，
+识别结果才能随窗口宽度自动换行铺满，而不是每行后面空一大块。
+2.x / 3.x 引擎共用这一套整理逻辑。
 """
 
 
@@ -40,10 +42,32 @@ def _needs_space(left_text, right_text, gap, height):
     return True
 
 
+def merge_paragraph(lines):
+    """把识别出的各行拼成一整段，让结果能随窗口宽度自动换行铺满。
+
+    行间沿用 _needs_space 的判断：任一侧是中日韩等非 ASCII 字符就直接
+    相接，两侧都是西文才补一个空格；行尾连字符 + 小写行首视为换行时
+    被拆开的英文词，把词拼回去。
+    """
+    out = ""
+    for line in lines:
+        if not line:
+            continue
+        if not out:
+            out = line
+        elif out[-1] == "-" and line[0].islower():
+            out = out[:-1] + line
+        elif not out[-1].isascii() and not line[0].isascii():
+            out += line
+        else:
+            out += " " + line
+    return out
+
+
 def merge_boxes(items):
     """items 为 [(box, text), ...]，box 是四个角点坐标。
 
-    返回按阅读顺序排好的文本：行内用空格拼接，行间用换行符。
+    返回按阅读顺序拼好的一整段文本：行内按框间距补空格，行间拼成段落。
     """
     entries = []
     for box, text in items:
@@ -94,7 +118,7 @@ def merge_boxes(items):
                     parts.append(" ")
             parts.append(entry["text"])
         rendered.append("".join(parts))
-    return "\n".join(rendered)
+    return merge_paragraph(rendered)
 
 
 def configure_stdout():
