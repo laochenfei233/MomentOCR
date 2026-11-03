@@ -9,14 +9,28 @@
 中文之间不加空格，西文之间补回空格。相邻的普通行最后拼成一整段，
 识别结果才能随窗口宽度自动换行铺满，而不是每行后面空一大块；
 表格行、分栏这类行保持独立成行，版面结构不被打散：宽表靠行内大间隔
-识别，紧表靠同一列跨行 x 起点对齐识别。
+识别，紧表靠同一列跨行 x 起点对齐识别。项目符号或编号开头的行另起一段，
+分点清单不被拍平，每一点自己换行续写的部分仍并进该点。
 2.x / 3.x 引擎共用这一套整理逻辑。
 """
+
+import re
 
 
 # 中日韩标点：紧贴前文，不该被空格隔开
 _CJK_CLOSERS = "。，、；：！？）〕〉》」』】”’…—"
 _CJK_OPENERS = "（〔〈《「『【“‘"
+
+# 列表项起始：项目符号或编号。1. / 1、 后面排除数字，免得 2.1 GB 这类小数被当编号
+_LIST_ITEM = re.compile(
+    r"^(?:[·•●○◦▪■◆◇★☆➢➤→✓✔]"
+    r"|[-*](?=\s|[^\x00-\x7f])"
+    r"|\d{1,2}[.、．)）](?!\d)"
+    r"|[(（]\d{1,2}[)）]"
+    r"|[一二三四五六七八九十]{1,3}[、.．]"
+    r"|[①-⑳]"
+    r"|[a-zA-Z][.)）](?=\s))"
+)
 
 
 def _needs_space(left_text, right_text, gap, height):
@@ -180,6 +194,10 @@ def merge_boxes(items):
                 prose = []
             paragraphs.append(text)
         else:
+            # 列表项另起一段：前面的段先收口，续行仍会并进这一点
+            if prose and _LIST_ITEM.match(text):
+                paragraphs.append(merge_paragraph(prose))
+                prose = []
             prose.append(text)
     if prose:
         paragraphs.append(merge_paragraph(prose))
