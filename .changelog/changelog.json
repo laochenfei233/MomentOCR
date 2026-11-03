@@ -1,0 +1,93 @@
+{
+  "versions": [
+    {
+      "version": "0.3.0",
+      "date": "2026-11-03",
+      "summary": "翻译加入腾讯 HY-MT 本地模型，识别结果自动排版成段落并保留表格结构，主窗口启动即最大化；另修复覆盖安装被残留进程卡住的问题。",
+      "entries": [
+        {
+          "type": "added",
+          "text": "翻译服务新增「腾讯 HY-MT 翻译」：在设置里一键下载腾讯混元 HY-MT1.5-1.8B 模型（约 1.1 GB）后，翻译可完全离线运行，无需 API Key。",
+          "breaking": false,
+          "audience": "user",
+          "highlight": false,
+          "commits": [
+            "1fb6bd6",
+            "4f1d58e",
+            "bf126ce",
+            "3e5652d",
+            "6d56da8",
+            "ad677db",
+            "31adbe6"
+          ]
+        },
+        {
+          "type": "added",
+          "text": "新增文件名带 -local-inference 的安装包变体：llama.cpp 推理器内置其中，启用本地翻译时无需再下载推理器（约 23 MB）；标准安装包行为不变，两种二选一安装。",
+          "breaking": false,
+          "audience": "user",
+          "highlight": false,
+          "commits": [
+            "033dbc0",
+            "cc21de6"
+          ]
+        },
+        {
+          "type": "added",
+          "text": "译文区可直接下拉切换目标语言，目标语言扩充到 10 种（新增法/德/俄/西/葡/阿拉伯），与设置里的选项实时同步。",
+          "breaking": false,
+          "audience": "user",
+          "highlight": false,
+          "commits": [
+            "7a68ecf",
+            "85aa0ac"
+          ]
+        },
+        {
+          "type": "changed",
+          "text": "本地翻译默认改用更省内存的模型档位：占用从约 2.1 GB 降到约 1.1 GB（下载 1081 MB → 789 MB），翻译质量实测几乎不变；需要更快速度可在安装时切到标准档。",
+          "breaking": false,
+          "audience": "user",
+          "highlight": false,
+          "commits": [
+            "779bc11",
+            "a9d602d",
+            "fa0bc86"
+          ]
+        },
+        {
+          "type": "changed",
+          "text": "主窗口启动时自动最大化：识别结果不再挤在小窗口里，原文和翻译都能占满整块屏幕；仍可随时点还原按钮切回小窗。",
+          "breaking": false,
+          "audience": "user",
+          "highlight": false,
+          "commits": [
+            "3f05bf9"
+          ]
+        },
+        {
+          "type": "changed",
+          "text": "识别结果不再按截图逐行换行，而是自动合并成整段：窗口里的文字和复制出去的内容都会随宽度铺满，不再右边留一大块空白；中英文之间会补回空格。表格、分栏、目录这类版面行会保持每行独立、格间留空：列距宽的靠大间隔识别，紧凑表格靠列对齐识别，Excel / 网页表格截图的行列结构不再被打散。",
+          "breaking": false,
+          "audience": "user",
+          "highlight": false,
+          "commits": [
+            "84525a8",
+            "e0c9e4b",
+            "0c59de8"
+          ]
+        },
+        {
+          "type": "fixed",
+          "text": "覆盖安装时若本地翻译的推理进程仍在后台运行，安装器会报「无法打开要写入的文件」而失败；现在安装、卸载前都会先结束残留进程，覆盖安装不再被占用卡住。",
+          "breaking": false,
+          "audience": "user",
+          "highlight": false,
+          "commits": [
+            "8d3644f"
+          ]
+        }
+      ]
+    }
+  ]
+}
