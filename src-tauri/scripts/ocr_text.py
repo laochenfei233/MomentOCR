@@ -8,7 +8,8 @@
 这里按纵向重叠把文本框归并成行，行内按横向顺序拼接：
 中文之间不加空格，西文之间补回空格。相邻的普通行最后拼成一整段，
 识别结果才能随窗口宽度自动换行铺满，而不是每行后面空一大块；
-表格行、分栏这类行内带大间隔的行保持独立成行，版面结构不被打散。
+表格行、分栏这类行保持独立成行，版面结构不被打散：宽表靠行内大间隔
+识别，紧表靠同一列跨�� x 起点对齐识别。
 2.x / 3.x 引擎共用这一套整理逻辑。
 """
 
@@ -54,6 +55,36 @@ def _has_wide_gap(line):
     return False
 
 
+def _columns_align(a, b):
+    """两行是否有除行首以外的框在同一 x 起点上对齐（紧凑表格的列信号）。
+
+    行首框正文每行都有��不算列；只看第 2 个及之后的框。
+    """
+    tol = 0.5 * max(e["h"] for e in a + b)
+    return any(abs(ea["x0"] - eb["x0"]) <= tol for ea in a[1:] for eb in b[1:])
+
+
+def _find_table_rows(lines):
+    """返回属于紧凑表格的行下标集合。
+
+    列距只有一两个字高的表格，格间间隔不够大，_has_wide_gap 抓不到；
+    但引擎仍把每格单独分框，且同一列的 x 起点跨行对齐。相邻两行列对齐
+    即连成块，块内 ≥ 2 行才算表格——单行偶然对齐不触发。
+    """
+    table = set()
+    block = [0]
+    for i in range(1, len(lines)):
+        if _columns_align(lines[i - 1], lines[i]):
+            block.append(i)
+        else:
+            if len(block) >= 2:
+                table.update(block)
+            block = [i]
+    if len(block) >= 2:
+        table.update(block)
+    return table
+
+
 def merge_paragraph(lines):
     """把连续的普通文本行拼成一整段，让结果能随窗口宽度自动换行铺满。
 
@@ -79,8 +110,8 @@ def merge_paragraph(lines):
 def merge_boxes(items):
     """items 为 [(box, text), ...]，box 是四个角点坐标。
 
-    返回按阅读顺序拼好的文本：相邻的普通行拼成段落；行内带大间隔的
-    （表格行、分栏、目录页）保持独立成行，行与行之间用换行符分开。
+    返回按阅读顺序拼好的文本：相邻的普通行拼成段落；表格行（行内带
+    大间隔，或跨行列对齐）保持独立成行，行与行之间用换行符分开。
     """
     entries = []
     for box, text in items:
@@ -117,26 +148,33 @@ def merge_boxes(items):
             lines.append([entry])
 
     lines.sort(key=lambda line: min(e["y0"] for e in line))
-
-    rendered = []
     for line in lines:
         line.sort(key=lambda e: e["x0"])
+
+    # 表格行/分栏行独立成行，只有相邻的普通行才拼进同一段。
+    # 宽表靠行内大间隔识别，紧表靠跨行列对齐识别，命中任一即独立。
+    # 列对齐看的是行首之外各框的 x 起点，行内必须先按 x 排好序。
+    table_rows = _find_table_rows(lines)
+
+    rendered = []
+    for index, line in enumerate(lines):
         parts = []
-        for index, entry in enumerate(line):
-            if index:
-                prev = line[index - 1]
-                if _needs_space(prev["text"], entry["text"],
+        for pos, entry in enumerate(line):
+            if pos:
+                prev = line[pos - 1]
+                # 表格行内格与格之间固定补空格：紧表相邻中文格若按
+                # _needs_space 处理会贴成一体（姓名年龄城市）
+                if index in table_rows or _needs_space(prev["text"], entry["text"],
                                 entry["x0"] - prev["x1"],
                                 max(entry["h"], prev["h"])):
                     parts.append(" ")
             parts.append(entry["text"])
         rendered.append("".join(parts))
 
-    # 表格行/分栏行独立成行，只有相邻的普通行才拼进同一段
     paragraphs = []
     prose = []
-    for line, text in zip(lines, rendered):
-        if _has_wide_gap(line):
+    for index, (line, text) in enumerate(zip(lines, rendered)):
+        if index in table_rows or _has_wide_gap(line):
             if prose:
                 paragraphs.append(merge_paragraph(prose))
                 prose = []
