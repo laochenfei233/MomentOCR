@@ -90,7 +90,8 @@ jobs:
           curl -fL --retry 3 -o llama-runtime-archive \
             "https://github.com/ggml-org/llama.cpp/releases/download/b11932/$ASSET"
           case "$ASSET" in
-            *.zip)   tar -xf llama-runtime-archive -C src-tauri/resources/llama-runtime ;;
+            # runner 的 bash tar 是 GNU tar，读不了 zip；zip 一律走 python zipfile
+            *.zip)   python -c "import zipfile; zipfile.ZipFile('llama-runtime-archive').extractall('src-tauri/resources/llama-runtime')" ;;
             *.tar.gz) tar -xzf llama-runtime-archive -C src-tauri/resources/llama-runtime ;;
           esac
           rm llama-runtime-archive
@@ -260,7 +261,6 @@ jobs:
               [ -e "$f" ] || continue
               mv "$f" "${f/MomentOCR/MomentOCR-local-inference}"
             done
-          fi
           fi
           count=$(find dist-installers -type f | wc -l)
           echo "收集到 $count 个安装包"
