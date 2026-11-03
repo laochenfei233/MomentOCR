@@ -1,6 +1,6 @@
 [package]
 name = "moment-ocr"
-version = "0.3.0"
+version = "0.3.1"
 description = "A Tauri 2.0 React application"
 authors = ["you"]
 edition = "2021"

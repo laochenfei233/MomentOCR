@@ -5,6 +5,14 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-11-03
+
+分点清单（·、1.、一、等开头的行）识别后各自成段，不再被拼成一整段。
+
+### Changed
+
+- 识别结果里以 ·、-、1.、（1）、一、① 等项目符号或编号开头的行会各自成段，分点清单不再被拼成一整段；每一点自己换行续写的部分仍会并进该点，段内照样铺满。
+
 ## [0.3.0] - 2026-11-03
 
 翻译加入腾讯 HY-MT 本地模型，识别结果自动排版成段落并保留表格结构，主窗口启动即最大化；另修复覆盖安装被残留进程卡住的问题。
