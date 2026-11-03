@@ -1,15 +1,39 @@
 ---
 feature: table-column-align
-status: in-progress
+status: delivered
 updated: 2026-11-03
 branch: feat/table-column-align
-commits: 9af4df8..
+commits: 9af4df8..0c59de8
 worktree: .worktrees/table-column-align
 ---
 
 # 紧凑表格：按列对齐识别，不再被并进段落
 
 ## Report
+
+**What was built** — `ocr_text.py` 新增 `_columns_align` / `_find_table_rows`：每行取
+行首之外各框的 x0，相邻两行存在 x0 差 ≤ 0.5 倍字高的对齐框即连块，连续 ≥ 2 行的块
+判为紧凑表格，行保持独立（与既有的行内大间隔判定为「或」关系）。表格行内格与格
+固定补空格——否则紧表的相邻中文格会按 CJK 规则贴成「姓名年龄城市」。行内 x 排序
+提前到列检测之前，修掉 y 中心微差导致框序颠倒、对齐误判的缺陷（真机引擎测试抓到）。
+自检脚本补紧表（乱序喂入）与正文防误判用例；changelog 迭代并入
+`20261103-ocr-merge-paragraph.md`。
+
+**Verification** — 真机 RapidOCR 2.x 引擎 7 张合成图 7/7 PASS（宽 200px / 紧 110px /
+紧 70px / 带网格线紧表均逐行 3 行且格间空格；两行正文、单列列表各并成 1 段；
+混合页表格逐行 + 正文成段）。`ocr_selftest.py` 全跑 success:true；py_compile 三脚本
+PASS。独立评审 subagent 三项结论（Spec compliance / Correctness / Codebase
+consistency）全 PASS，无 critical；发现的 7 处 U+FFFD 乱码已修复（本次提交）。
+
+**Journey log**
+- 设计靠真机探针定案：先用系统里现成的 rapidocr 2.x 跑了 4 组合成表格图，看到
+  「单元格其实还是分框的，只是 70–100px 列距下间隔不足 1.5 字高」——若不实测就会
+  按错误前提（整行融成单框）去设计，方向完全不同。
+- 真机验收抓到实现层 bug：行内 x 排序原来在渲染循环里，列检测跑在它前面，
+  引擎 y 中心 0.5px 的微差就能把行内框序颠倒、对齐失效。单测的规整 fixture 永远
+  不会暴露这种顺序依赖，真机乱序数据才会。
+- 紧表格间空格是被断言逼出来的第二处产品缺陷：CJK 相邻格按既有规则不补空格，
+  紧表首行会输出「姓名年龄城市」；表格行改为固定格间空格后与宽表视觉一致。
 
 ## [S1] Problem
 
@@ -22,7 +46,7 @@ worktree: .worktrees/table-column-align
 | 紧（70–100 px）| **每格仍是一框**，但间隔 ≈ 1 字高 | ✗ 被当正文并成一段 |
 | 极紧（≤40 px）| 相邻格被引擎融成一框 | ✗ 并段（此类需版面模型，本期不做）|
 
-紧���表格是常见场景（Excel 截图、网页表格默认列距），不能漏。
+紧凑表格是常见场景（Excel 截图、网页表格默认列距），不能漏。
 
 ## [S2] Design
 
@@ -62,14 +86,14 @@ worktree: .worktrees/table-column-align
 
 ## Tasks
 
-- [ ] T1: `_find_table_rows` + 接入 `merge_boxes` (depends: none, covers: S2.1, S2.3)
-- [ ] T2: 自检脚本加紧表/正文/列表三组断言；真机引擎跑 5 张合成图验证 (depends: T1, covers: S2.2)
-- [ ] T3: changelog 片段并入 + spec 定稿 (depends: T2)
+- [x] T1: `_find_table_rows` + 接入 `merge_boxes` (depends: none, covers: S2.1, S2.3)
+- [x] T2: 自检脚本加紧表/正文/列表三组断言；真机引擎跑 5 张合成图验证 (depends: T1, covers: S2.2)
+- [x] T3: changelog 片段并入 + spec 定稿 (depends: T2)
 
 ## [S4] Acceptance
 
-- [ ] 列距 70–100 px 的紧凑表格（含带网格线）识别后逐行独立，每行格间以空格分隔
-- [ ] 宽表（≥110 px）行为不变（仍逐行独立）
-- [ ] 两行正文、单列项目列表仍正常并成段落（不被误判为表格）
-- [ ] 表格 + 下方正文的混合页：表格逐行、正文成段
-- [ ] `py_compile` 三脚本通过；`ocr_selftest.py` 内置断言全过
+- [x] 列距 70–100 px 的紧凑表格（含带网格线）识别后逐行独立，每行格间以空格分隔
+- [x] 宽表（≥110 px）行为不变（仍逐行独立）
+- [x] 两行正文、单列项目列表仍正常并成段落（不被误判为表格）
+- [x] 表格 + 下方正文的混合页：表格逐行、正文成段
+- [x] `py_compile` 三脚本通过；`ocr_selftest.py` 内置断言全过
