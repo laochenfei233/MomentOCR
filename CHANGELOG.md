@@ -5,6 +5,15 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.2] - 2026-11-05
+
+修复两处截图问题：多显示器下副屏定格全黑，以及截图后 ESC 无法取消。
+
+### Fixed
+
+- 多显示器环境截图不再第二块屏全黑：125%/150% 这类分数缩放的副屏也能正常定格、框选和识别，双屏各自的内容都完整出现在覆盖层里。
+- 截图定格后不点鼠标直接按 ESC 也能取消了：覆盖层现在是独立进程，之前抢不到键盘焦点，ESC 会漏回原来的应用，必须先在画面上点一下才生效；此外焦点落在「识别/取消」小工具栏上时按 ESC 同样会取消。
+
 ## [0.3.1] - 2026-11-03
 
 分点清单（·、1.、一、等开头的行）识别后各自成段，不再被拼成一整段。
