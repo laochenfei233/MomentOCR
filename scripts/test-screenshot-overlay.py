@@ -32,7 +32,7 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src-tauri" / "scripts"))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt5.QtCore import QEvent, QPoint, Qt  # noqa: E402
+from PyQt5.QtCore import QEvent, QPoint, QRect, Qt  # noqa: E402
 from PyQt5.QtGui import QColor, QKeyEvent, QMouseEvent, QPixmap  # noqa: E402
 from PyQt5.QtWidgets import QApplication  # noqa: E402
 
@@ -258,6 +258,55 @@ def test_escape_cancels():
     with Capture() as cap:
         o.keyPressEvent(QKeyEvent(QEvent.KeyPress, Qt.Key_Escape, Qt.NoModifier))
     assert cap.payload() == {'action': 'cancel'}
+
+
+class FakeScreen:
+    """capture_desktop 只用到 geometry() 和 grabWindow(0)，鸭子类型替身即可。"""
+
+    def __init__(self, geo, pixmap):
+        self._geo = geo
+        self._pixmap = pixmap
+
+    def geometry(self):
+        return self._geo
+
+    def grabWindow(self, win_id):
+        assert win_id == 0, "必须无坐标整屏抓：显式传全局坐标在 Windows 副屏拿到全黑"
+        return self._pixmap
+
+
+class FakeApp:
+    def __init__(self, screens):
+        self._screens = screens
+
+    def screens(self):
+        return self._screens
+
+
+@case
+def test_capture_desktop_keeps_fractional_ratio_screens():
+    """Windows 125% 缩放：物理/逻辑是 1.25 倍，分数倍。
+
+    旧实现的整数倍校验把这种屏整块跳过，画布上留一块 fill 的黑底（4K+1080p
+    混搭真机复现：副屏全黑）。钉住：分数倍不跳屏，各屏内容按 geometry 摆位。
+    """
+    primary = QPixmap(100, 100)
+    primary.fill(QColor(255, 0, 0))
+    secondary = QPixmap(125, 100)  # 逻辑 100x100，物理 125x100 → ratio 1.25
+    secondary.fill(QColor(0, 255, 0))
+    app = FakeApp([
+        FakeScreen(QRect(0, 0, 100, 100), primary),
+        FakeScreen(QRect(100, 0, 100, 100), secondary),
+    ])
+
+    canvas = overlay_mod.capture_desktop(app, QRect(0, 0, 200, 100))
+    assert not canvas.isNull()
+    # 画布按最大 ratio（1.25）铺：200x100 逻辑 → 250x125 像素
+    assert (canvas.width(), canvas.height()) == (250, 125), (canvas.width(), canvas.height())
+
+    img = canvas.toImage()
+    assert img.pixelColor(50, 50) == QColor(255, 0, 0), "主屏区域应是主屏内容"
+    assert img.pixelColor(200, 60) == QColor(0, 255, 0), "副屏区域应是副屏内容，不许留黑底"
 
 
 def main():

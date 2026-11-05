@@ -19,6 +19,11 @@ def capture_desktop(app, virtual_geometry):
     逐屏拿到「该屏自己的系数」后，统一按最大的那个系数铺到同一张画布上，最清晰的那块屏
     就不会被降采样；系数不同的屏在这个环节被重采样，位置仍然准确。
 
+    为什么整屏抓、不传坐标：Windows 上 Qt 5.15 给副屏建的 DC 以屏内 (0, 0) 为原点，
+    显式传虚拟桌面的全局坐标会越界，grabWindow 返回一整块黑（主屏两套坐标系恰好重合，
+    只有第二块屏开始才暴露，125% 缩放的 4K+1080p 混搭实测复现）。grabWindow(0) 不带
+    坐标就是「抓这一块屏」，天然避开坐标系问题。
+
     单屏时等价于原来的「一次抓整块屏」。
     """
     shots = []
@@ -29,15 +34,17 @@ def capture_desktop(app, virtual_geometry):
         if geo.width() <= 0 or geo.height() <= 0:
             continue
 
-        pixmap = screen.grabWindow(0, geo.x(), geo.y(), geo.width(), geo.height())
+        pixmap = screen.grabWindow(0)
         if pixmap.isNull():
             continue
 
         # 「物理像素 / 逻辑点」的比例由返回尺寸反推，不读 devicePixelRatio
-        # （并非所有平台/版本都会设这个值）。顺带把返回尺寸不是整数倍的情况挡在外面，
-        # 免得把一块屏的内容错铺到另一块屏上。
+        # （并非所有平台/版本都会设这个值）。Windows 的 125%/150% 是分数倍，
+        # 不能做整数倍校验——那会把整块屏跳过，画布上留一块 fill 的黑底（真机复现）；
+        # 反正下面按「整张像素 → 目标矩形」显式缩放，比例是几分之几都摆得准。
+        # 只挡明显离谱的值，免得环境异常时把画布撑爆。
         ratio = pixmap.width() / geo.width()
-        if abs(ratio - round(ratio)) > 0.01 or not 1 <= round(ratio) <= 4:
+        if not 0.5 <= ratio <= 5:
             continue
 
         shots.append((geo, pixmap))
