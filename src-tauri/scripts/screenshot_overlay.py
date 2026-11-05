@@ -7,7 +7,7 @@ import sys
 import json
 import os
 from PyQt5.QtWidgets import QApplication, QWidget, QPushButton, QHBoxLayout
-from PyQt5.QtCore import Qt, QPoint, QRect
+from PyQt5.QtCore import QEvent, QObject, Qt, QPoint, QRect
 from PyQt5.QtGui import QPainter, QColor, QPixmap, QPen
 
 
@@ -211,6 +211,33 @@ def hide_from_dock():
         pass
 
 
+def grab_focus(widget):
+    """把键盘焦点抢到覆盖层上。只能在 show() 之后调。
+
+    覆盖层是主程序在后台拉起的子进程：按下截图快捷键时前台还是别的应用，Windows 的
+    前台锁不让后台进程在 show() 时激活窗口 —— 定格画面盖住了全屏、鼠标也照常能拖，
+    键盘却还连着原来那个应用，ESC 一次都到不了这里（得先在画面上点一下才行）。
+    activateWindow() 内部走的就是那条被拦下的 SetForegroundWindow；系统规则里「ALT
+    正被按住」时会放宽限制，所以注入一次 ALT 把调用夹在中间。ALT 抬起时前台已切过来，
+    旧应用只收到按下、收不到抬起，不会因此弹出它的菜单栏。
+
+    非 Windows 或任何一步失败都静默放过：拿不到焦点只是 ESC 不灵，不能把截图弄坏。
+    """
+    widget.raise_()
+    widget.activateWindow()
+    if sys.platform != 'win32':
+        return
+    try:
+        import ctypes
+
+        user32 = ctypes.windll.user32
+        user32.keybd_event(0x12, 0, 0, 0)  # VK_MENU 按下
+        user32.SetForegroundWindow(int(widget.winId()))
+        user32.keybd_event(0x12, 0, 2, 0)  # KEYEVENTF_KEYUP
+    except Exception:
+        pass
+
+
 # 选区把手的判定容差（像素）：按在边/角这么近的范围内就算抓到了把手
 HANDLE = 6
 
@@ -377,10 +404,6 @@ class ScreenshotOverlay(QWidget):
             self.selection_start = None
             self.selection_end = None
             self.update()
-    
-    def keyPressEvent(self, event):
-        if event.key() == Qt.Key_Escape:
-            self.cancel()
     
     def get_selection_rect(self):
         if not self.selection_start or not self.selection_end:
@@ -586,6 +609,24 @@ class ScreenshotOverlay(QWidget):
         event.accept()
 
 
+class EscapeCanceller(QObject):
+    """ESC 取消，装在 QApplication 上：不管键盘焦点落在哪个窗口都认。
+
+    不放在覆盖层的 keyPressEvent 里：工具栏是独立的顶层窗口，点过它之后焦点就在
+    那边，覆盖层自己收不到按键。应用级过滤器能看到本进程所有窗口的按键。
+    """
+
+    def __init__(self, overlay):
+        super().__init__()
+        self.overlay = overlay
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.KeyPress and event.key() == Qt.Key_Escape:
+            self.overlay.cancel()
+            return True
+        return False
+
+
 def main():
     # macOS：拦住 Qt 把本进程变成「前台应用」的那次转变（Qt 在 QApplication 构造时做）。
     # 变过一次，系统就把它记进 Dock 的「最近使用」，之后每次截图都冒出一条
@@ -599,10 +640,14 @@ def main():
     hide_from_dock()
     # 模式由 Rust 侧透传：覆盖层是独立进程，读不到前端的 localStorage
     overlay = ScreenshotOverlay('--instant' in sys.argv)
+    # 必须留住引用：installEventFilter 不接管所有权，临时对象会被回收、过滤器随之失效
+    escape_canceller = EscapeCanceller(overlay)
+    app.installEventFilter(escape_canceller)
     overlay.show()
     # 截图先定格（__init__ 里抓的），再抬到系统 UI 之上：顺序反过来没影响，
     # 但抬层级要在 show() 之后，窗口还没创建时 winId() 拿不到 NSWindow。
     set_window_level(overlay, OVERLAY_WINDOW_LEVEL)
+    grab_focus(overlay)
     app.exec_()
 
 

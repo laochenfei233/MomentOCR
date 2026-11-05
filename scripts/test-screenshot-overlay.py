@@ -253,11 +253,25 @@ def test_degenerate_selection_is_refused_instead_of_cropping_the_whole_screen():
 
 
 @case
-def test_escape_cancels():
-    o = make_overlay()
-    with Capture() as cap:
-        o.keyPressEvent(QKeyEvent(QEvent.KeyPress, Qt.Key_Escape, Qt.NoModifier))
-    assert cap.payload() == {'action': 'cancel'}
+def test_escape_cancels_whichever_window_has_focus():
+    """ESC 走 QApplication 上的过滤器：按键落在覆盖层或工具栏都要取消。
+
+    工具栏是独立顶层窗口，点过它焦点就在那边；只挂在覆盖层上的处理那时收不到按键。
+    """
+    key = QKeyEvent(QEvent.KeyPress, Qt.Key_Escape, Qt.NoModifier)
+    for on_toolbar in (False, True):
+        o = make_overlay()
+        if on_toolbar:
+            drag(o, (50, 50), (150, 150))
+            assert o.toolbar is not None
+        canceller = overlay_mod.EscapeCanceller(o)
+        APP.installEventFilter(canceller)
+        try:
+            with Capture() as cap:
+                APP.notify(o.toolbar if on_toolbar else o, key)
+            assert cap.payload() == {'action': 'cancel'}, on_toolbar
+        finally:
+            APP.removeEventFilter(canceller)
 
 
 class FakeScreen:
