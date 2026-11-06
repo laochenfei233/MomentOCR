@@ -59,7 +59,11 @@ fn current_exe_mtime() -> Option<std::time::SystemTime> {
 
 /// 磁盘上的 exe 是否已被升级安装替换（修改时间晚于本进程启动时）
 fn upgraded_on_disk(started: Option<std::time::SystemTime>) -> bool {
-    match (started, current_exe_mtime()) {
+    is_newer(started, current_exe_mtime())
+}
+
+fn is_newer(started: Option<std::time::SystemTime>, now: Option<std::time::SystemTime>) -> bool {
+    match (started, now) {
         (Some(started), Some(now)) => now > started,
         _ => false,
     }
@@ -436,4 +440,21 @@ pub fn run() {
                 let _ = translate_engine::shutdown();
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{Duration, SystemTime};
+
+    /// 升级安装替换 exe 后，关闭请求必须放行成「退出」，否则安装器强杀会留下幽灵托盘图标。
+    /// 只认「磁盘 exe 比本进程启动时更新」这一种情况，避免把普通关闭也变成退出。
+    #[test]
+    fn detects_upgrade_only_when_exe_is_newer() {
+        let started = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
+        assert!(!is_newer(Some(started), Some(started)));
+        assert!(is_newer(Some(started), Some(started + Duration::from_secs(1))));
+        assert!(!is_newer(Some(started), None));
+        assert!(!is_newer(None, Some(started)));
+    }
 }
