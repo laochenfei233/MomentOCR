@@ -28,6 +28,11 @@ struct AppState {
     /// 正在主动退出。置位后关闭请求不再被拦成「驻留托盘」，
     /// 否则「退出」会被自己的拦截吃掉，软件再也关不掉。
     quitting: AtomicBool,
+    /// 启动时 exe 的修改时间。升级安装会替换磁盘上的 exe，随后安装器
+    /// （MSI 的 Restart Manager 会发 WM_CLOSE）等我们退出。此时若仍按
+    /// 「缩到托盘」处理，安装器等不到进程结束就强杀，托盘图标来不及注销，
+    /// 通知区域里就会留下一个点一下就消失的幽灵图标。
+    exe_mtime: Option<std::time::SystemTime>,
 }
 
 impl Default for AppState {
@@ -40,7 +45,23 @@ impl Default for AppState {
             // 与设置项默认值（现在的模式）对齐
             instant_recognize: AtomicBool::new(false),
             quitting: AtomicBool::new(false),
+            exe_mtime: current_exe_mtime(),
         }
+    }
+}
+
+fn current_exe_mtime() -> Option<std::time::SystemTime> {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| std::fs::metadata(p).ok())
+        .and_then(|m| m.modified().ok())
+}
+
+/// 磁盘上的 exe 是否已被升级安装替换（修改时间晚于本进程启动时）
+fn upgraded_on_disk(started: Option<std::time::SystemTime>) -> bool {
+    match (started, current_exe_mtime()) {
+        (Some(started), Some(now)) => now > started,
+        _ => false,
     }
 }
 
@@ -376,6 +397,11 @@ pub fn run() {
             if window.label() != "main" { return; }
             let state = window.app_handle().state::<AppState>();
             if state.quitting.load(Ordering::SeqCst) { return; }
+            // 升级安装器在等我们退出：走正常退出，让托盘图标被注销
+            if upgraded_on_disk(state.exe_mtime) {
+                exit_now(window.app_handle());
+                return;
+            }
             if state.close_to_tray.load(Ordering::SeqCst) {
                 api.prevent_close();
                 let _ = window.hide();
