@@ -538,7 +538,7 @@ export default function SnipasteOverlay() {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [activeTool, undoAnnotation, redoAnnotation, selectedId, picking, stepHistory]);
+  }, [activeTool, undoAnnotation, redoAnnotation, selectedId, picking, stepHistory, selection]);
 
   // 双击编辑文字
   const handleDoubleClick = useCallback((e: React.MouseEvent) => {
@@ -589,24 +589,9 @@ export default function SnipasteOverlay() {
     return tempCanvas.toDataURL('image/png').split(',')[1];
   }, [imageSrc, annotations]);
 
-  const handleConfirm = useCallback(async () => {
-    if (!selection) return;
-    try {
-      const imageData = await generateAnnotatedImage(selection);
-      const { emit } = await import('@tauri-apps/api/event');
-      await emit('snipaste-cropped', { imageData });
-      await getCurrentWindow().close();
-    } catch (err) {
-      console.error('Export failed:', err);
-      await getCurrentWindow().close();
-    }
-  }, [selection, generateAnnotatedImage]);
-
   const handleCancel = useCallback(async () => {
     try {
-      const { emit } = await import('@tauri-apps/api/event');
-      await emit('snipaste-cancel');
-      await getCurrentWindow().close();
+      await invoke('snipaste_finish');
     } catch (err) {
       console.error('Cancel failed:', err);
     }
@@ -624,7 +609,7 @@ export default function SnipasteOverlay() {
       }
       // 未指定路径时由命令侧落到桌面
       await invoke('snipaste_save_screenshot', { data: Array.from(bytes), path: null });
-      await getCurrentWindow().close();
+      await invoke('snipaste_finish');
     } catch (err) {
       console.error('Save failed:', err);
     }
@@ -640,7 +625,7 @@ export default function SnipasteOverlay() {
         bytes[i] = binaryString.charCodeAt(i);
       }
       await invoke('snipaste_copy_to_clipboard', { data: Array.from(bytes) });
-      await getCurrentWindow().close();
+      await invoke('snipaste_finish');
     } catch (err) {
       console.error('Copy failed:', err);
     }
@@ -683,7 +668,7 @@ export default function SnipasteOverlay() {
       });
       const { emit } = await import('@tauri-apps/api/event');
       await emit('snipaste-ocr', { path: cropPath });
-      await getCurrentWindow().close();
+      await invoke('snipaste_finish');
     } catch (err) {
       console.error('OCR failed:', err);
     }
@@ -708,7 +693,7 @@ export default function SnipasteOverlay() {
       const stitchedPath = await invoke<string>('snipaste_stitch_screenshots');
       const { emit } = await import('@tauri-apps/api/event');
       await emit('snipaste-stitched', { path: stitchedPath });
-      await getCurrentWindow().close();
+      await invoke('snipaste_finish');
     } catch (err) {
       console.error('Finish long screenshot failed:', err);
     }
@@ -939,7 +924,7 @@ export default function SnipasteOverlay() {
           <button onClick={handleOCR} style={{ padding: '6px 12px', background: '#007AFF', color: 'white', border: 'none', borderRadius: 4, fontSize: 12, cursor: 'pointer' }}>
             OCR
           </button>
-          <button onClick={handleConfirm} style={{ padding: '6px 12px', background: '#FF9500', color: 'white', border: 'none', borderRadius: 4, fontSize: 12, cursor: 'pointer' }}>
+          <button onClick={handleOCR} style={{ padding: '6px 12px', background: '#FF9500', color: 'white', border: 'none', borderRadius: 4, fontSize: 12, cursor: 'pointer' }}>
             识别
           </button>
           <button onClick={handleCancel} style={{ padding: '6px 12px', background: '#FF3B30', color: 'white', border: 'none', borderRadius: 4, fontSize: 12, cursor: 'pointer' }}>

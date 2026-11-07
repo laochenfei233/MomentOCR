@@ -29,6 +29,10 @@ export default function PinWindow() {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
+  const annotatingRef = useRef(false);
+  const pickingRef = useRef(false);
+  annotatingRef.current = annotating;
+  pickingRef.current = picking;
 
   const showToast = useCallback((msg: string) => {
     setToast(msg);
@@ -48,6 +52,21 @@ export default function PinWindow() {
     setDraft(null);
     setIsDrawing(false);
   }, []);
+
+  // 归位视图变换：奇数次旋转交换过窗口物理尺寸，这里一并还原
+  const resetTransform = useCallback(async () => {
+    setScale(1);
+    setQuarterTurns(0);
+    setFlipH(false);
+    setFlipV(false);
+    if (pin) {
+      try {
+        await win.setSize(new PhysicalSize(Math.round(pin.width), Math.round(pin.height)));
+      } catch (err) {
+        console.error('reset size failed:', err);
+      }
+    }
+  }, [pin, win]);
 
   // 旋转：奇数次 90° 交换窗口物理尺寸
   const rotate = useCallback(async (dir: 1 | -1) => {
@@ -90,12 +109,12 @@ export default function PinWindow() {
       else if (e.key === ' ') {
         e.preventDefault();
         setActiveTool(null);
-        setAnnotating(true);
+        void resetTransform().then(() => setAnnotating(true));
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [annotating, picking, activeTool, win, exitModes, setActiveTool, rotate]);
+  }, [annotating, picking, activeTool, win, exitModes, setActiveTool, rotate, resetTransform]);
 
   // 滚轮：普通=缩放内容，Ctrl=透明度（原生非 passive 监听以便 preventDefault）
   useEffect(() => {
@@ -103,6 +122,7 @@ export default function PinWindow() {
     if (!el) return;
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
+      if (annotatingRef.current || pickingRef.current) return;
       const delta = e.deltaY > 0 ? -0.1 : 0.1;
       if (e.ctrlKey) {
         setOpacity((o) => Math.max(0.1, Math.min(1, +(o + delta).toFixed(2))));
@@ -194,12 +214,16 @@ export default function PinWindow() {
       if (e.altKey && e.key.toLowerCase() === 'p') return;
       if (e.altKey && e.key === 'Alt') {
         e.preventDefault();
-        setPicking((v) => !v);
+        if (picking) {
+          setPicking(false);
+        } else {
+          void resetTransform().then(() => setPicking(true));
+        }
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, []);
+  }, [picking, resetTransform]);
 
   const handlePickMove = useCallback((e: React.MouseEvent) => {
     if (!picking) return;
@@ -260,6 +284,7 @@ export default function PinWindow() {
         position: 'relative',
       }}
       onMouseDown={handleMouseDown}
+      onDoubleClick={handleDoubleClick}
       onMouseEnter={() => setShowControls(true)}
       onMouseLeave={() => { setShowControls(false); if (picking) { const c = canvasRef.current?.getContext('2d'); c?.clearRect(0, 0, 10000, 10000); } }}
     >
@@ -279,7 +304,6 @@ export default function PinWindow() {
           pointerEvents: 'none',
         }}
         draggable={false}
-        onDoubleClick={handleDoubleClick}
       />
 
       {/* 标注 / 取色画布层 */}
@@ -309,8 +333,8 @@ export default function PinWindow() {
           <PinBtn title="顺时针旋转 (2)" onClick={() => rotate(1)}>⟳</PinBtn>
           <PinBtn title="水平镜像 (3)" onClick={() => setFlipH((v) => !v)}>⇄</PinBtn>
           <PinBtn title="垂直镜像 (4)" onClick={() => setFlipV((v) => !v)}>⇅</PinBtn>
-          <PinBtn title="标注 (空格)" onClick={() => setAnnotating(true)}>✏️</PinBtn>
-          <PinBtn title="取色 (Alt)" onClick={() => setPicking(true)}>💧</PinBtn>
+          <PinBtn title="标注 (空格)" onClick={() => { void resetTransform().then(() => setAnnotating(true)); }}>✏️</PinBtn>
+          <PinBtn title="取色 (Alt)" onClick={() => { void resetTransform().then(() => setPicking(true)); }}>💧</PinBtn>
           <PinBtn title="关闭 (Esc)" onClick={() => win.close().catch(() => {})}>×</PinBtn>
         </div>
       )}

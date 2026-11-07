@@ -8,19 +8,21 @@ export interface ColorInfo {
   b: number;
 }
 
-const sourceCache = new WeakMap<HTMLImageElement, { canvas: HTMLCanvasElement; data: ImageData }>();
+const sourceCache = new WeakMap<HTMLImageElement, { src: string; canvas: HTMLCanvasElement; data: ImageData }>();
 
 function getSource(img: HTMLImageElement): { canvas: HTMLCanvasElement; data: ImageData } {
-  let entry = sourceCache.get(img);
-  if (!entry) {
-    const canvas = document.createElement('canvas');
-    canvas.width = img.naturalWidth;
-    canvas.height = img.naturalHeight;
-    const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
-    ctx.drawImage(img, 0, 0);
-    entry = { canvas, data: ctx.getImageData(0, 0, canvas.width, canvas.height) };
-    sourceCache.set(img, entry);
+  // 同一 <img> 节点会随历史回放/续拍换 src，缓存必须按 src 失效
+  const cached = sourceCache.get(img);
+  if (cached && cached.src === img.src) {
+    return cached;
   }
+  const canvas = document.createElement('canvas');
+  canvas.width = img.naturalWidth;
+  canvas.height = img.naturalHeight;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
+  ctx.drawImage(img, 0, 0);
+  const entry = { src: img.src, canvas, data: ctx.getImageData(0, 0, canvas.width, canvas.height) };
+  sourceCache.set(img, entry);
   return entry;
 }
 
@@ -98,7 +100,7 @@ export function drawLoupe(
   ctx.lineWidth = 1;
   ctx.strokeRect(bx + half * zoom + 0.5, by + half * zoom + 0.5, zoom - 1, zoom - 1);
 
-  // 信息条：色块 + HEX
+  // 信息条：色块 + HEX + RGB
   const info = pickColorFromImage(img, cssX, cssY, dpr);
   if (info) {
     ctx.fillStyle = info.hex;
@@ -106,9 +108,9 @@ export function drawLoupe(
     ctx.strokeStyle = 'rgba(255,255,255,0.6)';
     ctx.strokeRect(bx + 8.5, by + boxW + 8.5, 17, 17);
     ctx.fillStyle = '#FFFFFF';
-    ctx.font = '12px monospace';
+    ctx.font = '11px monospace';
     ctx.textBaseline = 'middle';
-    ctx.fillText(info.hex, bx + 34, by + boxW + 17);
+    ctx.fillText(`${info.hex}  ${info.r},${info.g},${info.b}`, bx + 32, by + boxW + 17);
   }
 
   ctx.restore();

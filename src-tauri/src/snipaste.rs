@@ -75,7 +75,7 @@ pub struct MonitorCapture {
 pub fn capture_monitor_containing(cx: f64, cy: f64) -> Result<MonitorCapture> {
     let screens = Screen::all()?;
     if screens.is_empty() {
-        return Err(anyhow::anyhow!("No screen found"));
+        return Err(anyhow::anyhow!("找不到可用屏幕"));
     }
 
     let screen = screens
@@ -121,7 +121,7 @@ pub fn get_session_monitor() -> Option<MonitorGeometry> {
 /// 捕获会话显示器（无会话时退回主屏）
 pub fn capture_session_monitor() -> Result<MonitorCapture> {
     let (x, y, w, h, _) = get_session_monitor()
-        .ok_or_else(|| anyhow::anyhow!("No session monitor"))?;
+        .ok_or_else(|| anyhow::anyhow!("没有会话显示器记录"))?;
     // 用显示器中心点定位
     capture_monitor_containing(
         x as f64 + w as f64 / 2.0,
@@ -324,7 +324,7 @@ impl SnipasteManager {
         use screenshots::image::io::Reader;
 
         if paths.is_empty() {
-            return Err(anyhow::anyhow!("No screenshots to stitch"));
+            return Err(anyhow::anyhow!("没有可拼接的截图"));
         }
 
         if paths.len() == 1 {
@@ -436,5 +436,31 @@ impl Default for SnipasteManager {
 impl SnipasteManager {
     pub fn new() -> Self {
         Self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn history_ring_keeps_last_10_and_steps_within_bounds() {
+        for i in 0..12 {
+            push_history(format!("/tmp/frame-{i}.png"));
+        }
+        // 只保留最近 10 张
+        let last = history_step(0).unwrap();
+        assert_eq!(last, "/tmp/frame-11.png");
+        // 连续向前 9 步都在界内，不会越界到更早被挤出的帧
+        let mut cur = last;
+        for i in (2..11).rev() {
+            cur = history_step(-1).unwrap();
+            assert_eq!(cur, format!("/tmp/frame-{i}.png"));
+        }
+        // 到头后继续向前停在第一帧
+        assert_eq!(history_step(-1).unwrap(), cur);
+        // 重复 push 同一帧不产生重复项
+        push_history(cur.clone());
+        assert_eq!(history_step(0).unwrap(), cur);
     }
 }

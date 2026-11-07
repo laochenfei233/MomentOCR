@@ -8,7 +8,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { useOcrStore } from './stores/ocrStore';
 import { useSettingsStore } from './stores/settingsStore';
-import { builtinPlugins, findPlugin } from './plugins';
+import { builtinPlugins, findPlugin, runOcr } from './plugins';
 import { GOOGLE_TARGET_CODES } from './utils/languages';
 import { validateShortcut, type ShortcutRegistration } from './utils/shortcut';
 
@@ -85,6 +85,32 @@ function App() {
       }
     });
     return () => { unlisten.then((fn) => fn()); };
+  }, []);
+
+  // snipaste overlay 的 OCR / 长截图结果：路径 → 走主识别管线（结果进 OcrResult 与历史）
+  useEffect(() => {
+    const runSnipasteOcr = async (imagePath: string) => {
+      const { setProcessing, setResult, addToHistory } = useOcrStore.getState();
+      const { activeOcrPlugin, pluginSettings, afterRecognize } = useSettingsStore.getState();
+      setProcessing(true);
+      try {
+        const ocrResult = await runOcr(activeOcrPlugin, imagePath, pluginSettings);
+        const result = { success: !ocrResult.startsWith('错误'), data: ocrResult, confidence: 0, language: 'auto' };
+        setResult(result);
+        addToHistory(result);
+        if (afterRecognize.autoCopy && result.success) {
+          try { await navigator.clipboard.writeText(result.data); } catch { /* 剪贴板不可用不影响识别 */ }
+        }
+      } catch (err) {
+        setResult({ success: false, data: '', error: String(err) });
+      } finally {
+        setProcessing(false);
+      }
+      invoke('focus_main_window').catch(() => {});
+    };
+    const u1 = listen<{ path: string }>('snipaste-ocr', (e) => runSnipasteOcr(e.payload.path));
+    const u2 = listen<{ path: string }>('snipaste-stitched', (e) => runSnipasteOcr(e.payload.path));
+    return () => { u1.then((fn) => fn()); u2.then((fn) => fn()); };
   }, []);
 
   // 开机自启：系统里的启动项会被卸载/重装清掉（覆盖安装时 NSIS 会删除 Run 键），
@@ -299,7 +325,7 @@ function App() {
         <button className={`tool-btn ${tab === 'file' && !showSettings ? 'active' : ''}`} title="文件识别" onClick={() => { setTab('file'); setShowSettings(false); }}>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>
         </button>
-        <button className={`tool-btn ${tab === 'snipaste' && !showSettings ? 'active' : ''}`} title="截图贴图" onClick={() => { setTab('snipaste'); setShowSettings(false); }}>
+        <button className={`tool-btn ${tab === 'snipaste' && !showSettings ? 'active' : ''}`} title="截图贴图" onClick={() => { setTab('snipaste'); setShowSettings(false); handleSnipaste(); }}>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
         </button>
         <button className={`tool-btn ${tab === 'snipaste' && !showSettings ? 'active' : ''}`} title="长截图" onClick={handleLongScreenshot}>
