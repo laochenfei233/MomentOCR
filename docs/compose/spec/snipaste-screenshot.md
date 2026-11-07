@@ -1,29 +1,25 @@
 ---
 feature: snipaste-screenshot
-status: in-progress
+status: delivered
 updated: 2026-11-07
 branch: feat/snipaste-screenshot
-commits: 4da549d
+commits: 4da549d..7a4a352
 ---
 
 # Snipaste Screenshot
 
 ## Report
 
-**What was built** — 实现了 Snipaste 风格的截图工具，包含以下功能：
-1. **截图功能**：全屏截图后可选择区域，支持保存、复制、贴图、OCR 识别
-2. **长截图功能**：支持自动滚动截图并拼接多张图片
-3. **贴图功能**：可将截图钉在屏幕上，支持拖拽、缩放、关闭
-4. **标注工具**：支持箭头、矩形、文字、马赛克等标注
+**What was built** — 本轮对齐 Snipaste 2.11.3 补齐两处缺陷与四组能力。缺陷修复：①贴图创建链路（原来前端只 emit 无人监听，贴图功能整体不可用），改为 Rust 侧 `snipaste_create_pin` 创建 `pin-{id}` 窗口 + `PIN_IMAGES` 状态表按 label 取回数据；②DPI 坐标链（物理像素截图 vs CSS 选区），捕获改为光标所在显示器、overlay/贴图窗口全部物理坐标落位、前端统一 CSS×devicePixelRatio 换算，附带修好失效的"复制到剪贴板"（arboard）。新能力：贴图体验包（1/2 旋转、3/4 镜像、Ctrl+滚轮透明度、鼠标穿透 + Alt+P 全局恢复、双击隐藏 + 主窗口贴图面板恢复、Alt 取色）、截图取色器（C 键放大镜，HEX+RGB 单击复制）、窗口自动检测（EnumWindows + DWM 扩展边界，悬停高亮、单击吸附）、贴图上标注（空格进入，共享绘制引擎）与历史回放（`,`/`.` 最近 10 帧环形缓冲）。期间将 master（PyQt5 覆盖层架构、tauri 2.12.5、托盘）并入分支并重新挂接 snipaste 模块，消除分支与 master 的 20 个提交分叉。
 
-**Verification** — Rust 编译通过（仅预存警告），TypeScript 编译通过（仅预存错误），所有新文件创建成功。
+**Verification** — cargo check / cargo clippy --all-targets / cargo build：PASS（0 error，3 个 warning 为 master 预存于 local_engine/translate_engine）；cargo test：PASS（21 passed，含新增历史环形缓冲单测）；npx tsc --noEmit：PASS（0 error，合并 master 后分支原有预存错误一并消失）；npx vite build：PASS。评审子代理两轮发现的问题（退出路径主窗口不恢复、截图入口不可达、双击隐藏死代码、混合 DPI overlay 落错屏、取色缓存读旧帧、Alt+P 注册失败静默、标注与变换错位）均已修复并复验。
 
 **Journey log**:
-- 实现了 SnipasteManager 模块处理截图、裁剪、拼接等核心功能
-- 创建了 SnipasteOverlay 组件实现截图选区和标注工具栏
-- 创建了 PinWindow 组件实现贴图窗口的拖拽和缩放
-- 添加了 custom translate 和 vision API 函数以支持更多翻译和 OCR 服务
-- 修复了 TypeScript 类型错误（PhysicalPosition/PhysicalSize 导入）
+- 第一轮 spec 标记 delivered 但贴图链路从未打通（emit 无监听者）——"集成测试"任务一直没勾就是这个原因；本轮以 T8 真机冒烟为唯一遗留。
+- master 已把 OCR 截图重构为 PyQt5 独立覆盖层子进程，snipaste 分支仍走 WebView overlay——两套架构并存，后续如要统一，snipaste 的选区/标注需迁到 PyQt5 覆盖层或保持双轨。
+- tao 对 builder 逻辑 position 的逐屏试探换算在混合 DPI 下会落错显示器，任何跨屏窗口都必须 build 后 `set_position(Physical)` 精确落位（overlay 与贴图窗口都踩过）。
+- Qt .qm 语言文件被 Snipaste 作者加密（非标准 magic、无 zlib 流），字符串级能力枚举不可行，改用官方特性页 + 安装目录侦察。
+- 分支落后 master 20 个提交导致 Logo 缺失等预存错误，先合并 master 再做能力开发，冲突集中在 lib.rs 的双架构交界处。
 
 ## [S1] Problem
 
@@ -63,7 +59,7 @@ commits: 4da549d
 ### S2.8 贴图体验包
 
 对齐 Snipaste Paster 的窗口操作（GIF 相关除外）：
-- `1`/`2` 顺/逆时针旋转 90°，`3`/`4` 水平/垂直镜像 —— 纯 CSS transform 状态机。
+- `1` 逆时针 / `2` 顺时针旋转 90°，`3`/`4` 水平/垂直镜像 —— 纯 CSS transform 状态机。
 - `Ctrl+滚轮` 调透明度 10%–100%；普通滚轮缩放（保持现有）。
 - 鼠标穿透：hover 工具栏开关，`window.set_ignore_cursor_events(true)`；全局快捷键 `Alt+P` 为所有贴图关闭穿透（唯一恢复入口，避免窗口失联）。
 - **双击改为隐藏**（对齐 Snipaste），`×`/Esc 仍关闭。隐藏的贴图在主窗口 snipaste 标签页的"贴图"面板列出（`snipaste_list_pins`），可显示或关闭——这是可恢复性要求，不算贴图管理器。
@@ -86,11 +82,13 @@ commits: 4da549d
 
 - 提取 overlay 绘制引擎为共享模块 `src/lib/annotations.ts`（drawAnnotation 及各工具绘制函数），overlay 与 PinWindow 共用。
 - PinWindow 内 `空格` 进入/退出标注模式：支持 画笔/箭头/矩形/文字/荧光笔（不含马赛克/模糊），标注为视觉层（随贴图关闭丢弃，不导出）。
+- 进入标注/取色模式时先把贴图视图归位（缩放/旋转/镜像复位、窗口尺寸还原），画布与取样始终在图像原始坐标系上进行；模式期间滚轮与旋转快捷键屏蔽。
 
 ### S2.12 历史回放
 
 - `SnipasteManager` 维护最近 10 张截图路径环形缓冲（每轮捕获入队）。
-- overlay 内 `,`/`.` 在历史帧间切换背景（切换时清空选区与标注），支持从更早的截图重新选区。
+- overlay 内 `,`/`.` 在历史帧间切换背景（切换时清空选区与标注），支持从更早的截图重新选区；长截图续拍的帧同样入队。
+- 已知限制：历史帧可能来自另一台显示器，切到尺寸/缩放不同的帧后，CSS×dpr 映射不再精确（B8，真机冒烟关注项）。
 
 ### 原架构与窗口表（第一轮设计，仍然有效）
 
@@ -288,15 +286,15 @@ interface SnipasteState {
 - [x] T5: 前端 — 实现长截图流程，支持自动滚动拼接 — acceptance: 可连续截图并自动拼接 (covers: S2; depends: T4)
 - [x] T6: 前端 — 实现贴图窗口组件 (PinWindow)，支持拖拽、缩放、关闭 — acceptance: 贴图可拖拽，滚轮缩放，双击关闭 (covers: S2; depends: T2, T3)
 - [x] T7: 前端 — 主应用添加入口按钮，更新路由和权限配置 — acceptance: 点击入口可启动截图流程 (covers: S2; depends: T4)
-- [ ] T8: 集成测试 — 启动应用，验证截图、标注、贴图、长截图功能 — acceptance: 所有功能端到端可用 (covers: S2; depends: T1-T7)
-- [ ] T9: 修复贴图创建链路 — Rust 侧创建 `pin-{id}` 窗口，PIN_IMAGES 状态表 + `snipaste_get_pin_image`，前端移除 asset 协议依赖 — acceptance: 截图后点"贴图"出现置顶贴图窗口并显示所选内容 (covers: S2.6; depends: none)
-- [ ] T10: DPI 坐标修正 — 光标屏捕获、overlay 定位到对应显示器、CSS↔物理坐标换算、背景改 data URL — acceptance: 125% 缩放屏上裁剪区域与选区一致 (covers: S2.7; depends: T9)
-- [ ] T11: 贴图体验包 — 旋转/镜像/透明度/鼠标穿透/双击隐藏/Alt 取色 + 主窗口贴图恢复面板 — acceptance: 快捷键与面板操作均生效，隐藏贴图可恢复 (covers: S2.8; depends: T9)
-- [ ] T12: 截图取色器 — `C` 进入放大镜取色，单击复制 HEX — acceptance: 放大镜实时跟随光标，复制的颜色与像素一致 (covers: S2.9; depends: T10)
-- [ ] T13: 窗口自动检测 — `windows` crate 枚举 + DWM 扩展边界，hover 高亮、单击吸附 — acceptance: 悬停时高亮光标下窗口，单击选中该窗口区域 (covers: S2.10; depends: T10)
-- [ ] T14: 贴图上标注 — 提取共享绘制引擎，空格在贴图内切换标注模式（画笔/箭头/矩形/文字/荧光笔）— acceptance: 贴图内可绘制标注且随窗口缩放一致 (covers: S2.11; depends: T9)
-- [ ] T15: 历史回放 — 截图环形缓冲，`,`/`.` 切换历史帧 — acceptance: 按键后背景切换为上一张截图且可重新选区 (covers: S2.12; depends: T10)
-- [ ] T16: 验证 — cargo clippy/test、tsc、cargo build 全部通过 — acceptance: 全绿 (covers: S2.6-S2.12; depends: T9-T15)
+- [ ] T8: 集成测试（真机冒烟，待用户执行） — 启动应用，验证截图、标注、贴图、长截图功能 — acceptance: 所有功能端到端可用 (covers: S2; depends: T1-T7)
+- [x] T9: 修复贴图创建链路 — Rust 侧创建 `pin-{id}` 窗口，PIN_IMAGES 状态表 + `snipaste_get_pin_image`，前端移除 asset 协议依赖 — acceptance: 截图后点"贴图"出现置顶贴图窗口并显示所选内容 (covers: S2.6; depends: none)
+- [x] T10: DPI 坐标修正 — 光标屏捕获、overlay 定位到对应显示器、CSS↔物理坐标换算、背景改 data URL — acceptance: 125% 缩放屏上裁剪区域与选区一致 (covers: S2.7; depends: T9)
+- [x] T11: 贴图体验包 — 旋转/镜像/透明度/鼠标穿透/双击隐藏/Alt 取色 + 主窗口贴图恢复面板 — acceptance: 快捷键与面板操作均生效，隐藏贴图可恢复 (covers: S2.8; depends: T9)
+- [x] T12: 截图取色器 — `C` 进入放大镜取色，单击复制 HEX — acceptance: 放大镜实时跟随光标，复制的颜色与像素一致 (covers: S2.9; depends: T10)
+- [x] T13: 窗口自动检测 — `windows` crate 枚举 + DWM 扩展边界，hover 高亮、单击吸附 — acceptance: 悬停时高亮光标下窗口，单击选中该窗口区域 (covers: S2.10; depends: T10)
+- [x] T14: 贴图上标注 — 提取共享绘制引擎，空格在贴图内切换标注模式（画笔/箭头/矩形/文字/荧光笔）— acceptance: 贴图内可绘制标注且随窗口缩放一致 (covers: S2.11; depends: T9)
+- [x] T15: 历史回放 — 截图环形缓冲，`,`/`.` 切换历史帧 — acceptance: 按键后背景切换为上一张截图且可重新选区 (covers: S2.12; depends: T10)
+- [x] T16: 验证 — cargo clippy/test、tsc、cargo build 全部通过 — acceptance: 全绿 (covers: S2.6-S2.12; depends: T9-T15)
 
 ## [S4] Acceptance（第二轮新增）
 
