@@ -103,15 +103,18 @@ pub fn capture_monitor_containing(cx: f64, cy: f64) -> Result<MonitorCapture> {
     })
 }
 
+/// 显示器几何：物理原点 (x, y)、物理尺寸 (宽, 高)、缩放系数
+pub type MonitorGeometry = (i32, i32, u32, u32, f64);
+
 /// 会话显示器（本轮截图流程锁定的显示器），长截图续拍用
-static SESSION_MONITOR: Lazy<Mutex<Option<(i32, i32, u32, u32, f64)>>> =
+static SESSION_MONITOR: Lazy<Mutex<Option<MonitorGeometry>>> =
     Lazy::new(|| Mutex::new(None));
 
 pub fn set_session_monitor(x: i32, y: i32, width: u32, height: u32, scale: f64) {
     *SESSION_MONITOR.lock().unwrap() = Some((x, y, width, height, scale));
 }
 
-pub fn get_session_monitor() -> Option<(i32, i32, u32, u32, f64)> {
+pub fn get_session_monitor() -> Option<MonitorGeometry> {
     *SESSION_MONITOR.lock().unwrap()
 }
 
