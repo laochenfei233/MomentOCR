@@ -10,6 +10,253 @@ use base64::Engine;
 static LAST_SCREENSHOT: Lazy<Mutex<Option<String>>> = Lazy::new(|| Mutex::new(None));
 static LONG_SCREENSHOT_PATHS: Lazy<Mutex<Vec<String>>> = Lazy::new(|| Mutex::new(Vec::new()));
 
+/// 贴图窗口数据表：id -> 数据（base64 图像 + 初始几何），供 pin 窗口启动后取回
+#[derive(Clone, serde::Serialize)]
+pub struct PinData {
+    pub image_data: String,
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+    pub visible: bool,
+}
+
+static PIN_IMAGES: Lazy<Mutex<std::collections::HashMap<String, PinData>>> =
+    Lazy::new(|| Mutex::new(std::collections::HashMap::new()));
+
+static PIN_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub fn next_pin_id() -> u64 {
+    PIN_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+pub fn insert_pin(id: &str, data: PinData) {
+    PIN_IMAGES.lock().unwrap().insert(id.to_string(), data);
+}
+
+pub fn get_pin(id: &str) -> Option<PinData> {
+    PIN_IMAGES.lock().unwrap().get(id).cloned()
+}
+
+pub fn set_pin_visible(id: &str, visible: bool) -> Option<PinData> {
+    let mut map = PIN_IMAGES.lock().unwrap();
+    if let Some(p) = map.get_mut(id) {
+        p.visible = visible;
+        Some(p.clone())
+    } else {
+        None
+    }
+}
+
+pub fn list_pins() -> Vec<(String, PinData)> {
+    PIN_IMAGES
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect()
+}
+
+pub fn remove_pin(id: &str) -> Option<PinData> {
+    PIN_IMAGES.lock().unwrap().remove(id)
+}
+
+/// 单显示器捕获结果（物理像素图像 + 显示器几何）
+pub struct MonitorCapture {
+    pub png: Vec<u8>,
+    pub scale: f64,
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// 捕获包含物理坐标点 (cx, cy) 的显示器
+pub fn capture_monitor_containing(cx: f64, cy: f64) -> Result<MonitorCapture> {
+    let screens = Screen::all()?;
+    if screens.is_empty() {
+        return Err(anyhow::anyhow!("No screen found"));
+    }
+
+    let screen = screens
+        .iter()
+        .find(|s| {
+            let d = &s.display_info;
+            cx >= d.x as f64
+                && cx < (d.x + d.width as i32) as f64
+                && cy >= d.y as f64
+                && cy < (d.y + d.height as i32) as f64
+        })
+        .unwrap_or_else(|| screens.first().unwrap());
+
+    let img = screen.capture()?;
+    let d = &screen.display_info;
+    let mut buf = Cursor::new(Vec::new());
+    img.write_to(&mut buf, screenshots::image::ImageOutputFormat::Png)?;
+    Ok(MonitorCapture {
+        png: buf.into_inner(),
+        scale: d.scale_factor as f64,
+        x: d.x,
+        y: d.y,
+        width: d.width,
+        height: d.height,
+    })
+}
+
+/// 会话显示器（本轮截图流程锁定的显示器），长截图续拍用
+static SESSION_MONITOR: Lazy<Mutex<Option<(i32, i32, u32, u32, f64)>>> =
+    Lazy::new(|| Mutex::new(None));
+
+pub fn set_session_monitor(x: i32, y: i32, width: u32, height: u32, scale: f64) {
+    *SESSION_MONITOR.lock().unwrap() = Some((x, y, width, height, scale));
+}
+
+pub fn get_session_monitor() -> Option<(i32, i32, u32, u32, f64)> {
+    *SESSION_MONITOR.lock().unwrap()
+}
+
+/// 捕获会话显示器（无会话时退回主屏）
+pub fn capture_session_monitor() -> Result<MonitorCapture> {
+    let (x, y, w, h, _) = get_session_monitor()
+        .ok_or_else(|| anyhow::anyhow!("No session monitor"))?;
+    // 用显示器中心点定位
+    capture_monitor_containing(
+        x as f64 + w as f64 / 2.0,
+        y as f64 + h as f64 / 2.0,
+    )
+}
+
+/// 截图历史环形缓冲（最近 10 张），供 overlay 历史回放
+static HISTORY: Lazy<Mutex<std::collections::VecDeque<String>>> =
+    Lazy::new(|| Mutex::new(std::collections::VecDeque::new()));
+static HISTORY_INDEX: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(-1);
+
+pub fn push_history(path: String) {
+    let mut q = HISTORY.lock().unwrap();
+    if q.back().map(|b| b == &path).unwrap_or(false) {
+        HISTORY_INDEX.store(q.len() as isize - 1, std::sync::atomic::Ordering::Relaxed);
+        return;
+    }
+    q.push_back(path);
+    while q.len() > 10 {
+        q.pop_front();
+    }
+    HISTORY_INDEX.store(q.len() as isize - 1, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// 在历史中前后移动 delta 步，返回该帧路径
+pub fn history_step(delta: isize) -> Option<String> {
+    let q = HISTORY.lock().unwrap();
+    if q.is_empty() {
+        return None;
+    }
+    let len = q.len() as isize;
+    let cur = HISTORY_INDEX.load(std::sync::atomic::Ordering::Relaxed);
+    let next = (cur + delta).clamp(0, len - 1);
+    HISTORY_INDEX.store(next, std::sync::atomic::Ordering::Relaxed);
+    q.get(next as usize).cloned()
+}
+
+/// 窗口检测结果（物理坐标矩形）
+#[derive(Clone, serde::Serialize)]
+pub struct DetectRect {
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
+}
+
+/// 检测物理坐标点下的可见窗口（DWM 扩展边界，窗口级）
+#[cfg(windows)]
+pub fn detect_window_at(cx: i32, cy: i32) -> anyhow::Result<Option<DetectRect>> {
+    use windows::Win32::Foundation::{BOOL, HWND, LPARAM, RECT};
+    use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        EnumWindows, GetWindowLongPtrW, GetWindowThreadProcessId, IsWindowVisible, GWL_EXSTYLE,
+        WS_EX_TOOLWINDOW,
+    };
+
+    struct Ctx {
+        cx: i32,
+        cy: i32,
+        self_pid: u32,
+        result: Option<DetectRect>,
+    }
+
+    unsafe extern "system" fn enum_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
+        let ctx = &mut *(lparam.0 as *mut Ctx);
+        unsafe {
+            if !IsWindowVisible(hwnd).as_bool() {
+                return BOOL(1);
+            }
+            let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+            if ex_style & (WS_EX_TOOLWINDOW.0 as isize) != 0 {
+                return BOOL(1);
+            }
+            let mut pid = 0u32;
+            let _ = GetWindowThreadProcessId(hwnd, Some(&mut pid));
+            if pid == ctx.self_pid {
+                return BOOL(1);
+            }
+            // cloaked（UWP 挂起等不可见窗口）跳过
+            let mut cloaked = 0u32;
+            if DwmGetWindowAttribute(
+                hwnd,
+                DWMWA_CLOAKED,
+                &mut cloaked as *mut u32 as *mut _,
+                std::mem::size_of::<u32>() as u32,
+            )
+            .is_ok()
+                && cloaked != 0
+            {
+                return BOOL(1);
+            }
+            let mut rect = RECT::default();
+            if DwmGetWindowAttribute(
+                hwnd,
+                DWMWA_EXTENDED_FRAME_BOUNDS,
+                &mut rect as *mut RECT as *mut _,
+                std::mem::size_of::<RECT>() as u32,
+            )
+            .is_err()
+            {
+                return BOOL(1);
+            }
+            // Z 序首个包含光标的窗口即最上层可见窗口
+            if ctx.result.is_none()
+                && ctx.cx >= rect.left
+                && ctx.cx < rect.right
+                && ctx.cy >= rect.top
+                && ctx.cy < rect.bottom
+            {
+                let w = rect.right - rect.left;
+                let h = rect.bottom - rect.top;
+                if w > 0 && h > 0 {
+                    ctx.result = Some(DetectRect { x: rect.left, y: rect.top, width: w, height: h });
+                }
+            }
+        }
+        BOOL(1)
+    }
+
+    let mut ctx = Ctx {
+        cx,
+        cy,
+        self_pid: std::process::id(),
+        result: None,
+    };
+    unsafe {
+        EnumWindows(Some(enum_proc), LPARAM(&mut ctx as *mut Ctx as isize))
+            .map_err(|e| anyhow::anyhow!("EnumWindows failed: {e}"))?;
+    }
+    Ok(ctx.result)
+}
+
+#[cfg(not(windows))]
+pub fn detect_window_at(_cx: i32, _cy: i32) -> anyhow::Result<Option<DetectRect>> {
+    Ok(None)
+}
+
 pub struct SnipasteManager;
 
 impl SnipasteManager {

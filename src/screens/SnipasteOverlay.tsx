@@ -3,12 +3,29 @@ import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useSnipasteStore, type Point, type Annotation, type AnnotationType } from '../stores/snipasteStore';
 import { useSettingsStore } from '../stores/settingsStore';
+import { drawAnnotation, hitTestAnnotation, getResizeHandles } from '../lib/annotations';
+import { pickColorFromImage, drawLoupe } from '../lib/colorPicker';
 
 interface Selection {
   startX: number;
   startY: number;
   endX: number;
   endY: number;
+}
+
+interface GhostRect {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+/// Rust snipaste::DetectRect（物理坐标）
+interface DetectRectRaw {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 }
 
 const COLORS = ['#FF3B30', '#FF9500', '#FFCC00', '#34C759', '#007AFF', '#5856D6', '#AF52DE', '#000000', '#FFFFFF'];
@@ -21,6 +38,9 @@ export default function SnipasteOverlay() {
   const [isLongScreenshot, setIsLongScreenshot] = useState(false);
   const [showContinueBtn, setShowContinueBtn] = useState(false);
   const [showColorPicker, setShowColorPicker] = useState(false);
+  const [picking, setPicking] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
+  const [detectRect, setDetectRect] = useState<GhostRect | null>(null);
 
   // 绘图状态
   const [isDrawing, setIsDrawing] = useState(false);
@@ -44,6 +64,7 @@ export default function SnipasteOverlay() {
     updateAnnotation,
     undoAnnotation,
     redoAnnotation,
+    clearAnnotations,
     annotationColor,
     setAnnotationColor,
     strokeWidth,
@@ -54,6 +75,10 @@ export default function SnipasteOverlay() {
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const imgRef = useRef<HTMLImageElement>(null);
+  const loupeRef = useRef<HTMLCanvasElement>(null);
+  const outerOriginRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  const lastDetectRef = useRef(0);
 
   // 检查是否为长截图模式
   useEffect(() => {
@@ -61,20 +86,97 @@ export default function SnipasteOverlay() {
     setIsLongScreenshot(params.get('mode') === 'long');
   }, []);
 
-  // 加载截图
+  // 加载截图（base64 data URL，避免依赖未启用的 asset 协议）
   useEffect(() => {
     const loadScreenshot = async () => {
       try {
-        const path = await invoke<string>('get_screenshot_path');
-        const { convertFileSrc } = await import('@tauri-apps/api/core');
-        const assetUrl = convertFileSrc(path);
-        setImageSrc(assetUrl);
+        const base64 = await invoke<string>('snipaste_get_screenshot_base64');
+        setImageSrc(`data:image/png;base64,${base64}`);
       } catch (err) {
         console.error('Failed to load screenshot:', err);
       }
     };
     loadScreenshot();
   }, []);
+
+  // 记录 overlay 窗口的全局物理原点（= 所在显示器原点），CSS↔全局物理坐标换算用
+  useEffect(() => {
+    getCurrentWindow().outerPosition()
+      .then((p) => { outerOriginRef.current = { x: p.x, y: p.y }; })
+      .catch((err) => console.error('outerPosition failed:', err));
+  }, []);
+
+  const showToast = useCallback((msg: string) => {
+    setToast(msg);
+    setTimeout(() => setToast(null), 1600);
+  }, []);
+
+  // 历史回放：,/. 在最近截图间切换
+  const stepHistory = useCallback(async (delta: number) => {
+    try {
+      const base64 = await invoke<string>('snipaste_history_step', { delta });
+      setImageSrc(`data:image/png;base64,${base64}`);
+      setSelection(null);
+      setShowToolbar(false);
+      setShowContinueBtn(false);
+      setSelectedId(null);
+      clearAnnotations();
+      setDetectRect(null);
+    } catch (err) {
+      console.error('history failed:', err);
+    }
+  }, [clearAnnotations]);
+
+  // 窗口自动检测：光标下窗口高亮（物理坐标 = overlay 原点 + CSS×dpr）
+  const detectWindowAt = useCallback(async (cssX: number, cssY: number) => {
+    const now = Date.now();
+    if (now - lastDetectRef.current < 60) return;
+    lastDetectRef.current = now;
+    try {
+      const dpr = window.devicePixelRatio || 1;
+      const origin = outerOriginRef.current;
+      const r = await invoke<DetectRectRaw | null>('snipaste_detect_window', {
+        x: origin.x + Math.round(cssX * dpr),
+        y: origin.y + Math.round(cssY * dpr),
+      });
+      setDetectRect(r ? {
+        left: (r.x - origin.x) / dpr,
+        top: (r.y - origin.y) / dpr,
+        width: r.width / dpr,
+        height: r.height / dpr,
+      } : null);
+    } catch {
+      /* 检测失败静默忽略 */
+    }
+  }, []);
+
+  // 取色：跟随光标绘制放大镜
+  const drawLoupeAt = useCallback((cssX: number, cssY: number) => {
+    const canvas = loupeRef.current;
+    const img = imgRef.current;
+    if (!canvas || !img) return;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = canvas.clientWidth * dpr;
+    canvas.height = canvas.clientHeight * dpr;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
+    drawLoupe(ctx, img, cssX, cssY, { dpr, cssW: canvas.clientWidth, cssH: canvas.clientHeight });
+  }, []);
+
+  const copyPickedColor = useCallback(async (cssX: number, cssY: number) => {
+    const img = imgRef.current;
+    if (!img) return;
+    const info = pickColorFromImage(img, cssX, cssY, window.devicePixelRatio || 1);
+    if (!info) return;
+    try {
+      await navigator.clipboard.writeText(info.hex);
+      showToast(`已复制 ${info.hex}`);
+    } catch {
+      showToast(info.hex);
+    }
+  }, [showToast]);
 
   // 绘制画布
   useEffect(() => {
@@ -137,151 +239,6 @@ export default function SnipasteOverlay() {
     }
   }, [annotations, selectedId]);
 
-  // 绘制单个标注
-  const drawAnnotation = (ctx: CanvasRenderingContext2D, annotation: Annotation) => {
-    ctx.save();
-    ctx.strokeStyle = annotation.color;
-    ctx.fillStyle = annotation.color;
-    ctx.lineWidth = annotation.strokeWidth || 3;
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-    ctx.globalAlpha = annotation.opacity ?? 1;
-
-    switch (annotation.type) {
-      case 'pen':
-        drawPen(ctx, annotation);
-        break;
-      case 'line':
-        drawLine(ctx, annotation);
-        break;
-      case 'arrow':
-        drawArrow(ctx, annotation);
-        break;
-      case 'rectangle':
-        drawRectangle(ctx, annotation);
-        break;
-      case 'text':
-        drawText(ctx, annotation);
-        break;
-      case 'mosaic':
-        drawMosaic(ctx, annotation);
-        break;
-      case 'highlighter':
-        drawHighlighter(ctx, annotation);
-        break;
-      case 'blur':
-        drawBlur(ctx, annotation);
-        break;
-    }
-
-    ctx.restore();
-  };
-
-  // 画笔
-  const drawPen = (ctx: CanvasRenderingContext2D, annotation: Annotation) => {
-    if (!annotation.points || annotation.points.length < 2) return;
-    ctx.beginPath();
-    ctx.moveTo(annotation.points[0].x, annotation.points[0].y);
-    for (let i = 1; i < annotation.points.length; i++) {
-      ctx.lineTo(annotation.points[i].x, annotation.points[i].y);
-    }
-    ctx.stroke();
-  };
-
-  // 直线
-  const drawLine = (ctx: CanvasRenderingContext2D, annotation: Annotation) => {
-    if (annotation.endX === undefined || annotation.endY === undefined) return;
-    ctx.beginPath();
-    ctx.moveTo(annotation.x, annotation.y);
-    ctx.lineTo(annotation.endX, annotation.endY);
-    ctx.stroke();
-  };
-
-  // 箭头
-  const drawArrow = (ctx: CanvasRenderingContext2D, annotation: Annotation) => {
-    if (annotation.endX === undefined || annotation.endY === undefined) return;
-    const headLength = 15;
-    const dx = annotation.endX - annotation.x;
-    const dy = annotation.endY - annotation.y;
-    const angle = Math.atan2(dy, dx);
-
-    ctx.beginPath();
-    ctx.moveTo(annotation.x, annotation.y);
-    ctx.lineTo(annotation.endX, annotation.endY);
-    ctx.stroke();
-
-    // 箭头
-    ctx.beginPath();
-    ctx.moveTo(annotation.endX, annotation.endY);
-    ctx.lineTo(
-      annotation.endX - headLength * Math.cos(angle - Math.PI / 6),
-      annotation.endY - headLength * Math.sin(angle - Math.PI / 6)
-    );
-    ctx.moveTo(annotation.endX, annotation.endY);
-    ctx.lineTo(
-      annotation.endX - headLength * Math.cos(angle + Math.PI / 6),
-      annotation.endY - headLength * Math.sin(angle + Math.PI / 6)
-    );
-    ctx.stroke();
-  };
-
-  // 矩形
-  const drawRectangle = (ctx: CanvasRenderingContext2D, annotation: Annotation) => {
-    if (annotation.width === undefined || annotation.height === undefined) return;
-    ctx.strokeRect(annotation.x, annotation.y, annotation.width, annotation.height);
-  };
-
-  // 文字
-  const drawText = (ctx: CanvasRenderingContext2D, annotation: Annotation) => {
-    if (!annotation.text) return;
-    ctx.font = '16px sans-serif';
-    ctx.fillText(annotation.text, annotation.x, annotation.y);
-  };
-
-  // 马赛克
-  const drawMosaic = (ctx: CanvasRenderingContext2D, annotation: Annotation) => {
-    if (annotation.width === undefined || annotation.height === undefined) return;
-    const blockSize = 10;
-    ctx.fillStyle = annotation.color;
-    for (let x = annotation.x; x < annotation.x + annotation.width; x += blockSize) {
-      for (let y = annotation.y; y < annotation.y + annotation.height; y += blockSize) {
-        ctx.fillRect(x, y, blockSize - 1, blockSize - 1);
-      }
-    }
-  };
-
-  // 荧光笔
-  const drawHighlighter = (ctx: CanvasRenderingContext2D, annotation: Annotation) => {
-    if (!annotation.points || annotation.points.length < 2) return;
-    ctx.save();
-    ctx.lineWidth = 20;
-    ctx.beginPath();
-    ctx.moveTo(annotation.points[0].x, annotation.points[0].y);
-    for (let i = 1; i < annotation.points.length; i++) {
-      ctx.lineTo(annotation.points[i].x, annotation.points[i].y);
-    }
-    ctx.stroke();
-    ctx.restore();
-  };
-
-  // 模糊
-  const drawBlur = (ctx: CanvasRenderingContext2D, annotation: Annotation) => {
-    if (annotation.width === undefined || annotation.height === undefined) return;
-    // 简单的像素化模糊效果
-    const imageData = ctx.getImageData(annotation.x, annotation.y, annotation.width, annotation.height);
-    const pixelSize = 8;
-    for (let y = 0; y < annotation.height; y += pixelSize) {
-      for (let x = 0; x < annotation.width; x += pixelSize) {
-        const i = (y * annotation.width + x) * 4;
-        const r = imageData.data[i];
-        const g = imageData.data[i + 1];
-        const b = imageData.data[i + 2];
-        ctx.fillStyle = `rgb(${r},${g},${b})`;
-        ctx.fillRect(annotation.x + x, annotation.y + y, pixelSize, pixelSize);
-      }
-    }
-  };
-
   // 选区外的暗色遮罩
   const rect = selection ? {
     left: Math.min(selection.startX, selection.endX),
@@ -290,59 +247,14 @@ export default function SnipasteOverlay() {
     height: Math.abs(selection.endY - selection.startY),
   } : null;
 
-  // 检查点是否在标注内
-  const hitTestAnnotation = (x: number, y: number): Annotation | null => {
-    // 从后向前遍历（后绘制的在上面）
-    for (let i = annotations.length - 1; i >= 0; i--) {
-      const a = annotations[i];
-      const padding = 5;
-      if (a.width !== undefined && a.height !== undefined) {
-        // 有宽高的标注（矩形、马赛克、模糊）
-        const minX = Math.min(a.x, a.x + a.width) - padding;
-        const maxX = Math.max(a.x, a.x + a.width) + padding;
-        const minY = Math.min(a.y, a.y + a.height) - padding;
-        const maxY = Math.max(a.y, a.y + a.height) + padding;
-        if (x >= minX && x <= maxX && y >= minY && y <= maxY) return a;
-      } else if (a.endX !== undefined && a.endY !== undefined) {
-        // 线段类（直线、箭头）- 简单的包围盒检测
-        const minX = Math.min(a.x, a.endX) - padding;
-        const maxX = Math.max(a.x, a.endX) + padding;
-        const minY = Math.min(a.y, a.endY) - padding;
-        const maxY = Math.max(a.y, a.endY) + padding;
-        if (x >= minX && x <= maxX && y >= minY && y <= maxY) return a;
-      } else if (a.type === 'text') {
-        // 文字 - 简单的包围盒检测
-        const textWidth = (a.text?.length || 5) * 10;
-        const textHeight = 20;
-        if (x >= a.x - padding && x <= a.x + textWidth + padding &&
-            y >= a.y - textHeight - padding && y <= a.y + padding) return a;
-      } else if (a.points && a.points.length > 0) {
-        // 路径类（画笔、荧光笔）- 检查是否在路径附近
-        for (const p of a.points) {
-          if (Math.abs(x - p.x) < padding + 5 && Math.abs(y - p.y) < padding + 5) return a;
-        }
-      }
-    }
-    return null;
-  };
-
-  // 获取调整手柄位置
-  const getResizeHandles = (annotation: Annotation) => {
-    if (annotation.width === undefined || annotation.height === undefined) return [];
-    const x = annotation.x;
-    const y = annotation.y;
-    const w = annotation.width;
-    const h = annotation.height;
-    return [
-      { id: 'nw', x: x, y: y },
-      { id: 'ne', x: x + w, y: y },
-      { id: 'sw', x: x, y: y + h },
-      { id: 'se', x: x + w, y: y + h },
-    ];
-  };
-
   // 鼠标按下
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    // 取色模式：复制颜色
+    if (picking) {
+      void copyPickedColor(e.clientX, e.clientY);
+      return;
+    }
+
     // 如果有活动工具，开始绘图
     if (activeTool) {
       setIsDrawing(true);
@@ -369,7 +281,7 @@ export default function SnipasteOverlay() {
           }
         }
         // 检查是否点击了选中的标注内部（用于移动）
-        if (hitTestAnnotation(e.clientX, e.clientY)?.id === selectedId) {
+        if (hitTestAnnotation(annotations, e.clientX, e.clientY)?.id === selectedId) {
           setIsMoving(true);
           setMoveStart({ x: e.clientX, y: e.clientY });
           return;
@@ -378,7 +290,7 @@ export default function SnipasteOverlay() {
     }
 
     // 检查是否点击了已有标注
-    const hit = hitTestAnnotation(e.clientX, e.clientY);
+    const hit = hitTestAnnotation(annotations, e.clientX, e.clientY);
     if (hit) {
       setSelectedId(hit.id);
       return;
@@ -399,6 +311,17 @@ export default function SnipasteOverlay() {
 
   // 鼠标移动
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
+    // 取色模式：绘制放大镜
+    if (picking) {
+      drawLoupeAt(e.clientX, e.clientY);
+      return;
+    }
+
+    // 窗口自动检测：空闲状态下高亮光标下窗口
+    if (!isDragging && !isDrawing && !isMoving && !isResizing && !activeTool && !selection) {
+      void detectWindowAt(e.clientX, e.clientY);
+    }
+
     // 移动模式
     if (isMoving && selectedId && moveStart) {
       const dx = e.clientX - moveStart.x;
@@ -481,7 +404,7 @@ export default function SnipasteOverlay() {
       endX: e.clientX,
       endY: e.clientY
     } : null);
-  }, [isResizing, selectedId, resizeStart, resizeHandle, annotations, isDrawing, drawStart, activeTool, isDragging]);
+  }, [isResizing, selectedId, resizeStart, resizeHandle, annotations, isDrawing, drawStart, activeTool, isDragging, picking, drawLoupeAt, detectWindowAt, selection]);
 
   // 鼠标抬起
   const handleMouseUp = useCallback(() => {
@@ -561,15 +484,29 @@ export default function SnipasteOverlay() {
       if (isLongScreenshot) {
         setShowContinueBtn(true);
       }
+    } else if (detectRect) {
+      // 近似单击：采纳检测到的窗口区域（Snipaste 同款行为）
+      setSelection({
+        startX: detectRect.left,
+        startY: detectRect.top,
+        endX: detectRect.left + detectRect.width,
+        endY: detectRect.top + detectRect.height,
+      });
+      setShowToolbar(true);
+      setDetectRect(null);
     } else {
       setSelection(null);
     }
-  }, [isMoving, isResizing, isDrawing, drawStart, drawEnd, activeTool, currentPoints, annotationColor, strokeWidth, opacity, isDragging, selection, isLongScreenshot]);
+  }, [isMoving, isResizing, isDrawing, drawStart, drawEnd, activeTool, currentPoints, annotationColor, strokeWidth, opacity, isDragging, selection, isLongScreenshot, detectRect]);
 
-  // ESC 取消
+  // ESC 取消 / 快捷键
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
+        if (picking) {
+          setPicking(false);
+          return;
+        }
         if (activeTool) {
           setActiveTool(null);
           setIsDrawing(false);
@@ -579,6 +516,16 @@ export default function SnipasteOverlay() {
         } else {
           handleCancel();
         }
+      } else if (e.key.toLowerCase() === 'c' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        // 取色器开关
+        if (!activeTool && !selection) {
+          setPicking((v) => !v);
+          setDetectRect(null);
+        }
+      } else if (e.key === ',') {
+        stepHistory(-1);
+      } else if (e.key === '.') {
+        stepHistory(1);
       } else if (e.key === 'z' && (e.ctrlKey || e.metaKey) && !e.shiftKey) {
         undoAnnotation();
       } else if ((e.key === 'z' && (e.ctrlKey || e.metaKey) && e.shiftKey) || (e.key === 'y' && (e.ctrlKey || e.metaKey))) {
@@ -592,12 +539,12 @@ export default function SnipasteOverlay() {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [activeTool, undoAnnotation, redoAnnotation, selectedId]);
+  }, [activeTool, undoAnnotation, redoAnnotation, selectedId, picking, stepHistory]);
 
   // 双击编辑文字
   const handleDoubleClick = useCallback((e: React.MouseEvent) => {
     if (activeTool) return;
-    const hit = hitTestAnnotation(e.clientX, e.clientY);
+    const hit = hitTestAnnotation(annotations, e.clientX, e.clientY);
     if (hit && hit.type === 'text') {
       const newText = prompt('编辑文字:', hit.text || '');
       if (newText !== null) {
@@ -606,33 +553,38 @@ export default function SnipasteOverlay() {
     }
   }, [activeTool, annotations]);
 
-  // 生成带标注的图片
+  // 生成带标注的图片（物理像素分辨率：CSS 坐标 × devicePixelRatio 映射到背景图）
   const generateAnnotatedImage = useCallback(async (selection: Selection): Promise<string> => {
     const x = Math.min(selection.startX, selection.endX);
     const y = Math.min(selection.startY, selection.endY);
     const width = Math.abs(selection.endX - selection.startX);
     const height = Math.abs(selection.endY - selection.startY);
+    const dpr = window.devicePixelRatio || 1;
+    const px = Math.round(x * dpr);
+    const py = Math.round(y * dpr);
+    const pw = Math.max(1, Math.round(width * dpr));
+    const ph = Math.max(1, Math.round(height * dpr));
 
     // 创建临时画布
     const tempCanvas = document.createElement('canvas');
-    tempCanvas.width = width;
-    tempCanvas.height = height;
+    tempCanvas.width = pw;
+    tempCanvas.height = ph;
     const ctx = tempCanvas.getContext('2d');
     if (!ctx) throw new Error('Failed to create canvas');
 
-    // 绘制背景图片
+    // 绘制背景图片：源图为物理像素，平移到裁剪原点后 1:1 贴上
     const img = new Image();
     img.src = imageSrc;
     await new Promise((resolve) => { img.onload = resolve; });
-    ctx.drawImage(img, x, y, width, height, 0, 0, width, height);
+    ctx.setTransform(1, 0, 0, 1, -px, -py);
+    ctx.drawImage(img, 0, 0);
 
-    // 绘制标注（偏移到选区内）
-    ctx.save();
-    ctx.translate(-x, -y);
+    // 绘制标注（CSS 坐标，经 dpr 变换对齐物理像素）
+    ctx.setTransform(dpr, 0, 0, dpr, -px, -py);
     for (const annotation of annotations) {
       drawAnnotation(ctx, annotation);
     }
-    ctx.restore();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
 
     // 转换为 base64
     return tempCanvas.toDataURL('image/png').split(',')[1];
@@ -705,25 +657,16 @@ export default function SnipasteOverlay() {
     const height = Math.abs(selection.endY - selection.startY);
 
     try {
-      const cropPath = await invoke<string>('snipaste_crop_region', { x, y, width, height });
-      const { convertFileSrc } = await import('@tauri-apps/api/core');
-      const imageData = convertFileSrc(cropPath);
-
-      const { emit } = await import('@tauri-apps/api/event');
-      await emit('snipaste-create-pin', {
-        imageData,
-        x: selection.startX,
-        y: selection.startY,
-        width,
-        height
-      });
+      // 带标注导出的 base64，Rust 侧创建 pin 窗口并保存数据
+      const imageData = await generateAnnotatedImage(selection);
+      await invoke('snipaste_create_pin', { imageData, x, y, width, height });
 
       setShowToolbar(false);
       setSelection(null);
     } catch (err) {
       console.error('Pin failed:', err);
     }
-  }, [selection]);
+  }, [selection, generateAnnotatedImage]);
 
   const handleOCR = useCallback(async () => {
     if (!selection) return;
@@ -731,9 +674,16 @@ export default function SnipasteOverlay() {
     const y = Math.min(selection.startY, selection.endY);
     const width = Math.abs(selection.endX - selection.startX);
     const height = Math.abs(selection.endY - selection.startY);
+    // CSS 坐标 → 物理像素（背景图为物理分辨率）
+    const dpr = window.devicePixelRatio || 1;
 
     try {
-      const cropPath = await invoke<string>('snipaste_crop_region', { x, y, width, height });
+      const cropPath = await invoke<string>('snipaste_crop_region', {
+        x: Math.round(x * dpr),
+        y: Math.round(y * dpr),
+        width: Math.max(1, Math.round(width * dpr)),
+        height: Math.max(1, Math.round(height * dpr)),
+      });
       const { emit } = await import('@tauri-apps/api/event');
       await emit('snipaste-ocr', { path: cropPath });
       await getCurrentWindow().close();
@@ -744,9 +694,10 @@ export default function SnipasteOverlay() {
 
   const handleContinueLongScreenshot = useCallback(async () => {
     try {
-      const newPath = await invoke<string>('snipaste_capture_next');
-      const { convertFileSrc } = await import('@tauri-apps/api/core');
-      setImageSrc(convertFileSrc(newPath));
+      await invoke<string>('snipaste_capture_next');
+      // capture_next 已更新 last_screenshot，直接重取 base64
+      const base64 = await invoke<string>('snipaste_get_screenshot_base64');
+      setImageSrc(`data:image/png;base64,${base64}`);
       setSelection(null);
       setShowToolbar(false);
       setShowContinueBtn(false);
@@ -780,16 +731,18 @@ export default function SnipasteOverlay() {
   return (
     <div
       ref={containerRef}
-      style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', background: '#000', cursor: activeTool ? 'crosshair' : isMoving ? 'grabbing' : selectedId ? 'move' : 'crosshair' }}
+      style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', background: '#000', cursor: picking ? 'none' : activeTool ? 'crosshair' : isMoving ? 'grabbing' : selectedId ? 'move' : 'crosshair' }}
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
+      onDoubleClick={handleDoubleClick}
     >
-      {/* 截图背景 */}
+      {/* 截图背景（物理像素图 1:1 铺满显示器逻辑尺寸） */}
       {imageSrc && (
         <img
+          ref={imgRef}
           src={imageSrc}
-          style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', objectFit: 'contain' }}
+          style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', objectFit: 'fill' }}
           draggable={false}
           onError={(e) => console.error('Image load error:', e)}
         />
@@ -798,9 +751,26 @@ export default function SnipasteOverlay() {
       {/* 标注画布 */}
       <canvas
         ref={canvasRef}
-        style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%' }}
-        onDoubleClick={handleDoubleClick}
+        style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none' }}
       />
+
+      {/* 取色放大镜层 */}
+      {picking && (
+        <canvas
+          ref={loupeRef}
+          style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none' }}
+        />
+      )}
+
+      {/* 窗口自动检测高亮 */}
+      {detectRect && !selection && !picking && detectRect.width > 0 && (
+        <>
+          <div style={{ position: 'absolute', left: detectRect.left, top: detectRect.top, width: detectRect.width, height: detectRect.height, border: '2px dashed #00C8FF', background: 'rgba(0,200,255,0.08)', pointerEvents: 'none' }} />
+          <div style={{ position: 'absolute', left: detectRect.left, top: detectRect.top - 22, padding: '2px 8px', background: 'rgba(0,0,0,0.75)', color: '#00C8FF', fontSize: 11, borderRadius: 3, pointerEvents: 'none', whiteSpace: 'nowrap' }}>
+            点击选中窗口 {Math.round(detectRect.width)} × {Math.round(detectRect.height)}
+          </div>
+        </>
+      )}
 
       {/* 选区外的暗色遮罩 */}
       {rect && (
@@ -823,9 +793,23 @@ export default function SnipasteOverlay() {
       )}
 
       {/* 提示文字 */}
-      {!isDragging && !showToolbar && !selection && !activeTool && !isDrawing && (
+      {!isDragging && !showToolbar && !selection && !activeTool && !isDrawing && !picking && (
         <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', padding: '8px 16px', background: 'rgba(0,0,0,0.6)', color: 'white', fontSize: 13, borderRadius: 6, pointerEvents: 'none' }}>
-          {isLongScreenshot ? '拖拽选择区域 · ESC 取消' : '拖拽选择要识别的区域 · ESC 取消'}
+          {isLongScreenshot ? '拖拽选择区域 · C 取色 · ESC 取消' : '拖拽选择要识别的区域 · 单击选窗口 · C 取色 · ,/. 历史 · ESC 取消'}
+        </div>
+      )}
+
+      {/* 取色模式提示 */}
+      {picking && (
+        <div style={{ position: 'absolute', top: 20, left: '50%', transform: 'translateX(-50%)', padding: '6px 12px', background: 'rgba(0,0,0,0.75)', color: 'white', fontSize: 12, borderRadius: 4, pointerEvents: 'none' }}>
+          单击复制颜色 · C / ESC 退出
+        </div>
+      )}
+
+      {/* 轻提示 */}
+      {toast && (
+        <div style={{ position: 'absolute', bottom: 24, left: '50%', transform: 'translateX(-50%)', padding: '6px 14px', background: 'rgba(0,0,0,0.75)', color: 'white', fontSize: 13, borderRadius: 5, pointerEvents: 'none', whiteSpace: 'nowrap' }}>
+          {toast}
         </div>
       )}
 

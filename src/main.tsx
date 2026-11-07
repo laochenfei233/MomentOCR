@@ -17,24 +17,8 @@ async function bootstrap() {
   } else if (windowLabel === "snipaste-overlay") {
     AppComponent = SnipasteOverlay;
   } else if (windowLabel.startsWith("pin-")) {
-    // 贴图窗口需要从 URL 参数获取图片数据
-    const params = new URLSearchParams(window.location.search);
-    const imageData = params.get('image') || '';
-    const x = parseInt(params.get('x') || '100');
-    const y = parseInt(params.get('y') || '100');
-    const width = parseInt(params.get('width') || '300');
-    const height = parseInt(params.get('height') || '300');
-
-    const PinAppComponent = () => (
-      <PinWindow
-        imageData={imageData}
-        initialX={x}
-        initialY={y}
-        initialWidth={width}
-        initialHeight={height}
-      />
-    );
-    AppComponent = PinAppComponent;
+    // 贴图数据由 PinWindow 按 label 向 Rust 侧取回
+    AppComponent = PinWindow;
   }
 
   ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(

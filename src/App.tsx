@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import ScreenshotTool from './components/ScreenshotTool';
+import PinPanel from './components/PinPanel';
 import FileUploader from './components/FileUploader';
 import OcrResult from './components/OcrResult';
 import Settings from './components/Settings';
@@ -247,6 +248,7 @@ function App() {
               <ScreenshotTool />
             </div>
           )}
+          {tab === 'snipaste' && <PinPanel />}
           <OcrResult onTextChange={setOcrText} />
         </div>
       </main>

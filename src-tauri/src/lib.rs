@@ -155,6 +155,20 @@ fn register_shortcuts(app: tauri::AppHandle, shortcuts: HashMap<String, String>)
         })?;
     }
 
+    // Alt+P：为所有贴图关闭鼠标穿透（穿透后窗口自身收不到输入，必须有全局恢复入口）
+    let alt_p: Shortcut = "Alt+P".parse()
+        .map_err(|e| format!("Failed to parse Alt+P: {}", e))?;
+    let handle = app_handle.clone();
+    app.global_shortcut().on_shortcut(alt_p, move |_app, _shortcut, event| {
+        if event.state == ShortcutState::Pressed {
+            for (_label, win) in handle.webview_windows() {
+                if _label.starts_with("pin-") {
+                    let _ = win.set_ignore_cursor_events(false);
+                }
+            }
+        }
+    }).map_err(|e| format!("Failed to register Alt+P: {}", e))?;
+
     Ok(())
 }
 
@@ -177,26 +191,27 @@ fn clear_temp_cache() -> Result<String, String> {
 
 #[tauri::command]
 async fn start_snipaste(app: tauri::AppHandle) -> Result<(), String> {
-    let app_handle = app.clone();
-
-    // 全屏截图
-    let data = snipaste::SnipasteManager::capture_full_screen()
+    // 全屏截图（光标所在显示器，物理像素）
+    let cursor = app.cursor_position().map_err(|e| e.to_string())?;
+    let cap = snipaste::capture_monitor_containing(cursor.x, cursor.y)
         .map_err(|e: anyhow::Error| e.to_string())?;
+    snipaste::set_session_monitor(cap.x, cap.y, cap.width, cap.height, cap.scale);
 
     // 保存到临时文件
     let path = snipaste::SnipasteManager::generate_temp_path("snipaste");
-    snipaste::SnipasteManager::save_to_file(&data, &path)
+    snipaste::SnipasteManager::save_to_file(&cap.png, &path)
         .map_err(|e: anyhow::Error| e.to_string())?;
 
     let path_str = path.to_string_lossy().to_string();
     snipaste::SnipasteManager::set_last_screenshot(path_str.clone());
+    snipaste::push_history(path_str.clone());
 
     // 隐藏主窗口
     if let Some(main_window) = app.get_webview_window("main") {
         main_window.hide().map_err(|e: tauri::Error| e.to_string())?;
     }
 
-    // 创建覆盖窗口
+    // 创建覆盖窗口：精确覆盖捕获的显示器（逻辑坐标 = 物理/scale），避免 fullscreen 落错屏
     use tauri::{WebviewUrl, WebviewWindowBuilder};
     let _overlay = WebviewWindowBuilder::new(
         &app,
@@ -204,9 +219,13 @@ async fn start_snipaste(app: tauri::AppHandle) -> Result<(), String> {
         WebviewUrl::App("/snipaste-overlay".into())
     )
     .title("截图")
-    .fullscreen(true)
-    .always_on_top(true)
+    .position(cap.x as f64 / cap.scale, cap.y as f64 / cap.scale)
+    .inner_size(cap.width as f64 / cap.scale, cap.height as f64 / cap.scale)
     .decorations(false)
+    .resizable(false)
+    .maximizable(false)
+    .always_on_top(true)
+    .shadow(false)
     .skip_taskbar(true)
     .build()
     .map_err(|e: tauri::Error| e.to_string())?;
@@ -216,30 +235,31 @@ async fn start_snipaste(app: tauri::AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 async fn start_long_screenshot(app: tauri::AppHandle) -> Result<(), String> {
-    let app_handle = app.clone();
-
     // 清空之前的长截图路径
     snipaste::SnipasteManager::clear_long_screenshot_paths();
 
-    // 全屏截图
-    let data = snipaste::SnipasteManager::capture_full_screen()
+    // 全屏截图（光标所在显示器）
+    let cursor = app.cursor_position().map_err(|e| e.to_string())?;
+    let cap = snipaste::capture_monitor_containing(cursor.x, cursor.y)
         .map_err(|e: anyhow::Error| e.to_string())?;
+    snipaste::set_session_monitor(cap.x, cap.y, cap.width, cap.height, cap.scale);
 
     // 保存到临时文件
     let path = snipaste::SnipasteManager::generate_temp_path("longshot");
-    snipaste::SnipasteManager::save_to_file(&data, &path)
+    snipaste::SnipasteManager::save_to_file(&cap.png, &path)
         .map_err(|e: anyhow::Error| e.to_string())?;
 
     let path_str = path.to_string_lossy().to_string();
     snipaste::SnipasteManager::add_long_screenshot_path(path_str.clone());
     snipaste::SnipasteManager::set_last_screenshot(path_str.clone());
+    snipaste::push_history(path_str.clone());
 
     // 隐藏主窗口
     if let Some(main_window) = app.get_webview_window("main") {
         main_window.hide().map_err(|e: tauri::Error| e.to_string())?;
     }
 
-    // 创建覆盖窗口（长截图模式）
+    // 创建覆盖窗口（长截图模式，与 start_snipaste 同款几何）
     use tauri::{WebviewUrl, WebviewWindowBuilder};
     let _overlay = WebviewWindowBuilder::new(
         &app,
@@ -247,9 +267,13 @@ async fn start_long_screenshot(app: tauri::AppHandle) -> Result<(), String> {
         WebviewUrl::App("/snipaste-overlay?mode=long".into())
     )
     .title("长截图")
-    .fullscreen(true)
-    .always_on_top(true)
+    .position(cap.x as f64 / cap.scale, cap.y as f64 / cap.scale)
+    .inner_size(cap.width as f64 / cap.scale, cap.height as f64 / cap.scale)
     .decorations(false)
+    .resizable(false)
+    .maximizable(false)
+    .always_on_top(true)
+    .shadow(false)
     .skip_taskbar(true)
     .build()
     .map_err(|e: tauri::Error| e.to_string())?;
@@ -293,20 +317,33 @@ fn snipaste_stitch_screenshots() -> Result<String, String> {
 }
 
 #[tauri::command]
-fn snipaste_capture_next() -> Result<String, String> {
-    // 全屏截图
-    let data = snipaste::SnipasteManager::capture_full_screen()
-        .map_err(|e| e.to_string())?;
-    
-    // 保存到临时文件
-    let path = snipaste::SnipasteManager::generate_temp_path("longshot");
-    snipaste::SnipasteManager::save_to_file(&data, &path)
-        .map_err(|e| e.to_string())?;
-    
-    let path_str = path.to_string_lossy().to_string();
-    snipaste::SnipasteManager::add_long_screenshot_path(path_str.clone());
-    
-    Ok(path_str)
+fn snipaste_capture_next(app: tauri::AppHandle) -> Result<String, String> {
+    // 隐藏覆盖窗口，避免把 overlay 自己拍进去
+    let overlay = app.get_webview_window("snipaste-overlay");
+    if let Some(w) = &overlay {
+        w.hide().map_err(|e| e.to_string())?;
+    }
+    std::thread::sleep(std::time::Duration::from_millis(150));
+
+    // 捕获会话显示器（长截图锁定同一块屏）
+    let result = (|| -> Result<String, String> {
+        let cap = snipaste::capture_session_monitor()
+            .map_err(|e: anyhow::Error| e.to_string())?;
+        let path = snipaste::SnipasteManager::generate_temp_path("longshot");
+        snipaste::SnipasteManager::save_to_file(&cap.png, &path)
+            .map_err(|e: anyhow::Error| e.to_string())?;
+        let path_str = path.to_string_lossy().to_string();
+        snipaste::SnipasteManager::add_long_screenshot_path(path_str.clone());
+        snipaste::SnipasteManager::set_last_screenshot(path_str.clone());
+        Ok(path_str)
+    })();
+
+    // 恢复覆盖窗口
+    if let Some(w) = &overlay {
+        let _ = w.show();
+        let _ = w.set_focus();
+    }
+    result
 }
 
 #[tauri::command]
@@ -326,9 +363,16 @@ fn snipaste_save_screenshot(data: Vec<u8>, path: Option<String>) -> Result<Strin
 
 #[tauri::command]
 fn snipaste_copy_to_clipboard(data: Vec<u8>) -> Result<(), String> {
-    // 保存到临时文件（完整的剪贴板实现需要将 PNG 转换为 DIB 格式）
-    let temp_path = snipaste::SnipasteManager::generate_temp_path("clipboard");
-    snipaste::SnipasteManager::save_to_file(&data, &temp_path)
+    let img = screenshots::image::load_from_memory(&data).map_err(|e| e.to_string())?;
+    let rgba = img.to_rgba8();
+    let (w, h) = rgba.dimensions();
+    let mut clipboard = arboard::Clipboard::new().map_err(|e| e.to_string())?;
+    clipboard
+        .set_image(arboard::ImageData {
+            width: w as usize,
+            height: h as usize,
+            bytes: std::borrow::Cow::Owned(rgba.into_raw()),
+        })
         .map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -342,19 +386,119 @@ fn snipaste_get_screenshot_base64() -> Result<String, String> {
 }
 
 #[tauri::command]
-fn snipaste_create_pin(image_data: String, _x: f64, _y: f64) -> Result<(), String> {
-    // 保存图片到临时文件
+fn snipaste_create_pin(
+    app: tauri::AppHandle,
+    image_data: String,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+) -> Result<(), String> {
     use base64::Engine;
-    let data = base64::engine::general_purpose::STANDARD.decode(&image_data)
+    let data = base64::engine::general_purpose::STANDARD
+        .decode(&image_data)
         .map_err(|e| e.to_string())?;
 
     let path = snipaste::SnipasteManager::generate_temp_path("pin");
     snipaste::SnipasteManager::save_to_file(&data, &path)
         .map_err(|e: anyhow::Error| e.to_string())?;
 
-    // 发送事件给前端创建贴图窗口
-    // 这里需要通过前端来创建贴图窗口
+    // 用会话显示器把 overlay 的 CSS 坐标换算成全局物理坐标（贴图 1:1 显示物理像素）
+    let (mx, my, _, _, scale) = snipaste::get_session_monitor()
+        .ok_or("No session monitor")?;
+    let px = mx as f64 + (x * scale).round();
+    let py = my as f64 + (y * scale).round();
+    let pw = ((width * scale).round().max(40.0)) as u32;
+    let ph = ((height * scale).round().max(40.0)) as u32;
+
+    let id = snipaste::next_pin_id();
+    let label = format!("pin-{}", id);
+    snipaste::insert_pin(
+        &label,
+        snipaste::PinData {
+            image_data,
+            x: px,
+            y: py,
+            width: pw as f64,
+            height: ph as f64,
+            visible: true,
+        },
+    );
+
+    // 贴图窗口：无装饰、置顶、不进任务栏；先隐藏创建，物理坐标落位后再显示
+    use tauri::{PhysicalPosition, PhysicalSize, Position, Size, WebviewUrl, WebviewWindowBuilder};
+    let win = WebviewWindowBuilder::new(&app, &label, WebviewUrl::App("/".into()))
+        .title("贴图")
+        .visible(false)
+        .decorations(false)
+        .resizable(false)
+        .always_on_top(true)
+        .shadow(false)
+        .skip_taskbar(true)
+        .build()
+        .map_err(|e| e.to_string())?;
+    win.set_position(Position::Physical(PhysicalPosition::new(px as i32, py as i32)))
+        .map_err(|e| e.to_string())?;
+    win.set_size(Size::Physical(PhysicalSize::new(pw, ph)))
+        .map_err(|e| e.to_string())?;
+    win.show().map_err(|e| e.to_string())?;
+    let _ = win.set_focus();
+
     Ok(())
+}
+
+#[tauri::command]
+fn snipaste_get_pin_image(label: String) -> Result<snipaste::PinData, String> {
+    snipaste::get_pin(&label).ok_or_else(|| "Pin not found".to_string())
+}
+
+#[tauri::command]
+fn snipaste_list_pins() -> Vec<(String, snipaste::PinData)> {
+    snipaste::list_pins()
+}
+
+#[tauri::command]
+fn snipaste_set_pin_visible(app: tauri::AppHandle, label: String, visible: bool) -> Result<(), String> {
+    snipaste::set_pin_visible(&label, visible).ok_or_else(|| "Pin not found".to_string())?;
+    if let Some(win) = app.get_webview_window(&label) {
+        if visible {
+            win.show().map_err(|e| e.to_string())?;
+        } else {
+            win.hide().map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn snipaste_close_pin(app: tauri::AppHandle, label: String) -> Result<(), String> {
+    snipaste::remove_pin(&label).ok_or_else(|| "Pin not found".to_string())?;
+    if let Some(win) = app.get_webview_window(&label) {
+        win.close().map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn snipaste_toggle_mouse_through(app: tauri::AppHandle, label: String, enable: bool) -> Result<(), String> {
+    let win = app.get_webview_window(&label).ok_or("Pin window not found")?;
+    win.set_ignore_cursor_events(enable).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn snipaste_detect_window(x: f64, y: f64) -> Result<Option<snipaste::DetectRect>, String> {
+    snipaste::detect_window_at(x as i32, y as i32)
+        .map_err(|e: anyhow::Error| e.to_string())
+}
+
+#[tauri::command]
+fn snipaste_history_step(delta: i32) -> Result<String, String> {
+    let path = snipaste::history_step(delta as isize)
+        .ok_or("No screenshot history")?;
+    snipaste::SnipasteManager::set_last_screenshot(path.clone());
+    snipaste::SnipasteManager::image_to_base64(&path)
+        .map_err(|e: anyhow::Error| e.to_string())
 }
 
 #[tauri::command]
@@ -389,8 +533,19 @@ pub fn run() {
             start_snipaste, start_long_screenshot, snipaste_crop_region,
             snipaste_stitch_screenshots, snipaste_capture_next, snipaste_save_screenshot,
             snipaste_copy_to_clipboard, snipaste_get_screenshot_base64,
-            snipaste_create_pin, snipaste_finish
+            snipaste_create_pin, snipaste_finish, snipaste_get_pin_image,
+            snipaste_list_pins, snipaste_set_pin_visible, snipaste_close_pin,
+            snipaste_toggle_mouse_through, snipaste_detect_window, snipaste_history_step
         ])
+        .on_window_event(|window, event| {
+            // 贴图窗口被用户关闭时同步清理状态表
+            if let tauri::WindowEvent::Destroyed = event {
+                let label = window.label();
+                if label.starts_with("pin-") {
+                    snipaste::remove_pin(label);
+                }
+            }
+        })
         .setup(|app| {
             use tauri::Manager;
             for p in &["icons/icon.png", "src-tauri/icons/icon.png", "../src-tauri/icons/icon.png"] {

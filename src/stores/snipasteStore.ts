@@ -33,6 +33,16 @@ export interface PinState {
   scale: number;
 }
 
+/// 与 Rust snipaste::PinData 对应（贴图窗口启动时按 label 取回）
+export interface PinData {
+  image_data: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  visible: boolean;
+}
+
 interface SnipasteState {
   // 截图状态
   isCapturing: boolean;
