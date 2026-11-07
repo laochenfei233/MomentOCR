@@ -260,57 +260,6 @@ pub fn detect_window_at(_cx: i32, _cy: i32) -> anyhow::Result<Option<DetectRect>
 pub struct SnipasteManager;
 
 impl SnipasteManager {
-    /// 全屏截图 - 高质量PNG
-    pub fn capture_full_screen() -> Result<Vec<u8>> {
-        let screens = Screen::all()?;
-        if screens.is_empty() {
-            return Err(anyhow::anyhow!("No screen found"));
-        }
-        
-        if screens.len() == 1 {
-            let img = screens[0].capture()?;
-            let mut buf = Cursor::new(Vec::new());
-            img.write_to(&mut buf, screenshots::image::ImageOutputFormat::Png)?;
-            return Ok(buf.into_inner());
-        }
-        
-        // 多屏幕拼接
-        let mut images: Vec<(Vec<u8>, u32, u32)> = Vec::new();
-        let mut total_width: u32 = 0;
-        let mut max_height: u32 = 0;
-        
-        for screen in &screens {
-            let img = screen.capture()?;
-            let info = &screen.display_info;
-            total_width += info.width;
-            if info.height > max_height {
-                max_height = info.height;
-            }
-            let mut buf = Cursor::new(Vec::new());
-            img.write_to(&mut buf, screenshots::image::ImageOutputFormat::Png)?;
-            images.push((buf.into_inner(), info.width, info.height));
-        }
-        
-        use screenshots::image::io::Reader;
-        let mut canvas = screenshots::image::ImageBuffer::new(total_width, max_height);
-        let mut x_offset: u32 = 0;
-        
-        for (img_data, w, h) in &images {
-            let img = Reader::new(Cursor::new(img_data)).with_guessed_format()?.decode()?;
-            let dynamic = img.to_rgba8();
-            for y in 0..*h {
-                for x in 0..*w {
-                    canvas.put_pixel(x + x_offset, y, *dynamic.get_pixel(x, y));
-                }
-            }
-            x_offset += w;
-        }
-        
-        let mut buf = Cursor::new(Vec::new());
-        canvas.write_to(&mut buf, screenshots::image::ImageOutputFormat::Png)?;
-        Ok(buf.into_inner())
-    }
-
     /// 从全屏截图中裁剪区域
     pub fn crop_region(data: &[u8], x: u32, y: u32, width: u32, height: u32) -> Result<Vec<u8>> {
         use screenshots::image::io::Reader;
@@ -473,48 +422,6 @@ impl SnipasteManager {
         0 // 没有找到重叠
     }
 
-    /// 检测两张图片的重叠区域
-    pub fn find_overlap(old_img_data: &[u8], new_img_data: &[u8], tolerance: u8) -> Result<u32> {
-        use screenshots::image::io::Reader;
-        
-        let old_img = Reader::new(Cursor::new(old_img_data)).with_guessed_format()?.decode()?.to_rgba8();
-        let new_img = Reader::new(Cursor::new(new_img_data)).with_guessed_format()?.decode()?.to_rgba8();
-        
-        let old_height = old_img.height();
-        let new_height = new_img.height();
-        let width = std::cmp::min(old_img.width(), new_img.width());
-        
-        // 从新图顶部向下扫描，找到与旧图底部匹配的行
-        for offset in 0..std::cmp::min(old_height, new_height) {
-            let old_y = old_height - 1 - offset;
-            let new_y = offset;
-            
-            let mut match_count = 0;
-            let mut total_pixels = 0;
-            
-            for x in 0..width {
-                let old_pixel = old_img.get_pixel(x, old_y);
-                let new_pixel = new_img.get_pixel(x, new_y);
-                
-                let r_diff = (old_pixel[0] as i32 - new_pixel[0] as i32).unsigned_abs() as u8;
-                let g_diff = (old_pixel[1] as i32 - new_pixel[1] as i32).unsigned_abs() as u8;
-                let b_diff = (old_pixel[2] as i32 - new_pixel[2] as i32).unsigned_abs() as u8;
-                let a_diff = (old_pixel[3] as i32 - new_pixel[3] as i32).unsigned_abs() as u8;
-                
-                if r_diff <= tolerance && g_diff <= tolerance && b_diff <= tolerance && a_diff <= tolerance {
-                    match_count += 1;
-                }
-                total_pixels += 1;
-            }
-            
-            let match_ratio = match_count as f64 / total_pixels as f64;
-            if match_ratio >= 0.95 {
-                return Ok(offset as u32);
-            }
-        }
-        
-        Ok(0) // 没有找到重叠
-    }
 }
 
 impl Default for SnipasteManager {

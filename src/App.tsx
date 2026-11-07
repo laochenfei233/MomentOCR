@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import ScreenshotTool from './components/ScreenshotTool';
 import PinPanel from './components/PinPanel';
 import FileUploader from './components/FileUploader';
@@ -8,6 +8,9 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { useOcrStore } from './stores/ocrStore';
 import { useSettingsStore } from './stores/settingsStore';
+import { builtinPlugins, findPlugin } from './plugins';
+import { GOOGLE_TARGET_CODES } from './utils/languages';
+import { validateShortcut, type ShortcutRegistration } from './utils/shortcut';
 
 type Tab = 'screenshot' | 'file' | 'settings' | 'snipaste';
 
@@ -17,8 +20,37 @@ function App() {
   const [showMenu, setShowMenu] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [ocrText, setOcrText] = useState('');
-  const { history, restoreFromHistory, clearHistory } = useOcrStore();
-  const { shortcuts, quickAction, config, activeTranslationPlugin, pluginSettings } = useSettingsStore();
+  const [translation, setTranslation] = useState('');
+  const [translateFeedback, setTranslateFeedback] = useState<{ ok: boolean; msg: string } | null>(null);
+  const { history, restoreFromHistory, clearHistory, result: storeResult } = useOcrStore();
+  const { shortcuts, quickAction, config, activeOcrPlugin, activeTranslationPlugin, pluginSettings, language, screenshot, setActiveOcrPlugin, setActiveTranslationPlugin, setPluginSetting } = useSettingsStore();
+
+  const showTranslateFeedback = (ok: boolean, msg: string) => {
+    setTranslateFeedback({ ok, msg });
+    setTimeout(() => setTranslateFeedback(null), 4000);
+  };
+
+  // 新识别结果（或从历史恢复）到达时，清空上一次的译文
+  useEffect(() => { setTranslation(''); }, [storeResult]);
+
+  // 迁移：已删除的插件（如 ai-translate）不再存在于列表时回退到默认项
+  useEffect(() => {
+    const ids = new Set(builtinPlugins.map((p) => p.id));
+    if (!ids.has(activeOcrPlugin)) setActiveOcrPlugin('rapid-ocr');
+    if (!ids.has(activeTranslationPlugin)) setActiveTranslationPlugin('google-translate');
+  }, [activeOcrPlugin, activeTranslationPlugin, setActiveOcrPlugin, setActiveTranslationPlugin]);
+
+  // 迁移：阿里百炼接入域名切换 —— 本地已保存的老 dashscope 地址 / 未替换的 WorkspaceId 占位符
+  // 统一换成实测可直接访问的地域接入域名（无需业务空间 ID）
+  useEffect(() => {
+    const NEW_BAILIAN_BASE = 'https://trial.cn-beijing.maas.aliyuncs.com/compatible-mode/v1';
+    for (const pid of ['qwen-vision', 'qwen-translate']) {
+      const baseUrl = (pluginSettings[pid]?.baseUrl as string) || '';
+      if (baseUrl.includes('dashscope.aliyuncs.com') || baseUrl.includes('{WorkspaceId}')) {
+        setPluginSetting(pid, 'baseUrl', NEW_BAILIAN_BASE);
+      }
+    }
+  }, [pluginSettings, setPluginSetting]);
 
   useEffect(() => {
     const handleClick = () => setShowMenu(false);
@@ -28,7 +60,9 @@ function App() {
     }
   }, [showMenu]);
 
-  // 全局快捷键监听
+  // 全局快捷键监听（通过 ref 调用最新函数，避免闭包捕获旧状态）
+  const translateRef = useRef<() => void>(() => {});
+  const copyRef = useRef<() => void>(() => {});
   useEffect(() => {
     const unlisten = listen<{ action: string }>('global-shortcut-triggered', (event) => {
       const { action } = event.payload;
@@ -37,10 +71,10 @@ function App() {
           invoke('start_screenshot_overlay');
           break;
         case 'copy':
-          handleCopy();
+          copyRef.current();
           break;
         case 'translate':
-          handleTranslate();
+          translateRef.current();
           break;
         case 'snipaste':
           handleSnipaste();
@@ -53,14 +87,55 @@ function App() {
     return () => { unlisten.then((fn) => fn()); };
   }, []);
 
+  // 开机自启：系统里的启动项会被卸载/重装清掉（覆盖安装时 NSIS 会删除 Run 键），
+  // 一旦与设置里存的状态不同步，开机就会静默失效。启动时对一次账，以设置为准补写。
+  const [autostartIssue, setAutostartIssue] = useState<string | null>(null);
+  useEffect(() => {
+    (async () => {
+      try {
+        const enabledOnSystem = await invoke<boolean>('get_autostart');
+        const { startup, setStartup } = useSettingsStore.getState();
+        if (enabledOnSystem === startup.autoStart) return;
+        if (startup.autoStart) {
+          await invoke('set_autostart', { enable: true });
+          setAutostartIssue(null);
+        } else {
+          // 系统里还开着但设置里已关：按系统实际状态显示，别让勾选状态骗人
+          setStartup({ autoStart: enabledOnSystem });
+        }
+      } catch (err) {
+        setAutostartIssue(`开机自启同步失败：${err}`);
+      }
+    })();
+  }, []);
+
   // 注册全局快捷键
+  const [shortcutIssues, setShortcutIssues] = useState<Record<string, string>>({});
   useEffect(() => {
     const registerAll = async () => {
+      // 先本地拦截：无修饰键的组合、其他软件的退出/关闭键都不送去注册，
+      // 否则系统会把那些键从别的软件手里截走
+      const enabled: Record<string, string> = {};
+      const issues: Record<string, string> = {};
+      for (const [action, combo] of Object.entries(shortcuts)) {
+        if (!combo.trim()) continue;   // 未启用：不注册，按键留给其他软件
+        const problem = validateShortcut(combo);
+        if (problem) {
+          issues[action] = `${problem}（已停用，请重新设置）`;
+          continue;
+        }
+        enabled[action] = combo;
+      }
       try {
-        await invoke('register_shortcuts', { shortcuts });
+        const results = await invoke<ShortcutRegistration[]>('register_shortcuts', { shortcuts: enabled });
+        for (const r of results) {
+          if (!r.ok && r.error) issues[r.action] = r.error;
+        }
       } catch (err) {
         console.error('[shortcuts] register failed:', err);
+        for (const action of Object.keys(enabled)) issues[action] = `注册失败：${err}`;
       }
+      setShortcutIssues(issues);
     };
     registerAll();
   }, [shortcuts]);
@@ -80,60 +155,53 @@ function App() {
   };
 
   const handleTranslate = async () => {
-    if (!ocrText) { alert('请先识别文字'); return; }
+    if (!ocrText.trim()) { showTranslateFeedback(false, '请先识别文字'); return; }
+    // 翻译目标语言：设置里的「翻译目标」（大模型用中文名，Google 用语言代码）
+    const targetName = language.translateTarget || '中文';
+    const targetCode = GOOGLE_TARGET_CODES[targetName] || 'zh-CN';
     try {
       let result = '';
-      const customTranslatePlugins = ['openai-translate', 'qwen-translate', 'zhipu-translate', 'doubao-translate', 'gemini-translate'];
+      const plugin = findPlugin(activeTranslationPlugin);
+      const cfg = pluginSettings[activeTranslationPlugin] || {};
+      const apiKey = (cfg.apiKey as string) || '';
+      const baseUrl = (cfg.baseUrl as string) || plugin?.defaultBaseUrl || '';
+      const model = (cfg.model as string) || plugin?.defaultModel || '';
       if (activeTranslationPlugin === 'google-translate') {
-        result = await invoke<string>('translate_google', { text: ocrText, targetLang: 'zh-CN' });
-      } else if (activeTranslationPlugin === 'ai-translate') {
-        // 兼容旧的 AI 大模型翻译（走 translate_ai，provider=openai）
-        const cfg = pluginSettings['ai-translate'] || {};
-        const apiKey = (cfg.apiKey as string) || '';
-        const model = (cfg.model as string) || 'gpt-4o';
-        if (!apiKey) { result = '错误：未配置翻译 API Key'; }
-        else {
-          result = await invoke<string>('translate_ai', {
-            apiKey, text: ocrText, targetLang: 'zh', model, provider: 'openai',
-          });
-        }
-      } else if (customTranslatePlugins.includes(activeTranslationPlugin)) {
-        const cfg = pluginSettings[activeTranslationPlugin] || {};
-        const apiKey = (cfg.apiKey as string) || '';
-        const model = (cfg.model as string) || '';
-        const baseUrl = (cfg.baseUrl as string) || '';
-        const defaultBaseUrls: Record<string, string> = {
-          'openai-translate': 'https://api.openai.com/v1',
-          'qwen-translate': 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-          'zhipu-translate': 'https://open.bigmodel.cn/api/paas/v4',
-          'doubao-translate': 'https://ark.cn-beijing.volces.com/api/v3',
-          'gemini-translate': 'https://generativelanguage.googleapis.com/v1beta/openai',
-        };
-        const defaultModels: Record<string, string> = {
-          'openai-translate': 'gpt-4o',
-          'qwen-translate': 'qwen-turbo',
-          'zhipu-translate': 'glm-4-flash',
-          'doubao-translate': 'doubao-pro-32k',
-          'gemini-translate': 'gemini-1.5-flash',
-        };
-        const finalBaseUrl = baseUrl || defaultBaseUrls[activeTranslationPlugin] || '';
-        const finalModel = model || defaultModels[activeTranslationPlugin] || '';
-        console.log('[translate]', activeTranslationPlugin, 'baseUrl=', finalBaseUrl, 'model=', finalModel);
-        if (!apiKey) { result = '错误：未配置翻译 API Key'; }
-        else if (!finalBaseUrl) { result = `错误：缺少 baseUrl (${activeTranslationPlugin})`; }
-        else {
-          result = await invoke<string>('translate_custom', {
-            baseUrl: finalBaseUrl, apiKey, model: finalModel,
-            text: ocrText, targetLang: 'zh',
-          });
-        }
-      } else {
+        // Google 用语言代码，大模型用中文名
+        result = await invoke<string>('translate_google', { text: ocrText, targetLang: targetCode });
+      } else if (activeTranslationPlugin === 'hymt-translate') {
+        // 本地模型：不需要 Key/BaseURL/模型名，目标语言同样用中文名
+        result = await invoke<string>('translate_hymt', { text: ocrText, targetLang: targetName });
+      } else if (plugin?.type !== 'translation') {
         result = `未知翻译服务: ${activeTranslationPlugin}`;
+      } else if (!apiKey) {
+        result = '错误：未配置翻译 API Key';
+      } else if (activeTranslationPlugin === 'claude-translate') {
+        result = await invoke<string>('translate_claude', {
+          baseUrl, apiKey, model, text: ocrText, targetLang: targetName,
+        });
+      } else if (!baseUrl) {
+        result = `错误：缺少 baseUrl (${activeTranslationPlugin})`;
+      } else if (!model) {
+        result = '错误：未选择模型，请在设置中拉取模型列表后选择';
+      } else {
+        console.log('[translate]', activeTranslationPlugin, 'baseUrl=', baseUrl, 'model=', model);
+        result = await invoke<string>('translate_custom', {
+          baseUrl, apiKey, model, text: ocrText, targetLang: targetName,
+        });
       }
-      if (!result.startsWith('错误')) setOcrText(result);
-      else console.warn('[translate] error result:', result);
+      if (result.startsWith('错误') || result.startsWith('未知')) {
+        showTranslateFeedback(false, result);
+      } else if (result.trim()) {
+        // 译文进入独立翻译框，不覆盖原文
+        setTranslation(result);
+        showTranslateFeedback(true, `翻译完成（→${targetName}）`);
+      } else {
+        showTranslateFeedback(false, '翻译返回为空');
+      }
     } catch (err) {
       console.error('translate error:', err);
+      showTranslateFeedback(false, `翻译失败：${err}`);
     }
   };
 
@@ -153,15 +221,34 @@ function App() {
     }
   };
 
+  // 供快捷键调用最新版本的 handler
+  translateRef.current = handleTranslate;
+  copyRef.current = handleCopy;
+
+  // 关窗口和点托盘都发生在原生侧，那边读不到这里的 store，把开关推过去
+  useEffect(() => {
+    invoke('set_tray_behavior', {
+      closeToTray: quickAction.closeAction === '最小化到托盘',
+      showOnClick: quickAction.trayClick === '显示窗口',
+    }).catch((err) => console.error('[tray] sync behavior failed:', err));
+  }, [quickAction]);
+
+  // 截图模式同理：截图覆盖层是独立子进程，托盘菜单那条入口又完全不经过前端。
+  // 放在这里而不是 ScreenshotTool 里 —— 后者切到「文件」标签页就卸载了。
+  // `!!` 兜住老用户 localStorage 里没有这个键的情况（undefined 会被 Rust 的 bool 参数拒绝）
+  useEffect(() => {
+    invoke('set_screenshot_mode', { instant: !!screenshot.instantRecognize })
+      .catch((err) => console.error('[screenshot] sync mode failed:', err));
+  }, [screenshot.instantRecognize]);
+
+  // 菜单里的「退出」就该真退出。走 quit_app 而不是关窗口：
+  // 关窗口会按设置的驻留策略被拦下来，变成点了没反应
   const handleExit = async () => {
     try {
-      const { getCurrentWindow } = await import('@tauri-apps/api/window');
-      if (quickAction.closeAction === '最小化到托盘') {
-        await getCurrentWindow().hide();
-      } else {
-        await getCurrentWindow().close();
-      }
-    } catch {}
+      await invoke('quit_app');
+    } catch (err) {
+      console.error('[tray] quit failed:', err);
+    }
   };
 
   const handleCheckUpdate = async () => {
@@ -171,7 +258,7 @@ function App() {
       if (!resp.ok) throw new Error('无可用更新');
       const data = await resp.json();
       const latestVersion = (data.tag_name || '').replace(/^v/, '');
-      const currentVersion = '0.1.0';
+      const currentVersion = '0.2.0';
       if (latestVersion && latestVersion !== currentVersion) {
         await invoke<string>('plugin:shell|open', { url: data.html_url });
       } else {
@@ -196,7 +283,7 @@ function App() {
           <span className="text-sm font-medium" style={{ color: '#1c1c1e' }}>设置</span>
           <div style={{ width: 60 }} />
         </header>
-        <main style={{ flex: 1, overflow: 'hidden' }}><Settings /></main>
+        <main style={{ flex: 1, overflow: 'hidden' }}><Settings shortcutIssues={shortcutIssues} autostartIssue={autostartIssue} /></main>
       </div>
     );
   }
@@ -249,7 +336,26 @@ function App() {
             </div>
           )}
           {tab === 'snipaste' && <PinPanel />}
-          <OcrResult onTextChange={setOcrText} />
+          {translateFeedback && (
+            <div style={{
+              padding: '8px 16px',
+              fontSize: 12,
+              color: translateFeedback.ok ? '#34C759' : '#FF3B30',
+              background: translateFeedback.ok ? 'rgba(52,199,89,0.08)' : 'rgba(255,59,48,0.08)',
+              borderBottom: `0.5px solid ${translateFeedback.ok ? 'rgba(52,199,89,0.25)' : 'rgba(255,59,48,0.25)'}`,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+            }}>
+              <span>{translateFeedback.ok ? '✓' : '⚠'}</span>
+              <span>{translateFeedback.msg}</span>
+            </div>
+          )}
+          <OcrResult
+            onTextChange={setOcrText}
+            translation={translation}
+            translationLayout={language.translateLayout || '下方'}
+          />
         </div>
       </main>
 

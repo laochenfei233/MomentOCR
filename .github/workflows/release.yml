@@ -1,0 +1,322 @@
+name: Release
+
+on:
+  # 手动触发（Actions 页面点 Run workflow）
+  workflow_dispatch:
+  # 推送 v* 标签时自动触发，例如 v0.2.0
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.platform }}
+    env:
+      # 覆盖层必须按目标架构打包：arm64 机器上给 Intel 包打出 arm64 覆盖层，用户会看到 CPU 不匹配
+      MOMENTOCR_OVERLAY_ARCH: ${{ matrix.overlay_arch }}
+      # Windows runner 的 Python 默认用旧代码页，打印非 ASCII 会 UnicodeEncodeError，这里统一成 UTF-8
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: utf-8
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # 标准变体：推理器在设置里按需下载
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+            overlay_arch: x86_64
+            label: windows-x64
+            variant: standard
+          - platform: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            overlay_arch: x86_64
+            label: linux-x64
+            variant: standard
+          - platform: macos-latest
+            target: aarch64-apple-darwin
+            overlay_arch: arm64
+            label: macos-arm64
+            variant: standard
+          - platform: macos-latest
+            target: x86_64-apple-darwin
+            overlay_arch: x86_64
+            label: macos-x64
+            variant: standard
+          # -local-inference 变体：llama.cpp 推理器打进安装包（国内免下 23MB，规避不稳的代理源）
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+            overlay_arch: x86_64
+            label: windows-x64-local-inference
+            variant: local-inference
+          - platform: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            overlay_arch: x86_64
+            label: linux-x64-local-inference
+            variant: local-inference
+          - platform: macos-latest
+            target: aarch64-apple-darwin
+            overlay_arch: arm64
+            label: macos-arm64-local-inference
+            variant: local-inference
+          - platform: macos-latest
+            target: x86_64-apple-darwin
+            overlay_arch: x86_64
+            label: macos-x64-local-inference
+            variant: local-inference
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 变体构建：下载 llama.cpp 官方预编译 CPU 包解进资源目录，并生成
+      # 带 productName 后缀与额外 resources 的 tauri 配置 override。
+      # runner 直连 GitHub 不限速；标准变体不做任何事，构建路径完全不受影响。
+      - name: Prepare bundled inference runtime
+        if: matrix.variant == 'local-inference'
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${{ matrix.target }}" in
+            x86_64-pc-windows-msvc)   ASSET=llama-b11932-bin-win-cpu-x64.zip ;;
+            aarch64-apple-darwin)     ASSET=llama-b11932-bin-macos-arm64.tar.gz ;;
+            x86_64-apple-darwin)      ASSET=llama-b11932-bin-macos-x64.tar.gz ;;
+            x86_64-unknown-linux-gnu) ASSET=llama-b11932-bin-ubuntu-x64.tar.gz ;;
+            *) echo "::error title=llama.cpp asset::未映射的目标 ${{ matrix.target }}"; exit 1 ;;
+          esac
+          mkdir -p src-tauri/resources/llama-runtime
+          curl -fL --retry 3 -o llama-runtime-archive \
+            "https://github.com/ggml-org/llama.cpp/releases/download/b11932/$ASSET"
+          case "$ASSET" in
+            # runner 的 bash tar 是 GNU tar，读不了 zip；zip 一律走 python zipfile
+            *.zip)   python -c "import zipfile; zipfile.ZipFile('llama-runtime-archive').extractall('src-tauri/resources/llama-runtime')" ;;
+            *.tar.gz) tar -xzf llama-runtime-archive -C src-tauri/resources/llama-runtime ;;
+          esac
+          rm llama-runtime-archive
+          test -n "$(find src-tauri/resources/llama-runtime -name 'llama-server*')" \
+            || { echo "::error title=llama.cpp extract::没解出 llama-server"; exit 1; }
+          du -sh src-tauri/resources/llama-runtime
+          # 只改 resources，不动 productName：软件本体（应用名/安装目录/卸载项）
+          # 必须与标准版一致，安装包文件名在 Collect 步骤重命名做区分
+          node -e '
+            const fs = require("fs");
+            const conf = JSON.parse(fs.readFileSync("src-tauri/tauri.conf.json", "utf8"));
+            conf.bundle.resources.push("resources/llama-runtime/");
+            fs.writeFileSync("src-tauri/tauri.local-inference.conf.json", JSON.stringify(conf, null, 2));
+          '
+
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          # 自带覆盖层里的 PyQt5 需要这些运行时库：PyInstaller 分析要 libGL 系列，
+          # linuxdeploy 打 AppImage 时还要能解析 Qt 的 xcb 依赖，
+          # 否则报 "Could not find dependency: libxcb-icccm.so.4" 直接失败
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libgtk-3-dev \
+            libdbus-1-dev \
+            libxcb1-dev \
+            libxcb-randr0-dev \
+            libxcb-shm0-dev \
+            libxcb-xfixes0-dev \
+            libwayland-dev \
+            libxkbcommon-dev \
+            libxdo-dev \
+            libssl-dev \
+            rpm \
+            libgl1 \
+            libegl1 \
+            libxkbcommon-x11-0 \
+            libxcb-icccm4 \
+            libxcb-image0 \
+            libxcb-keysyms1 \
+            libxcb-render-util0 \
+            libxcb-xinerama0 \
+            libxcb-xkb1 \
+            libxcb-shape0 \
+            libxcb-util1 \
+            libxcb-cursor0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          key: ${{ matrix.label }}
+
+      # 每个平台各打一份自带运行时的截图覆盖层（PyInstaller 不能交叉编译）
+      - name: Setup Python
+        if: matrix.target != 'x86_64-apple-darwin'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # Intel mac 目标跑在 arm64 runner 上，覆盖层也必须编成 x86_64，否则在 Intel 机上跑不了
+      - name: Setup Python (x64 for Intel mac)
+        if: matrix.target == 'x86_64-apple-darwin'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: x64
+
+      # arm64 runner 上出 Intel 包：必须让工具链真的按 x86_64 跑，
+      # 否则 pip 会装 arm64 的 PyQt5 wheel、PyInstaller 也产出 arm64 覆盖层
+      - name: Install Rosetta (Intel mac target)
+        if: matrix.target == 'x86_64-apple-darwin'
+        run: sudo softwareupdate --install-rosetta --agree-to-license || true
+
+      - name: Install overlay packaging tools
+        shell: bash
+        run: |
+          PY="python"
+          if [ "${{ matrix.target }}" = "x86_64-apple-darwin" ]; then PY="arch -x86_64 python"; fi
+          $PY -m pip install --upgrade pip
+          $PY -m pip install pyinstaller PyQt5
+          $PY -c "import platform,sys; print('toolchain arch:', platform.machine(), 'python', sys.version.split()[0])"
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      # 单独一步准备覆盖层：失败时把原因写进 check-run 注解。
+      # 构建步骤的日志需要仓库管理员权限才能读，注解不需要，出问题能第一时间看到原因。
+      - name: Prepare bundled overlay
+        shell: bash
+        run: |
+          # 用 tee：成功时也能在日志里看到架构校验那行（否则出问题时无从判断）
+          if ! node scripts/prepare-overlay.mjs 2>&1 | tee overlay-build.log; then
+            detail=$(tail -c 1500 overlay-build.log | tr '\n' ' ' | sed 's/%/%25/g; s/\r//g')
+            echo "::error title=overlay packaging failed::$detail"
+            tail -40 overlay-build.log
+            exit 1
+          fi
+          if [ ! -f src-tauri/binaries/screenshot_overlay/screenshot_overlay ] \
+             && [ ! -f src-tauri/binaries/screenshot_overlay/screenshot_overlay.exe ]; then
+            echo "::error title=overlay artifact missing::脚本退出成功但没有产物，检查 build-overlay.py"
+            exit 1
+          fi
+          du -sh src-tauri/binaries/screenshot_overlay
+
+      - name: Build and publish
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # runner 上可能没有 libfuse2，让 linuxdeploy 自解压运行而不是挂载
+          APPIMAGE_EXTRACT_AND_RUN: 1
+        with:
+          # 只有推 tag 才生成（草稿）release；手动触发仅构建并上传运行页产物，
+          # 避免测试运行反复产生草稿，装包直接从 Actions 运行页下载即可。
+          # local-inference 变体的产物名与标准版相同，不能直接传（会撞 release 资产），
+          # 改为跳过 tauri-action 上传，由下面的重命名步骤改完名再传
+          tagName: ${{ github.event_name == 'push' && matrix.variant == 'standard' && 'v__VERSION__' || '' }}
+          releaseName: 须臾OCR v__VERSION__
+          releaseBody: |
+            ## 须臾OCR v__VERSION__
+
+            下载对应平台的安装包：
+
+            | 平台 | 文件 |
+            | --- | --- |
+            | Windows | `MomentOCR_*_x64-setup.exe`（NSIS，默认安装到 Program Files）/ `MomentOCR_*_x64_zh-CN.msi` |
+            | macOS | `.dmg`（Apple Silicon 与 Intel 各一个） |
+            | Linux | `.AppImage` / `.deb` / `.rpm` |
+
+            > macOS 安装包未做代码签名，首次打开需在「系统设置 → 隐私与安全性」中点击「仍要打开」。
+          releaseDraft: true
+          prerelease: false
+          # -local-inference 变体用生成的 override（只追加资源）+ 打进 llama-runtime 资源
+          args: --target ${{ matrix.target }} --verbose ${{ matrix.variant == 'local-inference' && '--config src-tauri/tauri.local-inference.conf.json' || '' }}
+
+      # 把安装包汇总到运行页摘要并作为运行产物上传：不用再翻 Releases 里的草稿
+      - name: Collect installers
+        shell: bash
+        run: |
+          set -euo pipefail
+          BUNDLE="src-tauri/target/${{ matrix.target }}/release/bundle"
+          rm -rf dist-installers && mkdir -p dist-installers
+          if [ -d "$BUNDLE" ]; then
+            find "$BUNDLE" -maxdepth 2 -type f \
+              \( -name '*.exe' -o -name '*.msi' -o -name '*.dmg' \
+                 -o -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' \) \
+              -exec cp {} dist-installers/ \;
+          fi
+          # 变体的软件名与标准版一致，产物文件名在这里加后缀做区分
+          if [ "${{ matrix.variant }}" = "local-inference" ]; then
+            for f in dist-installers/MomentOCR*; do
+              [ -e "$f" ] || continue
+              mv "$f" "${f/MomentOCR/MomentOCR-local-inference}"
+            done
+          fi
+          count=$(find dist-installers -type f | wc -l)
+          echo "收集到 $count 个安装包"
+          ls -lh dist-installers
+          {
+            echo "### ${{ matrix.label }}"
+            echo ""
+            if [ "$count" -eq 0 ]; then
+              echo "没有找到安装包，检查 bundle 输出目录。"
+            else
+              echo "| 文件 | 体积 |"
+              echo "| --- | --- |"
+              for f in dist-installers/*; do
+                [ -e "$f" ] || continue
+                printf '| `%s` | %s |\n' "$(basename "$f")" "$(du -h "$f" | cut -f1)"
+              done
+            fi
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload installers as run artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: MomentOCR-${{ matrix.label }}
+          path: dist-installers/*
+          if-no-files-found: error
+          retention-days: 14
+
+      # 变体产物跳过了 tauri-action 上传，在这里把重命名后的安装包补传到草稿 release。
+      # 各平台文件名不同不会互撞；草稿由标准版 job 的 tauri-action 创建，
+      # 变体 job 先跑完时这里兜底建一个（已有则忽略）。
+      - name: Upload variant installers to release
+        if: github.event_name == 'push' && matrix.variant == 'local-inference'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="$GITHUB_REF_NAME"
+          gh release create "$TAG" --draft --verify-tag --title "须臾OCR ${TAG#v}" --notes "" >/dev/null 2>&1 || true
+          gh release upload "$TAG" dist-installers/* --clobber
+
+      # 发布说明由 .changelog/ 片段生成：取 CHANGELOG.md 里该版本的段落，
+      # 后面拼上下载表与签名提示（.github/release-notes-footer.md）。
+      # 四个平台 job 改的是同一份草稿，只让 windows-x64 改一次，避免并发互踩。
+      - name: Rewrite release notes from changelog
+        if: github.event_name == 'push' && matrix.label == 'windows-x64'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          {
+            python3 .changelog/changelogger.py notes "$VERSION"
+            cat .github/release-notes-footer.md
+          } > release-body.md
+          gh release edit "v$VERSION" --notes-file release-body.md

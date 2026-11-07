@@ -1,12 +1,12 @@
 {
   "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/dev/crates/tauri-config-schema/schema.json",
   "productName": "MomentOCR",
-  "version": "0.1.0",
+  "version": "0.3.2",
   "identifier": "com.momentocr.app",
   "build": {
     "beforeDevCommand": "npm run dev",
-    "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm run build",
+    "devUrl": "http://localhost:1421",
+    "beforeBuildCommand": "npm run build && node scripts/prepare-overlay.mjs",
     "frontendDist": "../dist"
   },
   "app": {
@@ -19,11 +19,12 @@
         "height": 550,
         "minWidth": 500,
         "minHeight": 400,
-        "decorations": false,
+        "decorations": true,
         "transparent": false,
         "alwaysOnTop": false,
         "skipTaskbar": false,
-        "visible": true
+        "visible": true,
+        "devtools": true
       }
     ],
     "security": {
@@ -39,6 +40,23 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "resources": [
+      "scripts/*.py",
+      "binaries/screenshot_overlay/"
+    ],
+    "windows": {
+      "nsis": {
+        "installMode": "perMachine",
+        "languages": [
+          "SimpChinese",
+          "English"
+        ],
+        "installerHooks": "windows/installer.nsh"
+      },
+      "wix": {
+        "language": "zh-CN"
+      }
+    }
   }
 }
