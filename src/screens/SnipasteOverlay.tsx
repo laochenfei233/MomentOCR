@@ -3,6 +3,10 @@ import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useSnipasteStore, type Point, type Annotation, type AnnotationType } from '../stores/snipasteStore';
 import { drawAnnotation, hitTestAnnotation, getResizeHandles } from '../lib/annotations';
+import {
+  IconPen, IconLine, IconArrow, IconRect, IconHighlighter, IconText, IconMosaic, IconBlur,
+  IconSave, IconCopy, IconPin, IconScanText, IconScan, IconX,
+} from '../lib/icons';
 import { pickColorFromImage, drawLoupe } from '../lib/colorPicker';
 
 interface Selection {
@@ -700,16 +704,29 @@ export default function SnipasteOverlay() {
     }
   }, []);
 
-  // 工具栏按钮样式
+  // 工具栏按钮样式：对齐主窗口 .tool-btn（透明底灰字，active 蓝字浅蓝底）
   const toolBtnStyle = (tool: AnnotationType) => ({
-    padding: '6px 10px',
-    background: activeTool === tool ? '#007AFF' : '#f0f0f0',
-    color: activeTool === tool ? 'white' : '#333',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 6,
+    background: activeTool === tool ? 'rgba(0, 122, 255, 0.12)' : 'transparent',
+    color: activeTool === tool ? '#007AFF' : '#6E6E73',
     border: 'none',
-    borderRadius: 4,
-    fontSize: 12,
+    borderRadius: 6,
     cursor: 'pointer' as const,
   });
+
+  const actionBtnStyle = {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 4,
+    padding: '6px 10px',
+    border: 'none',
+    borderRadius: 6,
+    fontSize: 12,
+    cursor: 'pointer' as const,
+  };
 
   return (
     <div
@@ -827,14 +844,14 @@ export default function SnipasteOverlay() {
           maxWidth: '90vw',
         }}>
           {/* 绘图工具 */}
-          <button onClick={() => setActiveTool(activeTool === 'pen' ? null : 'pen')} style={toolBtnStyle('pen')} title="画笔 (P)">✏️</button>
-          <button onClick={() => setActiveTool(activeTool === 'line' ? null : 'line')} style={toolBtnStyle('line')} title="直线 (L)">╱</button>
-          <button onClick={() => setActiveTool(activeTool === 'arrow' ? null : 'arrow')} style={toolBtnStyle('arrow')} title="箭头 (A)">→</button>
-          <button onClick={() => setActiveTool(activeTool === 'rectangle' ? null : 'rectangle')} style={toolBtnStyle('rectangle')} title="矩形 (R)">□</button>
-          <button onClick={() => setActiveTool(activeTool === 'highlighter' ? null : 'highlighter')} style={toolBtnStyle('highlighter')} title="荧光笔 (H)">🖍️</button>
-          <button onClick={() => setActiveTool(activeTool === 'text' ? null : 'text')} style={toolBtnStyle('text')} title="文字 (T)">T</button>
-          <button onClick={() => setActiveTool(activeTool === 'mosaic' ? null : 'mosaic')} style={toolBtnStyle('mosaic')} title="马赛克 (M)">▦</button>
-          <button onClick={() => setActiveTool(activeTool === 'blur' ? null : 'blur')} style={toolBtnStyle('blur')} title="模糊 (B)">朦胧</button>
+          <button onClick={() => setActiveTool(activeTool === 'pen' ? null : 'pen')} style={toolBtnStyle('pen')} title="画笔 (P)"><IconPen /></button>
+          <button onClick={() => setActiveTool(activeTool === 'line' ? null : 'line')} style={toolBtnStyle('line')} title="直线 (L)"><IconLine /></button>
+          <button onClick={() => setActiveTool(activeTool === 'arrow' ? null : 'arrow')} style={toolBtnStyle('arrow')} title="箭头 (A)"><IconArrow /></button>
+          <button onClick={() => setActiveTool(activeTool === 'rectangle' ? null : 'rectangle')} style={toolBtnStyle('rectangle')} title="矩形 (R)"><IconRect /></button>
+          <button onClick={() => setActiveTool(activeTool === 'highlighter' ? null : 'highlighter')} style={toolBtnStyle('highlighter')} title="荧光笔 (H)"><IconHighlighter /></button>
+          <button onClick={() => setActiveTool(activeTool === 'text' ? null : 'text')} style={toolBtnStyle('text')} title="文字 (T)"><IconText /></button>
+          <button onClick={() => setActiveTool(activeTool === 'mosaic' ? null : 'mosaic')} style={toolBtnStyle('mosaic')} title="马赛克 (M)"><IconMosaic /></button>
+          <button onClick={() => setActiveTool(activeTool === 'blur' ? null : 'blur')} style={toolBtnStyle('blur')} title="模糊 (B)"><IconBlur /></button>
 
           <div style={{ width: 1, background: '#E5E5EA', margin: '0 4px' }} />
 
@@ -913,23 +930,23 @@ export default function SnipasteOverlay() {
           <div style={{ width: 1, background: '#E5E5EA', margin: '0 4px' }} />
 
           {/* 操作按钮 */}
-          <button onClick={handleSave} style={{ padding: '6px 12px', background: '#f0f0f0', color: '#333', border: 'none', borderRadius: 4, fontSize: 12, cursor: 'pointer' }}>
-            保存
+          <button onClick={handleSave} style={{ ...actionBtnStyle, background: '#f0f0f0', color: '#333' }}>
+            <IconSave size={13} /> 保存
           </button>
-          <button onClick={handleCopy} style={{ padding: '6px 12px', background: '#f0f0f0', color: '#333', border: 'none', borderRadius: 4, fontSize: 12, cursor: 'pointer' }}>
-            复制
+          <button onClick={handleCopy} style={{ ...actionBtnStyle, background: '#f0f0f0', color: '#333' }}>
+            <IconCopy size={13} /> 复制
           </button>
-          <button onClick={handlePin} style={{ padding: '6px 12px', background: '#34C759', color: 'white', border: 'none', borderRadius: 4, fontSize: 12, cursor: 'pointer' }}>
-            贴图
+          <button onClick={handlePin} style={{ ...actionBtnStyle, background: '#34C759', color: 'white' }}>
+            <IconPin size={13} /> 贴图
           </button>
-          <button onClick={handleOCR} style={{ padding: '6px 12px', background: '#007AFF', color: 'white', border: 'none', borderRadius: 4, fontSize: 12, cursor: 'pointer' }}>
-            OCR
+          <button onClick={handleOCR} style={{ ...actionBtnStyle, background: '#007AFF', color: 'white' }}>
+            <IconScanText size={13} /> OCR
           </button>
-          <button onClick={handleOCR} style={{ padding: '6px 12px', background: '#FF9500', color: 'white', border: 'none', borderRadius: 4, fontSize: 12, cursor: 'pointer' }}>
-            识别
+          <button onClick={handleOCR} style={{ ...actionBtnStyle, background: '#FF9500', color: 'white' }}>
+            <IconScan size={13} /> 识别
           </button>
-          <button onClick={handleCancel} style={{ padding: '6px 12px', background: '#FF3B30', color: 'white', border: 'none', borderRadius: 4, fontSize: 12, cursor: 'pointer' }}>
-            取消
+          <button onClick={handleCancel} style={{ ...actionBtnStyle, background: '#FF3B30', color: 'white' }}>
+            <IconX size={13} /> 取消
           </button>
         </div>
       )}

@@ -4,6 +4,10 @@ import { getCurrentWindow, PhysicalSize } from '@tauri-apps/api/window';
 import { useSnipasteStore, type Annotation, type AnnotationType, type Point, type PinData } from '../stores/snipasteStore';
 import { drawAnnotation } from '../lib/annotations';
 import { pickColorFromImage, drawLoupe } from '../lib/colorPicker';
+import {
+  IconPen, IconHighlighter, IconText, IconArrow, IconRect,
+  IconRotateCcw, IconRotateCw, IconFlipH, IconFlipV, IconThrough, IconPipette, IconX,
+} from '../lib/icons';
 
 const PIN_TOOLS: AnnotationType[] = ['pen', 'arrow', 'rectangle', 'text', 'highlighter'];
 
@@ -271,8 +275,9 @@ export default function PinWindow() {
 
   const dpr = window.devicePixelRatio || 1;
   const showImgControls = showControls && !annotating && !picking;
-  const toolLabel: Record<string, string> = {
-    pen: '✏️', arrow: '→', rectangle: '□', text: 'T', highlighter: '🖍️',
+  const toolIcon: Partial<Record<AnnotationType, React.ReactNode>> = {
+    pen: <IconPen size={13} />, arrow: <IconArrow size={13} />, rectangle: <IconRect size={13} />,
+    text: <IconText size={13} />, highlighter: <IconHighlighter size={13} />,
   };
 
   return (
@@ -334,14 +339,14 @@ export default function PinWindow() {
           onMouseDown={(e) => e.stopPropagation()}
           onDoubleClick={(e) => e.stopPropagation()}
         >
-          <PinBtn title="鼠标穿透开启（Alt+P 恢复）" onClick={enableMouseThrough}>🚫</PinBtn>
-          <PinBtn title="逆时针旋转 (1)" onClick={() => rotate(-1)}>⟲</PinBtn>
-          <PinBtn title="顺时针旋转 (2)" onClick={() => rotate(1)}>⟳</PinBtn>
-          <PinBtn title="水平镜像 (3)" onClick={() => setFlipH((v) => !v)}>⇄</PinBtn>
-          <PinBtn title="垂直镜像 (4)" onClick={() => setFlipV((v) => !v)}>⇅</PinBtn>
-          <PinBtn title="标注 (空格)" onClick={() => { void resetTransform().then(() => setAnnotating(true)); }}>✏️</PinBtn>
-          <PinBtn title="取色 (Alt)" onClick={() => { void resetTransform().then(() => setPicking(true)); }}>💧</PinBtn>
-          <PinBtn title="关闭 (Esc)" onClick={() => win.close().catch(() => {})}>×</PinBtn>
+          <PinBtn title="鼠标穿透开启（Alt+P 恢复）" onClick={enableMouseThrough}><IconThrough size={13} /></PinBtn>
+          <PinBtn title="逆时针旋转 (1)" onClick={() => rotate(-1)}><IconRotateCcw size={13} /></PinBtn>
+          <PinBtn title="顺时针旋转 (2)" onClick={() => rotate(1)}><IconRotateCw size={13} /></PinBtn>
+          <PinBtn title="水平镜像 (3)" onClick={() => setFlipH((v) => !v)}><IconFlipH size={13} /></PinBtn>
+          <PinBtn title="垂直镜像 (4)" onClick={() => setFlipV((v) => !v)}><IconFlipV size={13} /></PinBtn>
+          <PinBtn title="标注 (空格)" onClick={() => { void resetTransform().then(() => setAnnotating(true)); }}><IconPen size={13} /></PinBtn>
+          <PinBtn title="取色 (Alt)" onClick={() => { void resetTransform().then(() => setPicking(true)); }}><IconPipette size={13} /></PinBtn>
+          <PinBtn title="关闭 (Esc)" onClick={() => win.close().catch(() => {})}><IconX size={13} /></PinBtn>
         </div>
       )}
 
@@ -364,7 +369,7 @@ export default function PinWindow() {
                 background: activeTool === t ? '#007AFF' : 'transparent', color: '#fff',
               }}
             >
-              {toolLabel[t]}
+              {toolIcon[t]}
             </button>
           ))}
           <input
