@@ -48,6 +48,15 @@ pub fn set_pin_visible(id: &str, visible: bool) -> Option<PinData> {
     }
 }
 
+/// 拖动后同步位置到状态表（hide/show 周期后恢复原位用）
+pub fn update_pin_position(id: &str, x: i32, y: i32) {
+    let mut map = PIN_IMAGES.lock().unwrap();
+    if let Some(p) = map.get_mut(id) {
+        p.x = x as f64;
+        p.y = y as f64;
+    }
+}
+
 pub fn list_pins() -> Vec<(String, PinData)> {
     PIN_IMAGES
         .lock()

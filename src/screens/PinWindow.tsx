@@ -134,17 +134,21 @@ export default function PinWindow() {
     return () => el.removeEventListener('wheel', onWheel);
   }, []);
 
-  // 左键按住 → 原生拖拽（标注/取色模式下不拖拽）
+  // 左键按住 → 原生拖拽（标注/取色模式下不拖拽）。
+  // startDragging 的原生循环会吞掉后续鼠标事件，浏览器的 dblclick 永远不会触发，
+  // 所以双击隐藏用自计时（400ms 内第二次按下）实现，且该次按下不再启动拖拽。
+  const lastPressRef = useRef(0);
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     if (e.button !== 0 || annotating || picking) return;
+    const now = Date.now();
+    if (now - lastPressRef.current < 400) {
+      lastPressRef.current = 0;
+      invoke('snipaste_set_pin_visible', { label: win.label, visible: false })
+        .catch((err) => console.error('hide failed:', err));
+      return;
+    }
+    lastPressRef.current = now;
     win.startDragging().catch((err) => console.error('startDragging failed:', err));
-  }, [win, annotating, picking]);
-
-  // 双击隐藏（可从主窗口"贴图"面板恢复）
-  const handleDoubleClick = useCallback(() => {
-    if (annotating || picking) return;
-    invoke('snipaste_set_pin_visible', { label: win.label, visible: false })
-      .catch((err) => console.error('hide failed:', err));
   }, [win, annotating, picking]);
 
   // ---- 贴图内标注绘制 ----
@@ -275,16 +279,18 @@ export default function PinWindow() {
     <div
       ref={containerRef}
       style={{
-        width: '100%',
-        height: '100%',
+        // fixed 而非 100%：#root/body 没有高度，100% 会把内容塌成 0 高推出视口
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        width: '100vw',
+        height: '100vh',
         background: 'transparent',
         cursor: annotating ? 'crosshair' : picking ? 'none' : 'grab',
         userSelect: 'none',
         overflow: 'hidden',
-        position: 'relative',
       }}
       onMouseDown={handleMouseDown}
-      onDoubleClick={handleDoubleClick}
       onMouseEnter={() => setShowControls(true)}
       onMouseLeave={() => { setShowControls(false); if (picking) { const c = canvasRef.current?.getContext('2d'); c?.clearRect(0, 0, 10000, 10000); } }}
     >

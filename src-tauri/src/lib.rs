@@ -465,8 +465,12 @@ async fn start_snipaste(app: tauri::AppHandle) -> Result<(), String> {
 
     // 全屏截图（光标所在显示器，物理像素）
     let cursor = app.cursor_position().map_err(|e| e.to_string())?;
-    let cap = snipaste::capture_monitor_containing(cursor.x, cursor.y)
+    let mut cap = snipaste::capture_monitor_containing(cursor.x, cursor.y)
         .map_err(|e: anyhow::Error| e.to_string())?;
+    // screens crate 的 scale_factor 在部分机器上误报 1.0，以 Tauri（tao，DPI 感知）为准
+    if let Ok(Some(m)) = app.monitor_from_point(cursor.x, cursor.y) {
+        cap.scale = m.scale_factor();
+    }
     snipaste::set_session_monitor(cap.x, cap.y, cap.width, cap.height, cap.scale);
 
     // 保存到临时文件
@@ -502,8 +506,11 @@ async fn start_long_screenshot(app: tauri::AppHandle) -> Result<(), String> {
 
     // 全屏截图（光标所在显示器）
     let cursor = app.cursor_position().map_err(|e| e.to_string())?;
-    let cap = snipaste::capture_monitor_containing(cursor.x, cursor.y)
+    let mut cap = snipaste::capture_monitor_containing(cursor.x, cursor.y)
         .map_err(|e: anyhow::Error| e.to_string())?;
+    if let Ok(Some(m)) = app.monitor_from_point(cursor.x, cursor.y) {
+        cap.scale = m.scale_factor();
+    }
     snipaste::set_session_monitor(cap.x, cap.y, cap.width, cap.height, cap.scale);
 
     // 保存到临时文件
@@ -637,7 +644,7 @@ fn snipaste_get_screenshot_base64() -> Result<String, String> {
 }
 
 #[tauri::command]
-fn snipaste_create_pin(
+async fn snipaste_create_pin(
     app: tauri::AppHandle,
     image_data: String,
     x: f64,
@@ -664,6 +671,7 @@ fn snipaste_create_pin(
 
     let id = snipaste::next_pin_id();
     let label = format!("pin-{}", id);
+    eprintln!("[create_pin] session=({mx},{my}) scale={scale} css=({x},{y},{width},{height}) phys=({px},{py},{pw},{ph}) label={label}");
     snipaste::insert_pin(
         &label,
         snipaste::PinData {
@@ -678,23 +686,34 @@ fn snipaste_create_pin(
 
     // 贴图窗口：无装饰、置顶、不进任务栏；先隐藏创建，物理坐标落位后再显示
     use tauri::{PhysicalPosition, PhysicalSize, Position, Size, WebviewUrl, WebviewWindowBuilder};
-    let win = WebviewWindowBuilder::new(&app, &label, WebviewUrl::App("/".into()))
+    let built = WebviewWindowBuilder::new(&app, &label, WebviewUrl::App("/".into()))
         .title("贴图")
         .visible(false)
         .decorations(false)
-        .resizable(false)
+        // resizable(false) 与无装饰组合下 tao/WebView2 的 set_size 会原生崩溃，保持默认可改尺寸
         .always_on_top(true)
         .shadow(false)
         .skip_taskbar(true)
-        .build()
-        .map_err(|e| e.to_string())?;
-    win.set_position(Position::Physical(PhysicalPosition::new(px as i32, py as i32)))
-        .map_err(|e| e.to_string())?;
-    win.set_size(Size::Physical(PhysicalSize::new(pw, ph)))
-        .map_err(|e| e.to_string())?;
-    win.show().map_err(|e| e.to_string())?;
+        .build();
+    if let Err(ref e) = built { eprintln!("[create_pin] build failed: {e}"); }
+    let win = built.map_err(|e| e.to_string())?;
+    if let Err(e) = win.set_position(Position::Physical(PhysicalPosition::new(px as i32, py as i32))) {
+        eprintln!("[create_pin] set_position failed: {e}");
+        let _ = win.close();
+        return Err(e.to_string());
+    }
+    if let Err(e) = win.set_size(Size::Physical(PhysicalSize::new(pw, ph))) {
+        eprintln!("[create_pin] set_size failed: {e}");
+        let _ = win.close();
+        return Err(e.to_string());
+    }
+    if let Err(e) = win.show() {
+        eprintln!("[create_pin] show failed: {e}");
+        let _ = win.close();
+        return Err(e.to_string());
+    }
     let _ = win.set_focus();
-
+    eprintln!("[create_pin] ok label={label}");
     Ok(())
 }
 
@@ -710,10 +729,13 @@ fn snipaste_list_pins() -> Vec<(String, snipaste::PinData)> {
 
 #[tauri::command]
 fn snipaste_set_pin_visible(app: tauri::AppHandle, label: String, visible: bool) -> Result<(), String> {
-    snipaste::set_pin_visible(&label, visible).ok_or_else(|| "贴图不存在".to_string())?;
+    let pin = snipaste::set_pin_visible(&label, visible).ok_or_else(|| "贴图不存在".to_string())?;
     if let Some(win) = app.get_webview_window(&label) {
         if visible {
             win.show().map_err(|e| e.to_string())?;
+            // hide/show 周期后 Windows 不保留原位置，按状态表恢复
+            use tauri::{PhysicalPosition, Position};
+            let _ = win.set_position(Position::Physical(PhysicalPosition::new(pin.x as i32, pin.y as i32)));
         } else {
             win.hide().map_err(|e| e.to_string())?;
         }
@@ -808,12 +830,20 @@ pub fn run() {
             snipaste_toggle_mouse_through, snipaste_detect_window, snipaste_history_step
         ])
         .on_window_event(|window, event| {
-            // 贴图窗口被用户关闭时同步清理状态表
-            if let tauri::WindowEvent::Destroyed = event {
-                let label = window.label();
-                if label.starts_with("pin-") {
-                    snipaste::remove_pin(label);
+            let label = window.label().to_string();
+            if !label.starts_with("pin-") {
+                return;
+            }
+            match event {
+                // 贴图窗口被用户关闭时同步清理状态表
+                tauri::WindowEvent::Destroyed => {
+                    snipaste::remove_pin(&label);
                 }
+                // 拖动后记录新位置，隐藏再显示才能回到原位
+                tauri::WindowEvent::Moved(tauri::PhysicalPosition::<i32> { x, y }) => {
+                    snipaste::update_pin_position(&label, *x, *y);
+                }
+                _ => {}
             }
         })
         .setup(|app| {

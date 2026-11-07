@@ -647,6 +647,7 @@ export default function SnipasteOverlay() {
       setSelection(null);
     } catch (err) {
       console.error('Pin failed:', err);
+      alert(`贴图失败: ${err}`);
     }
   }, [selection, generateAnnotatedImage]);
 

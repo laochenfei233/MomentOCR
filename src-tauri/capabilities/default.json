@@ -1,7 +1,7 @@
 {
   "identifier": "default",
   "description": "Default capabilities for MomentOCR",
-  "windows": ["main", "screenshot-overlay"],
+  "windows": ["main", "screenshot-overlay", "snipaste-overlay", "pin-*"],
   "permissions": [
     "core:default",
     "core:window:default",
@@ -12,6 +12,10 @@
     "core:window:allow-is-visible",
     "core:window:allow-set-fullscreen",
     "core:window:allow-set-always-on-top",
+    "core:window:allow-set-position",
+    "core:window:allow-set-size",
+    "core:window:allow-start-dragging",
+    "core:window:allow-outer-position",
     "core:event:default",
     "core:event:allow-emit",
     "core:event:allow-listen",
