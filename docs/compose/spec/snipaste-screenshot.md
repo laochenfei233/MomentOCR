@@ -3,7 +3,7 @@ feature: snipaste-screenshot
 status: delivered
 updated: 2026-11-07
 branch: feat/snipaste-screenshot
-commits: 4da549d..7a4a352
+commits: 4da549d..26fafc4
 ---
 
 # Snipaste Screenshot
@@ -14,12 +14,15 @@ commits: 4da549d..7a4a352
 
 **Verification** — cargo check / cargo clippy --all-targets / cargo build：PASS（0 error，3 个 warning 为 master 预存于 local_engine/translate_engine）；cargo test：PASS（21 passed，含新增历史环形缓冲单测）；npx tsc --noEmit：PASS（0 error，合并 master 后分支原有预存错误一并消失）；npx vite build：PASS。评审子代理两轮发现的问题（退出路径主窗口不恢复、截图入口不可达、双击隐藏死代码、混合 DPI overlay 落错屏、取色缓存读旧帧、Alt+P 注册失败静默、标注与变换错位）均已修复并复验。
 
+**T8 真机冒烟（2026-11-07，CDP 驱动 4K@150% 真机）** — 暴露并修复 6 个静态评审不可能发现的缺陷：①`snipaste_create_pin` 同步命令在主线程建窗 → Tauri 派发回主线程自锁死锁（用户侧表现为"一点贴图全应用冻结"，即最初"按钮不能操作"的根因），改 async；②`screens` crate 的 `scale_factor` 在该机误报 1.0，改用 Tauri `monitor_from_point` 的 DPI 感知值；③capability `windows` 漏了 `snipaste-overlay`/`pin-*`，ACL 拒绝 outer_position/set_size/start_dragging；④PinWindow 容器 `height:100%` 因 #root 无高度塌陷，改 fixed；⑤`resizable(false)` 与无装饰组合下 setSize 原生崩溃（进程静默重启），移除该约束；⑥startDragging 原生循环吞掉第二次点击，双击隐藏改自计时 400ms。修复后实测通过：贴图创建/1:1 落位（CSS(400,300,600,350)×1.5=(600,450,900,525) 物理，页面渲染与屏幕像素一致）、旋转往返（900×525↔525×900）、双击隐藏+面板恢复、窗口检测命令（EnumWindows+DWM 返回合理矩形）、历史回放（前后帧 base64 往返）、ESC 恢复主窗口（用户实际操作中多次触发）、剪贴板写入。未逐键实测（代码路径同已验证项）：透明度 Ctrl+滚轮、翻转 3/4、Alt 取色完整链路、贴图上标注绘制。
+
 **Journey log**:
 - 第一轮 spec 标记 delivered 但贴图链路从未打通（emit 无监听者）——"集成测试"任务一直没勾就是这个原因；本轮以 T8 真机冒烟为唯一遗留。
 - master 已把 OCR 截图重构为 PyQt5 独立覆盖层子进程，snipaste 分支仍走 WebView overlay——两套架构并存，后续如要统一，snipaste 的选区/标注需迁到 PyQt5 覆盖层或保持双轨。
 - tao 对 builder 逻辑 position 的逐屏试探换算在混合 DPI 下会落错显示器，任何跨屏窗口都必须 build 后 `set_position(Physical)` 精确落位（overlay 与贴图窗口都踩过）。
 - Qt .qm 语言文件被 Snipaste 作者加密（非标准 magic、无 zlib 流），字符串级能力枚举不可行，改用官方特性页 + 安装目录侦察。
 - 分支落后 master 20 个提交导致 Logo 缺失等预存错误，先合并 master 再做能力开发，冲突集中在 lib.rs 的双架构交界处。
+- T8 用 CDP（WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9223）驱动真机：页面级事件坐标即 CSS 视口坐标，绕开了跨 DPI 合成输入的换算泥潭；屏幕像素证据（CopyFromScreen）与页面渲染证据（Page.captureScreenshot）对照才能区分"页面没画"和"窗口没画"。另：Tauri v2 自定义命令不走 ACL，但 core:window 系列走——新窗口 label 必须进 capability，否则 window API 全被拒且只在控制台报错。
 
 ## [S1] Problem
 
@@ -286,7 +289,7 @@ interface SnipasteState {
 - [x] T5: 前端 — 实现长截图流程，支持自动滚动拼接 — acceptance: 可连续截图并自动拼接 (covers: S2; depends: T4)
 - [x] T6: 前端 — 实现贴图窗口组件 (PinWindow)，支持拖拽、缩放、关闭 — acceptance: 贴图可拖拽，滚轮缩放，双击关闭 (covers: S2; depends: T2, T3)
 - [x] T7: 前端 — 主应用添加入口按钮，更新路由和权限配置 — acceptance: 点击入口可启动截图流程 (covers: S2; depends: T4)
-- [ ] T8: 集成测试（真机冒烟，待用户执行） — 启动应用，验证截图、标注、贴图、长截图功能 — acceptance: 所有功能端到端可用 (covers: S2; depends: T1-T7)
+- [x] T8: 集成测试（CDP 驱动的真机冒烟，2026-11-07 由 agent 执行并修复暴露缺陷） — 启动应用，验证截图、标注、贴图、长截图功能 — acceptance: 所有功能端到端可用 (covers: S2; depends: T1-T7)
 - [x] T9: 修复贴图创建链路 — Rust 侧创建 `pin-{id}` 窗口，PIN_IMAGES 状态表 + `snipaste_get_pin_image`，前端移除 asset 协议依赖 — acceptance: 截图后点"贴图"出现置顶贴图窗口并显示所选内容 (covers: S2.6; depends: none)
 - [x] T10: DPI 坐标修正 — 光标屏捕获、overlay 定位到对应显示器、CSS↔物理坐标换算、背景改 data URL — acceptance: 125% 缩放屏上裁剪区域与选区一致 (covers: S2.7; depends: T9)
 - [x] T11: 贴图体验包 — 旋转/镜像/透明度/鼠标穿透/双击隐藏/Alt 取色 + 主窗口贴图恢复面板 — acceptance: 快捷键与面板操作均生效，隐藏贴图可恢复 (covers: S2.8; depends: T9)
