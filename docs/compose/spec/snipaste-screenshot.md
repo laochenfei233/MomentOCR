@@ -14,6 +14,8 @@ commits: 4da549d..5152dac
 
 **Verification** — cargo check / cargo clippy --all-targets / cargo build：PASS（0 error，3 个 warning 为 master 预存于 local_engine/translate_engine）；cargo test：PASS（21 passed，含新增历史环形缓冲单测）；npx tsc --noEmit：PASS（0 error，合并 master 后分支原有预存错误一并消失）；npx vite build：PASS。评审子代理两轮发现的问题（退出路径主窗口不恢复、截图入口不可达、双击隐藏死代码、混合 DPI overlay 落错屏、取色缓存读旧帧、Alt+P 注册失败静默、标注与变换错位）均已修复并复验。
 
+**第三轮（2026-11-09，S2.13）** — 用户测试包反馈后落地：相机「截图识别」恒为框选松开即识别（删除「截图后自动识别」「框选后松开鼠标直接识别」两个设置项，set_screenshot_mode 恒 instant）；「截图贴图」保持工具栏流程。OCR 结果归位：snipaste-ocr/stitched/screenshot-cropped 三事件触发自动切到「截图识别」标签页，贴图标签页只留贴图面板。CDP 冒烟自抓一个 bug：setTab 误放在监听器注册处（只跑一次），移入事件回调后验证 activeTab 正确切为「截图识别」。测试包已重打（MomentOCR_0.3.2-snipaste-test_x64-setup.exe）。
+
 **T8 真机冒烟（2026-11-07，CDP 驱动 4K@150% 真机）** — 暴露并修复 6 个静态评审不可能发现的缺陷：①`snipaste_create_pin` 同步命令在主线程建窗 → Tauri 派发回主线程自锁死锁（用户侧表现为"一点贴图全应用冻结"，即最初"按钮不能操作"的根因），改 async；②`screens` crate 的 `scale_factor` 在该机误报 1.0，改用 Tauri `monitor_from_point` 的 DPI 感知值；③capability `windows` 漏了 `snipaste-overlay`/`pin-*`，ACL 拒绝 outer_position/set_size/start_dragging；④PinWindow 容器 `height:100%` 因 #root 无高度塌陷，改 fixed；⑤`resizable(false)` 与无装饰组合下 setSize 原生崩溃（进程静默重启），移除该约束；⑥startDragging 原生循环吞掉第二次点击，双击隐藏改自计时 400ms。修复后实测通过：贴图创建/1:1 落位（CSS(400,300,600,350)×1.5=(600,450,900,525) 物理，页面渲染与屏幕像素一致）、旋转往返（900×525↔525×900）、双击隐藏+面板恢复、窗口检测命令（EnumWindows+DWM 返回合理矩形）、历史回放（前后帧 base64 往返）、ESC 恢复主窗口（用户实际操作中多次触发）、剪贴板写入。未逐键实测（代码路径同已验证项）：透明度 Ctrl+滚轮、翻转 3/4、Alt 取色完整链路、贴图上标注绘制。
 
 **Journey log**:
