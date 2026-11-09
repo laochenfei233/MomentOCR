@@ -68,10 +68,8 @@ function ScreenshotTool() {
       setCapturing(false);
       setTimeout(() => setCaptureSuccess(false), 1500);
       focusMain();
-      // 按设置决定是否自动识别
-      if (screenshot.autoRecognize) {
-        await doOcr(imagePath);
-      }
+      // 框选松开即识别是唯一行为
+      await doOcr(imagePath);
     });
     const unlisten2 = listen('screenshot-cancel', async () => {
       setCapturing(false);
@@ -84,7 +82,7 @@ function ScreenshotTool() {
     });
     const unlisten4 = listen('screenshot-triggered', () => handleScreenshot());
     return () => { unlisten1.then(fn => fn()); unlisten2.then(fn => fn()); unlisten3.then(fn => fn()); unlisten4.then(fn => fn()); };
-  }, [handleScreenshot, setCapturing, doOcr, screenshot.autoRecognize]);
+  }, [handleScreenshot, setCapturing, doOcr]);
 
   return (
     <div style={{ padding: 12 }}>

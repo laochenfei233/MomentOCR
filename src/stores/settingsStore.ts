@@ -50,12 +50,9 @@ interface SettingsState {
     translate: string;
   };
 
-  // 截图设置
+  // 截图设置（框选松开即识别是唯一行为，无可选项）
   screenshot: {
     hideMainWindow: boolean;
-    autoRecognize: boolean;
-    /** 框选松开鼠标直接识别，不显示「识别/取消」工具栏 */
-    instantRecognize: boolean;
   };
 
   /** 原文/翻译分割线位置：翻译区域所占百分比（15~80） */
@@ -117,9 +114,6 @@ export const useSettingsStore = create<SettingsState>()(
 
       screenshot: {
         hideMainWindow: true,
-        autoRecognize: true,
-        // 默认不动现有手感（松手出工具栏再点识别）
-        instantRecognize: false,
       },
 
       setActiveOcrPlugin: (id) => set({ activeOcrPlugin: id }),

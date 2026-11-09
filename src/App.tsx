@@ -23,7 +23,7 @@ function App() {
   const [translation, setTranslation] = useState('');
   const [translateFeedback, setTranslateFeedback] = useState<{ ok: boolean; msg: string } | null>(null);
   const { history, restoreFromHistory, clearHistory, result: storeResult } = useOcrStore();
-  const { shortcuts, quickAction, config, activeOcrPlugin, activeTranslationPlugin, pluginSettings, language, screenshot, setActiveOcrPlugin, setActiveTranslationPlugin, setPluginSetting } = useSettingsStore();
+  const { shortcuts, quickAction, config, activeOcrPlugin, activeTranslationPlugin, pluginSettings, language, setActiveOcrPlugin, setActiveTranslationPlugin, setPluginSetting } = useSettingsStore();
 
   const showTranslateFeedback = (ok: boolean, msg: string) => {
     setTranslateFeedback({ ok, msg });
@@ -87,6 +87,15 @@ function App() {
     return () => { unlisten.then((fn) => fn()); };
   }, []);
 
+  // PyQt 截图流程裁剪完成：结果归位「截图识别」标签页
+  useEffect(() => {
+    const u = listen<string>('screenshot-cropped', () => {
+      setTab('screenshot');
+      setShowSettings(false);
+    });
+    return () => { u.then((fn) => fn()); };
+  }, []);
+
   // snipaste overlay 的 OCR / 长截图结果：路径 → 走主识别管线（结果进 OcrResult 与历史）
   useEffect(() => {
     const runSnipasteOcr = async (imagePath: string) => {
@@ -108,6 +117,9 @@ function App() {
       }
       invoke('focus_main_window').catch(() => {});
     };
+    // 识别结果的家在「截图识别」标签页：识别一触发就切过去
+    setTab('screenshot');
+    setShowSettings(false);
     const u1 = listen<{ path: string }>('snipaste-ocr', (e) => runSnipasteOcr(e.payload.path));
     const u2 = listen<{ path: string }>('snipaste-stitched', (e) => runSnipasteOcr(e.payload.path));
     return () => { u1.then((fn) => fn()); u2.then((fn) => fn()); };
@@ -260,12 +272,11 @@ function App() {
   }, [quickAction]);
 
   // 截图模式同理：截图覆盖层是独立子进程，托盘菜单那条入口又完全不经过前端。
-  // 放在这里而不是 ScreenshotTool 里 —— 后者切到「文件」标签页就卸载了。
-  // `!!` 兜住老用户 localStorage 里没有这个键的情况（undefined 会被 Rust 的 bool 参数拒绝）
+  // 框选松开即识别是唯一行为，恒为 instant（原 instantRecognize 设置项已删）。
   useEffect(() => {
-    invoke('set_screenshot_mode', { instant: !!screenshot.instantRecognize })
+    invoke('set_screenshot_mode', { instant: true })
       .catch((err) => console.error('[screenshot] sync mode failed:', err));
-  }, [screenshot.instantRecognize]);
+  }, []);
 
   // 菜单里的「退出」就该真退出。走 quit_app 而不是关窗口：
   // 关窗口会按设置的驻留策略被拦下来，变成点了没反应

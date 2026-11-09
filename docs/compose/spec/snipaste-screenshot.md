@@ -1,9 +1,9 @@
 ---
 feature: snipaste-screenshot
 status: delivered
-updated: 2026-11-07
+updated: 2026-11-09
 branch: feat/snipaste-screenshot
-commits: 4da549d..26fafc4
+commits: 4da549d..5152dac
 ---
 
 # Snipaste Screenshot
@@ -93,7 +93,14 @@ commits: 4da549d..26fafc4
 - overlay 内 `,`/`.` 在历史帧间切换背景（切换时清空选区与标注），支持从更早的截图重新选区；长截图续拍的帧同样入队。
 - 已知限制：历史帧可能来自另一台显示器，切到尺寸/缩放不同的帧后，CSS×dpr 映射不再精确（B8，真机冒烟关注项）。
 
-### 原架构与窗口表（第一轮设计，仍然有效）
+### S2.13 快速识别与结果归位（2026-11-09 第三轮）
+
+用户安装测试包后反馈两点，已确认方案：
+
+1. **两个入口分工**：相机「截图识别」恒为框选松开即识别（不弹工具栏，原 `instantRecognize` 行为变成唯一行为）；「截图贴图」保持工具栏流程（标注/贴图/保存/复制）。设置页删除「截图后自动识别」与「框选后松开鼠标直接识别」两个选项（行为唯一化，无开关必要）。
+2. **OCR 结果归位**：识别完成（snipaste-ocr / snipaste-stitched / screenshot-cropped）自动切到「截图识别」标签页显示结果；「截图贴图」标签页只放贴图面板，不再堆 OCR 结果。
+
+### S2.6 缺陷修复：贴图创建链路
 
 ### 架构
 ```
@@ -297,6 +304,8 @@ interface SnipasteState {
 - [x] T13: 窗口自动检测 — `windows` crate 枚举 + DWM 扩展边界，hover 高亮、单击吸附 — acceptance: 悬停时高亮光标下窗口，单击选中该窗口区域 (covers: S2.10; depends: T10)
 - [x] T14: 贴图上标注 — 提取共享绘制引擎，空格在贴图内切换标注模式（画笔/箭头/矩形/文字/荧光笔）— acceptance: 贴图内可绘制标注且随窗口缩放一致 (covers: S2.11; depends: T9)
 - [x] T15: 历史回放 — 截图环形缓冲，`,`/`.` 切换历史帧 — acceptance: 按键后背景切换为上一张截图且可重新选区 (covers: S2.12; depends: T10)
+- [ ] T17: 设置项删除 + 截图识别恒为快速识别 — settingsStore/Settings.tsx 删两个选项，set_screenshot_mode 常开 instant，ScreenshotTool 移除 autoRecognize 门 (covers: S2.13; depends: none)
+- [ ] T18: OCR 结果自动切回截图标签页 — snipaste-ocr/stitched/screenshot-cropped 三个事件触发 setTab('screenshot') (covers: S2.13; depends: none)
 - [x] T16: 验证 — cargo clippy/test、tsc、cargo build 全部通过 — acceptance: 全绿 (covers: S2.6-S2.12; depends: T9-T15)
 
 ## [S4] Acceptance（第二轮新增）
@@ -309,3 +318,5 @@ interface SnipasteState {
 - [ ] A6: overlay 悬停高亮窗口、单击吸附窗口矩形，拖拽仍可自由选区（S2.10/T13）
 - [ ] A7: 贴图按空格进入标注模式，五种工具可用，再按空格退出（S2.11/T14）
 - [ ] A8: overlay 按 `,`/`.` 切换历史截图帧（S2.12/T15）
+- [ ] A9: 相机「截图识别」框选松开即出结果、无工具栏；设置页无「截图后自动识别」「框选后松开鼠标直接识别」两项（S2.13/T17）
+- [ ] A10: 任意入口识别完成后主窗口自动停在「截图识别」标签页；贴图标签页只有贴图面板（S2.13/T18）
