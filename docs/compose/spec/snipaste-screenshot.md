@@ -304,8 +304,8 @@ interface SnipasteState {
 - [x] T13: 窗口自动检测 — `windows` crate 枚举 + DWM 扩展边界，hover 高亮、单击吸附 — acceptance: 悬停时高亮光标下窗口，单击选中该窗口区域 (covers: S2.10; depends: T10)
 - [x] T14: 贴图上标注 — 提取共享绘制引擎，空格在贴图内切换标注模式（画笔/箭头/矩形/文字/荧光笔）— acceptance: 贴图内可绘制标注且随窗口缩放一致 (covers: S2.11; depends: T9)
 - [x] T15: 历史回放 — 截图环形缓冲，`,`/`.` 切换历史帧 — acceptance: 按键后背景切换为上一张截图且可重新选区 (covers: S2.12; depends: T10)
-- [ ] T17: 设置项删除 + 截图识别恒为快速识别 — settingsStore/Settings.tsx 删两个选项，set_screenshot_mode 常开 instant，ScreenshotTool 移除 autoRecognize 门 (covers: S2.13; depends: none)
-- [ ] T18: OCR 结果自动切回截图标签页 — snipaste-ocr/stitched/screenshot-cropped 三个事件触发 setTab('screenshot') (covers: S2.13; depends: none)
+- [x] T17: 设置项删除 + 截图识别恒为快速识别 — settingsStore/Settings.tsx 删两个选项，set_screenshot_mode 常开 instant，ScreenshotTool 移除 autoRecognize 门 (covers: S2.13; depends: none)
+- [x] T18: OCR 结果自动切回截图标签页 — snipaste-ocr/stitched/screenshot-cropped 三个事件触发 setTab('screenshot') (covers: S2.13; depends: none)
 - [x] T16: 验证 — cargo clippy/test、tsc、cargo build 全部通过 — acceptance: 全绿 (covers: S2.6-S2.12; depends: T9-T15)
 
 ## [S4] Acceptance（第二轮新增）
@@ -318,5 +318,5 @@ interface SnipasteState {
 - [ ] A6: overlay 悬停高亮窗口、单击吸附窗口矩形，拖拽仍可自由选区（S2.10/T13）
 - [ ] A7: 贴图按空格进入标注模式，五种工具可用，再按空格退出（S2.11/T14）
 - [ ] A8: overlay 按 `,`/`.` 切换历史截图帧（S2.12/T15）
-- [ ] A9: 相机「截图识别」框选松开即出结果、无工具栏；设置页无「截图后自动识别」「框选后松开鼠标直接识别」两项（S2.13/T17）
-- [ ] A10: 任意入口识别完成后主窗口自动停在「截图识别」标签页；贴图标签页只有贴图面板（S2.13/T18）
+- [x] A9: 相机「截图识别」框选松开即出结果、无工具栏；设置页无「截图后自动识别」「框选后松开鼠标直接识别」两项（S2.13/T17）
+- [x] A10: 任意入口识别完成后主窗口自动停在「截图识别」标签页；贴图标签页只有贴图面板（S2.13/T18）

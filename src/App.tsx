@@ -118,10 +118,9 @@ function App() {
       invoke('focus_main_window').catch(() => {});
     };
     // 识别结果的家在「截图识别」标签页：识别一触发就切过去
-    setTab('screenshot');
-    setShowSettings(false);
-    const u1 = listen<{ path: string }>('snipaste-ocr', (e) => runSnipasteOcr(e.payload.path));
-    const u2 = listen<{ path: string }>('snipaste-stitched', (e) => runSnipasteOcr(e.payload.path));
+    const goHome = () => { setTab('screenshot'); setShowSettings(false); };
+    const u1 = listen<{ path: string }>('snipaste-ocr', (e) => { goHome(); runSnipasteOcr(e.payload.path); });
+    const u2 = listen<{ path: string }>('snipaste-stitched', (e) => { goHome(); runSnipasteOcr(e.payload.path); });
     return () => { u1.then((fn) => fn()); u2.then((fn) => fn()); };
   }, []);
 
