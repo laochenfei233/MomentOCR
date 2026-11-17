@@ -208,6 +208,9 @@ function App() {
       closeToTray: quickAction.closeAction === '最小化到托盘',
       showOnClick: quickAction.trayClick === '显示窗口',
     }).catch((err) => console.error('[tray] sync behavior failed:', err));
+    // macOS Dock 驻留开关同理；老用户 localStorage 缺键时 undefined === '隐藏' 即「驻留」
+    invoke('set_dock_hidden', { hidden: quickAction.dockIcon === '隐藏' })
+      .catch((err) => console.error('[dock] sync visibility failed:', err));
   }, [quickAction]);
 
   // 截图模式同理：截图覆盖层是独立子进程，托盘菜单那条入口又完全不经过前端。

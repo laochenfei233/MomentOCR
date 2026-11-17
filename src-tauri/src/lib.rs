@@ -112,6 +112,17 @@ fn set_tray_behavior(app: tauri::AppHandle, close_to_tray: bool, show_on_click: 
     state.show_on_tray_click.store(show_on_click, Ordering::SeqCst);
 }
 
+/// macOS 可选不驻留 Dock（后台驻留）：把进程切到 UIElement，Dock 与 Cmd+Tab
+/// 都不再出现，只剩菜单栏托盘。设置存在前端 localStorage，由前端推送；
+/// 其他平台没有 Dock 这个概念，空操作。
+#[tauri::command]
+fn set_dock_hidden(app: tauri::AppHandle, hidden: bool) {
+    #[cfg(target_os = "macos")]
+    let _ = app.set_dock_visibility(!hidden);
+    #[cfg(not(target_os = "macos"))]
+    let _ = (app, hidden);
+}
+
 /// 截图模式由前端推过来并镜像在原生侧（见 AppState 的说明）。
 #[tauri::command]
 fn set_screenshot_mode(app: tauri::AppHandle, instant: bool) {
@@ -416,7 +427,8 @@ pub fn run() {
             ocr_paddleocr, ocr_rapidocr, get_local_components_status, install_local_component, remove_local_component,
             ocr_openai, ocr_ollama, translate_google, translate_custom, translate_claude, translate_hymt,
             ocr_custom_vision, ocr_claude, list_models, set_autostart, get_autostart, clear_temp_cache,
-            register_shortcuts, set_tray_behavior, set_screenshot_mode, focus_main_window, quit_app
+            register_shortcuts, set_tray_behavior, set_screenshot_mode, set_dock_hidden,
+            focus_main_window, quit_app
         ])
         .setup(|app| {
             // 注入资源目录：安装版把 OCR/截图脚本随包发布到此处（见 tauri.conf.json 的 bundle.resources）

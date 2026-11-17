@@ -41,6 +41,8 @@ interface SettingsState {
   quickAction: {
     closeAction: string;
     trayClick: string;
+    /** macOS：Dock 栏驻留（'驻留'）或纯后台（'隐藏'）；其他平台不显示该设置 */
+    dockIcon: string;
   };
 
   // 快捷键
@@ -111,6 +113,7 @@ export const useSettingsStore = create<SettingsState>()(
       quickAction: {
         closeAction: '最小化到托盘',
         trayClick: '显示窗口',
+        dockIcon: '驻留',
       },
 
       shortcuts: { ...DEFAULT_SHORTCUTS },

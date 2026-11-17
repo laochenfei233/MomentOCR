@@ -5,7 +5,7 @@ import { useSettingsStore } from '../stores/settingsStore';
 import { useOcrStore } from '../stores/ocrStore';
 import { builtinPlugins } from '../plugins';
 import { Logo } from './Logo';
-import { DEFAULT_SHORTCUTS, formatShortcut, isModifierKeyEvent, shortcutFromKeyboardEvent, validateShortcut } from '../utils/shortcut';
+import { DEFAULT_SHORTCUTS, formatShortcut, isMacPlatform, isModifierKeyEvent, shortcutFromKeyboardEvent, validateShortcut } from '../utils/shortcut';
 import { TRANSLATE_TARGETS } from '../utils/languages';
 type SettingsTab = 'general' | 'config' | 'screenshot' | 'api' | 'shortcuts' | 'update' | 'about';
 
@@ -254,6 +254,8 @@ function Settings({ shortcutIssues = {}, autostartIssue = null }: {
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
                 <SelectItem label="关闭软件" value={quickAction.closeAction} options={['最小化到托盘', '直接退出']} onChange={(v) => setQuickAction({ closeAction: v })} inline />
                 <SelectItem label="单击托盘" value={quickAction.trayClick} options={['显示窗口', '无操作']} onChange={(v) => setQuickAction({ trayClick: v })} inline />
+                {/* 隐藏 = 进程转 UIElement 纯后台，只留菜单栏托盘；Windows 没有 Dock 这个概念 */}
+                {isMacPlatform() && <SelectItem label="Dock 栏" value={quickAction.dockIcon || '驻留'} options={['驻留', '隐藏']} onChange={(v) => setQuickAction({ dockIcon: v })} inline />}
               </div>
             </SettingsCard>
             <SettingsCard title="数据管理">
