@@ -5,7 +5,6 @@ mod recognizer;
 mod translate_engine;
 mod snipaste;
 
-use overlay::{OverlayManager, OverlayResult};
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -15,18 +14,13 @@ use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 use chrono::Local;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 /// 常驻行为的开关。设置在渲染进程的 localStorage 里，但「关闭窗口」和「点托盘」
 /// 都发生在原生侧，跨 IPC 回读前端状态又要处理前端未就绪的情况，所以镜像一份。
-///
-/// `instant_recognize` 同理：截图覆盖层是独立子进程，三条入口（界面按钮 / 全局快捷键 /
-/// 托盘菜单）里托盘那条完全不过前端，模式只能在原生侧读。
 struct AppState {
     close_to_tray: AtomicBool,
     show_on_tray_click: AtomicBool,
-    /// 截图模式：框选松开鼠标直接识别（不显示工具栏）
-    instant_recognize: AtomicBool,
     /// 正在主动退出。置位后关闭请求不再被拦成「驻留托盘」，
     /// 否则「退出」会被自己的拦截吃掉，软件再也关不掉。
     quitting: AtomicBool,
@@ -44,8 +38,6 @@ impl Default for AppState {
             // 行为不该和设置里显示的反着来
             close_to_tray: AtomicBool::new(true),
             show_on_tray_click: AtomicBool::new(true),
-            // 与设置项默认值（现在的模式）对齐
-            instant_recognize: AtomicBool::new(false),
             quitting: AtomicBool::new(false),
             exe_mtime: current_exe_mtime(),
         }
@@ -86,40 +78,11 @@ fn exit_now(app: &tauri::AppHandle) {
     app.exit(0);
 }
 
-fn run_screenshot_overlay(app: &tauri::AppHandle) {
-    let instant = app.state::<AppState>().instant_recognize.load(Ordering::SeqCst);
-    let app_handle = app.clone();
-    tauri::async_runtime::spawn(async move {
-        let manager = OverlayManager::new(&app_handle, instant);
-        let result = tokio::task::spawn_blocking(move || manager.start_overlay()).await;
-        match result {
-            Ok(Ok(OverlayResult::Ocr { path })) => { let _ = app_handle.emit("screenshot-cropped", path); }
-            Ok(Ok(OverlayResult::Cancel)) => { let _ = app_handle.emit("screenshot-cancel", ()); }
-            Ok(Err(e)) => { let _ = app_handle.emit("screenshot-error", e.to_string()); }
-            Err(e) => { let _ = app_handle.emit("screenshot-error", e.to_string()); }
-        }
-    });
-}
-
-#[tauri::command]
-async fn start_screenshot_overlay(app: tauri::AppHandle) -> Result<String, String> {
-    run_screenshot_overlay(&app);
-    Ok("started".to_string())
-}
-
 #[tauri::command]
 fn set_tray_behavior(app: tauri::AppHandle, close_to_tray: bool, show_on_click: bool) {
     let state = app.state::<AppState>();
     state.close_to_tray.store(close_to_tray, Ordering::SeqCst);
     state.show_on_tray_click.store(show_on_click, Ordering::SeqCst);
-}
-
-/// 截图模式由前端推过来并镜像在原生侧（见 AppState 的说明）。
-#[tauri::command]
-fn set_screenshot_mode(app: tauri::AppHandle, instant: bool) {
-    app.state::<AppState>()
-        .instant_recognize
-        .store(instant, Ordering::SeqCst);
 }
 
 /// 把主窗口显示、取消最小化并置顶夺焦点。
@@ -153,7 +116,12 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
         // 左键留给「点一下就能截图」，默认弹菜单会把单击动作吃掉
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
-            "screenshot" => run_screenshot_overlay(app),
+            "screenshot" => {
+                // 托盘入口不过前端，直接起 instant 会话（框选松开即识别）
+                if let Err(e) = start_overlay_session(app, SnipasteMode::Instant) {
+                    let _ = app.emit("snipaste-error", e);
+                }
+            }
             "show" => show_main_window(app),
             "quit" => exit_now(app),
             _ => {}
@@ -414,39 +382,50 @@ fn clear_temp_cache() -> Result<String, String> {
 
 // ============ Snipaste 截图功能 ============
 
-/// overlay 窗口：先隐藏创建、物理坐标落位后再显示。
-/// builder 的逻辑 position 在混合 DPI 多屏下会被 tao 逐屏试探换算而落错显示器，
-/// 所以与贴图窗口一样用 Physical 精确落位。
-fn build_snipaste_overlay(
-    app: &tauri::AppHandle,
-    title: &str,
-    url: tauri::WebviewUrl,
-    cap: &snipaste::MonitorCapture,
-) -> Result<tauri::WebviewWindow, String> {
-    use tauri::{PhysicalPosition, PhysicalSize, Position, Size, WebviewWindowBuilder};
-    let win = WebviewWindowBuilder::new(app, "snipaste-overlay", url)
-        .title(title)
-        .visible(false)
-        .decorations(false)
-        .resizable(false)
-        .maximizable(false)
-        .always_on_top(true)
-        .shadow(false)
-        .skip_taskbar(true)
-        .build()
-        .map_err(|e| e.to_string())?;
-    win.set_position(Position::Physical(PhysicalPosition::new(cap.x, cap.y)))
-        .map_err(|e| e.to_string())?;
-    win.set_size(Size::Physical(PhysicalSize::new(cap.width, cap.height)))
-        .map_err(|e| e.to_string())?;
-    win.show().map_err(|e| e.to_string())?;
-    let _ = win.set_focus();
-    Ok(win)
+/// overlay 窗口 label 前缀：每屏一个窗口 `snipaste-overlay-{i}`
+const OVERLAY_PREFIX: &str = "snipaste-overlay";
+
+/// 空闲超时：覆盖层开了这么久没有任何指针活动就自动取消，
+/// 防止「开着截图层过夜」把整块屏幕锁死
+const OVERLAY_IDLE_TIMEOUT_SECS: u64 = 120;
+
+/// 会话代次：新一轮截图会话开始时递增，让上一轮的空闲计时任务自行退出
+static SESSION_SEQ: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Clone, Copy, PartialEq)]
+enum SnipasteMode {
+    /// 框选松开即识别（原 PyQt 覆盖层的 --instant）
+    Instant,
+    /// 工具栏模式（标注/保存/贴图/识别）
+    Toolbar,
+    /// 长截图（锁光标屏续拍）
+    Long,
+}
+
+impl SnipasteMode {
+    fn url_param(self) -> &'static str {
+        match self {
+            SnipasteMode::Instant => "instant",
+            SnipasteMode::Toolbar => "toolbar",
+            SnipasteMode::Long => "long",
+        }
+    }
+}
+
+fn overlay_windows(app: &tauri::AppHandle) -> Vec<tauri::WebviewWindow> {
+    let mut wins: Vec<tauri::WebviewWindow> = app
+        .webview_windows()
+        .into_iter()
+        .filter(|(label, _)| label.starts_with(OVERLAY_PREFIX))
+        .map(|(_, w)| w)
+        .collect();
+    wins.sort_by_key(|w| w.label().to_string());
+    wins
 }
 
 /// 上一轮覆盖窗口还在时先关掉（热键连按等场景），否则 build 会因 label 冲突失败
-fn close_stale_overlay(app: &tauri::AppHandle) {
-    if let Some(w) = app.get_webview_window("snipaste-overlay") {
+fn close_stale_overlays(app: &tauri::AppHandle) {
+    for w in overlay_windows(app) {
         let _ = w.close();
     }
 }
@@ -459,82 +438,344 @@ fn restore_main_window(app: &tauri::AppHandle) {
     }
 }
 
-#[tauri::command]
-async fn start_snipaste(app: tauri::AppHandle) -> Result<(), String> {
-    close_stale_overlay(&app);
+/// 单屏 overlay 窗口创建：先隐藏创建、物理坐标落位后再显示。
+/// builder 的逻辑 position 在混合 DPI 多屏下会被 tao 逐屏试探换算而落错显示器，
+/// 所以与贴图窗口一样用 Physical 精确落位。
+fn build_overlay_window(
+    app: &tauri::AppHandle,
+    index: usize,
+    m: &snipaste::SessionMonitor,
+    mode: SnipasteMode,
+) -> Result<tauri::WebviewWindow, String> {
+    use tauri::{PhysicalPosition, PhysicalSize, Position, Size, WebviewUrl, WebviewWindowBuilder};
+    let label = format!("{OVERLAY_PREFIX}-{index}");
+    // 显示器几何经 URL 参数带给窗口：CSS↔全局物理坐标换算不需要再异步取
+    let url = WebviewUrl::App(
+        format!(
+            "/snipaste-overlay?mode={}&m={index}&mx={}&my={}&mscale={}",
+            mode.url_param(),
+            m.x,
+            m.y,
+            m.scale
+        )
+        .into(),
+    );
+    let win = WebviewWindowBuilder::new(app, &label, url)
+        .title("截图")
+        .visible(false)
+        .decorations(false)
+        .resizable(false)
+        .maximizable(false)
+        .always_on_top(true)
+        .shadow(false)
+        .skip_taskbar(true)
+        .build()
+        .map_err(|e| e.to_string())?;
+    win.set_position(Position::Physical(PhysicalPosition::new(m.x, m.y)))
+        .map_err(|e| e.to_string())?;
+    win.set_size(Size::Physical(PhysicalSize::new(m.width, m.height)))
+        .map_err(|e| e.to_string())?;
+    #[cfg(target_os = "macos")]
+    mac_overlay_chrome(&win);
+    win.show().map_err(|e| e.to_string())?;
+    let _ = win.set_focus();
+    Ok(win)
+}
 
-    // 全屏截图（光标所在显示器，物理像素）
-    let cursor = app.cursor_position().map_err(|e| e.to_string())?;
-    let mut cap = snipaste::capture_monitor_containing(cursor.x, cursor.y)
-        .map_err(|e: anyhow::Error| e.to_string())?;
-    // screens crate 的 scale_factor 在部分机器上误报 1.0，以 Tauri（tao，DPI 感知）为准
-    if let Ok(Some(m)) = app.monitor_from_point(cursor.x, cursor.y) {
-        cap.scale = m.scale_factor();
+/// macOS：把 overlay 抬到菜单栏之上并加入所有 Space。
+/// tao 的 always_on_top 只是 floating 层，盖不住 level 24 的菜单栏，
+/// 也进不了全屏 App 的 Space——旧 PyQt 覆盖层用同样的常量（25）解决。
+#[cfg(target_os = "macos")]
+fn mac_overlay_chrome(win: &tauri::WebviewWindow) {
+    use objc2::msg_send;
+    use objc2::runtime::AnyObject;
+
+    // NSWindowCollectionBehaviorCanJoinAllSpaces = 1 << 0
+    // NSWindowCollectionBehaviorFullScreenAuxiliary = 1 << 8
+    const CAN_JOIN_ALL_SPACES: usize = 1 << 0;
+    const FULL_SCREEN_AUXILIARY: usize = 1 << 8;
+
+    let Ok(ptr) = win.ns_window() else { return };
+    if ptr.is_null() {
+        return;
     }
-    snipaste::set_session_monitor(cap.x, cap.y, cap.width, cap.height, cap.scale);
+    // SAFETY: ptr 是 tao 持有的 NSWindow，这里只调两个不改引用计数的 setter
+    unsafe {
+        let window: &AnyObject = &*(ptr as *const AnyObject);
+        // NSWindowLevel 25 > NSMainMenuWindowLevel(24)
+        let _: () = msg_send![window, setLevel: 25.0_f64];
+        let _: () = msg_send![window, setCollectionBehavior: (CAN_JOIN_ALL_SPACES | FULL_SCREEN_AUXILIARY)];
+    }
+}
 
-    // 保存到临时文件
-    let path = snipaste::SnipasteManager::generate_temp_path("snipaste");
-    snipaste::SnipasteManager::save_to_file(&cap.png, &path)
-        .map_err(|e: anyhow::Error| e.to_string())?;
+/// macOS 屏幕录制权限预检（CoreGraphics，10.15+）。权限记在主 App bundle 身上，
+/// 主进程抓屏直接命中授权；helper 时代整屏黑图的根因就是抓屏进程没有这个授权。
+#[cfg(target_os = "macos")]
+fn preflight_screen_capture() -> bool {
+    #[link(name = "CoreGraphics", kind = "framework")]
+    extern "C" {
+        // Boolean CGPreflightScreenCaptureAccess(void)
+        fn CGPreflightScreenCaptureAccess() -> u8;
+    }
+    unsafe { CGPreflightScreenCaptureAccess() != 0 }
+}
 
-    let path_str = path.to_string_lossy().to_string();
-    snipaste::SnipasteManager::set_last_screenshot(path_str.clone());
-    snipaste::push_history(path_str.clone());
+/// 结束本轮会话：清状态、关全部 overlay、还主窗口。
+/// overlay 窗口都活在主进程内，不存在子进程孤儿问题；这里同时递增会话代次，
+/// 让空闲计时任务退出。
+fn teardown_session(app: &tauri::AppHandle) {
+    snipaste::clear_session();
+    SESSION_SEQ.fetch_add(1, Ordering::SeqCst);
+    close_stale_overlays(app);
+    restore_main_window(app);
+}
+
+/// 用户取消（ESC/空白单击/超时）：比收尾多一个 cancel 事件给主窗口
+fn cancel_session(app: &tauri::AppHandle) {
+    teardown_session(app);
+    let _ = app.emit("snipaste-cancel", ());
+}
+
+/// 会话空闲计时：每 5s 查一次，超时自动取消；新会话开始后代次不符即退出
+fn start_idle_timeout(app: &tauri::AppHandle) {
+    let handle = app.clone();
+    let seq = SESSION_SEQ.load(Ordering::SeqCst);
+    tauri::async_runtime::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            if SESSION_SEQ.load(Ordering::SeqCst) != seq {
+                return;
+            }
+            if snipaste::activity_elapsed_secs() >= OVERLAY_IDLE_TIMEOUT_SECS {
+                cancel_session(&handle);
+                return;
+            }
+        }
+    });
+}
+
+/// 截图会话入口：抓屏（普通/识别模式抓全部屏支持跨屏拖选，长截图锁光标屏）→
+/// 每屏建一个覆盖窗口
+fn start_overlay_session(app: &tauri::AppHandle, mode: SnipasteMode) -> Result<(), String> {
+    // 热键连按：先收掉上一轮，防止 label 冲突与窗口堆积
+    close_stale_overlays(app);
+    snipaste::clear_session();
+    snipaste::touch_activity();
+
+    #[cfg(target_os = "macos")]
+    if !preflight_screen_capture() {
+        let _ = app.emit(
+            "snipaste-error",
+            "需要「屏幕录制」权限：请到 系统设置 → 隐私与安全性 → 屏幕录制 勾选 MomentOCR 后重试"
+                .to_string(),
+        );
+        return Err("screen capture permission not granted".to_string());
+    }
+
+    let cursor = app.cursor_position().map_err(|e| e.to_string())?;
+
+    // 抓屏 + 落盘临时 PNG（每屏一张）
+    let mut monitors: Vec<snipaste::SessionMonitor> = Vec::new();
+    if mode == SnipasteMode::Long {
+        // 长截图续拍要锁定同一块屏
+        snipaste::SnipasteManager::clear_long_screenshot_paths();
+        let mut cap = snipaste::capture_monitor_containing(cursor.x, cursor.y)
+            .map_err(|e: anyhow::Error| e.to_string())?;
+        // screens crate 的 scale_factor 在部分机器上误报 1.0，以 Tauri（tao，DPI 感知）为准
+        if let Ok(Some(m)) = app.monitor_from_point(cursor.x, cursor.y) {
+            cap.scale = m.scale_factor();
+        }
+        snipaste::set_session_monitor(cap.x, cap.y, cap.width, cap.height, cap.scale);
+        let path = snipaste::SnipasteManager::generate_temp_path("longshot");
+        snipaste::SnipasteManager::save_to_file(&cap.png, &path)
+            .map_err(|e: anyhow::Error| e.to_string())?;
+        let path_str = path.to_string_lossy().to_string();
+        snipaste::SnipasteManager::add_long_screenshot_path(path_str.clone());
+        monitors.push(snipaste::SessionMonitor {
+            x: cap.x,
+            y: cap.y,
+            width: cap.width,
+            height: cap.height,
+            scale: cap.scale,
+            path: path_str,
+        });
+    } else {
+        let caps = snipaste::capture_all_monitors(app)
+            .map_err(|e: anyhow::Error| e.to_string())?;
+        for cap in caps {
+            let path = snipaste::SnipasteManager::generate_temp_path("snipaste");
+            snipaste::SnipasteManager::save_to_file(&cap.png, &path)
+                .map_err(|e: anyhow::Error| e.to_string())?;
+            monitors.push(snipaste::SessionMonitor {
+                x: cap.x,
+                y: cap.y,
+                width: cap.width,
+                height: cap.height,
+                scale: cap.scale,
+                path: path.to_string_lossy().to_string(),
+            });
+        }
+    }
+
+    // last_screenshot 指向光标所在屏（历史回放与长截图续拍的基准帧）；
+    // 历史每会话只入队这一帧，避免多屏帧污染回放序列
+    let cursor_index = monitors.iter().position(|m| {
+        cursor.x >= m.x as f64
+            && cursor.x < (m.x + m.width as i32) as f64
+            && cursor.y >= m.y as f64
+            && cursor.y < (m.y + m.height as i32) as f64
+    })
+    .unwrap_or(0);
+    snipaste::SnipasteManager::set_last_screenshot(monitors[cursor_index].path.clone());
+    snipaste::push_history(monitors[cursor_index].path.clone());
+
+    snipaste::set_session_monitors(monitors.clone());
+    snipaste::set_session_instant(mode == SnipasteMode::Instant);
 
     // 隐藏主窗口
     if let Some(main_window) = app.get_webview_window("main") {
         main_window.hide().map_err(|e: tauri::Error| e.to_string())?;
     }
 
-    // 创建覆盖窗口：精确覆盖捕获的显示器
-    let url = tauri::WebviewUrl::App("/snipaste-overlay".into());
-    if let Err(e) = build_snipaste_overlay(&app, "截图", url, &cap) {
-        restore_main_window(&app);
-        return Err(e);
+    for (i, m) in monitors.iter().enumerate() {
+        if let Err(e) = build_overlay_window(app, i, m, mode) {
+            teardown_session(app);
+            return Err(e);
+        }
     }
 
+    start_idle_timeout(app);
+    Ok(())
+}
+
+/// instant 模式松开鼠标：裁剪 → 通知前端识别 → 收尾
+fn finish_instant_ocr(app: &tauri::AppHandle, rect: (f64, f64, f64, f64)) -> Result<(), String> {
+    let png = snipaste::crop_session_region(rect).map_err(|e: anyhow::Error| e.to_string())?;
+    let path = snipaste::SnipasteManager::generate_temp_path("crop");
+    snipaste::SnipasteManager::save_to_file(&png, &path)
+        .map_err(|e: anyhow::Error| e.to_string())?;
+    let payload = serde_json::json!({ "path": path.to_string_lossy() });
+    teardown_session(app);
+    let _ = app.emit("snipaste-ocr", payload);
     Ok(())
 }
 
 #[tauri::command]
+async fn start_snipaste(app: tauri::AppHandle, mode: Option<String>) -> Result<(), String> {
+    let mode = match mode.as_deref() {
+        Some("instant") => SnipasteMode::Instant,
+        Some("long") => SnipasteMode::Long,
+        _ => SnipasteMode::Toolbar,
+    };
+    start_overlay_session(&app, mode)
+}
+
+/// 兼容既有前端入口：长截图独立命令
+#[tauri::command]
 async fn start_long_screenshot(app: tauri::AppHandle) -> Result<(), String> {
-    close_stale_overlay(&app);
+    start_overlay_session(&app, SnipasteMode::Long)
+}
 
-    // 清空之前的长截图路径
-    snipaste::SnipasteManager::clear_long_screenshot_paths();
+/// 各 overlay 窗口加载自己那块屏的定格图
+#[tauri::command]
+fn snipaste_get_monitor_base64(index: usize) -> Result<String, String> {
+    let monitors = snipaste::get_session_monitors();
+    let m = monitors
+        .get(index)
+        .ok_or_else(|| "没有该显示器的截图".to_string())?;
+    snipaste::SnipasteManager::image_to_base64(&m.path)
+        .map_err(|e: anyhow::Error| e.to_string())
+}
 
-    // 全屏截图（光标所在显示器）
-    let cursor = app.cursor_position().map_err(|e| e.to_string())?;
-    let mut cap = snipaste::capture_monitor_containing(cursor.x, cursor.y)
+/// 会话显示器列表（前端判断选区是否跨屏用）
+#[tauri::command]
+fn snipaste_get_monitors() -> Vec<snipaste::SessionMonitor> {
+    snipaste::get_session_monitors()
+}
+
+/// overlay 窗口上报指针事件（全局物理坐标）。Rust 是选区状态的唯一事实源，
+/// 每次变更广播给所有 overlay 窗口渲染。
+#[tauri::command]
+fn snipaste_select_event(
+    app: tauri::AppHandle,
+    kind: String,
+    x: f64,
+    y: f64,
+    w: Option<f64>,
+    h: Option<f64>,
+) -> Result<(), String> {
+    snipaste::touch_activity();
+    match kind.as_str() {
+        "down" => snipaste::selection_down(x, y),
+        "move" => snipaste::selection_move(x, y),
+        // 单击吸附窗口：窗口侧把检测到的完整矩形直接采纳
+        "adopt" => snipaste::selection_set_rect(x, y, w.unwrap_or(0.0), h.unwrap_or(0.0)),
+        "up" => snipaste::selection_up(),
+        // 历史切换/贴图后继续框选：只清选区，会话保留
+        "clear" => snipaste::selection_clear(),
+        _ => return Ok(()),
+    }
+    let state = snipaste::selection_snapshot();
+
+    if kind == "up" || kind == "adopt" {
+        match state.rect() {
+            Some(rect) if snipaste::is_session_instant() => {
+                // instant 模式：松开即识别；空白处小于 10×10 的单击视为取消
+                return if rect.2 >= 10.0 && rect.3 >= 10.0 {
+                    finish_instant_ocr(&app, rect)
+                } else if kind == "adopt" {
+                    // 检测到的窗口再小也是合法选区
+                    finish_instant_ocr(&app, rect)
+                } else {
+                    cancel_session(&app);
+                    Ok(())
+                };
+            }
+            Some(_) => {
+                // 工具栏模式：最终态广播，各窗口据此判断工具栏归属
+                let _ = app.emit("snipaste-selection", state);
+            }
+            None => {
+                if snipaste::is_session_instant() {
+                    cancel_session(&app);
+                }
+            }
+        }
+        return Ok(());
+    }
+    let _ = app.emit("snipaste-selection", state);
+    Ok(())
+}
+
+/// 跨屏选区矩形（全局物理像素）
+#[derive(serde::Deserialize)]
+struct CropRect {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+}
+
+/// 跨屏裁剪：全局物理矩形 → 拼合 PNG（落盘 + base64）。
+/// OCR 恒走它；保存/复制/贴图在选区跨屏时也走它（该场景无法带窗口局部标注）。
+#[tauri::command]
+fn snipaste_crop_session(rect: CropRect) -> Result<snipaste::CropOutput, String> {
+    use base64::Engine;
+    let png = snipaste::crop_session_region((rect.x, rect.y, rect.width, rect.height))
         .map_err(|e: anyhow::Error| e.to_string())?;
-    if let Ok(Some(m)) = app.monitor_from_point(cursor.x, cursor.y) {
-        cap.scale = m.scale_factor();
-    }
-    snipaste::set_session_monitor(cap.x, cap.y, cap.width, cap.height, cap.scale);
-
-    // 保存到临时文件
-    let path = snipaste::SnipasteManager::generate_temp_path("longshot");
-    snipaste::SnipasteManager::save_to_file(&cap.png, &path)
+    let path = snipaste::SnipasteManager::generate_temp_path("crop");
+    snipaste::SnipasteManager::save_to_file(&png, &path)
         .map_err(|e: anyhow::Error| e.to_string())?;
+    Ok(snipaste::CropOutput {
+        path: path.to_string_lossy().to_string(),
+        base64: base64::engine::general_purpose::STANDARD.encode(&png),
+    })
+}
 
-    let path_str = path.to_string_lossy().to_string();
-    snipaste::SnipasteManager::add_long_screenshot_path(path_str.clone());
-    snipaste::SnipasteManager::set_last_screenshot(path_str.clone());
-    snipaste::push_history(path_str.clone());
-
-    // 隐藏主窗口
-    if let Some(main_window) = app.get_webview_window("main") {
-        main_window.hide().map_err(|e: tauri::Error| e.to_string())?;
-    }
-
-    // 创建覆盖窗口（长截图模式，与 start_snipaste 同款几何）
-    let url = tauri::WebviewUrl::App("/snipaste-overlay?mode=long".into());
-    if let Err(e) = build_snipaste_overlay(&app, "长截图", url, &cap) {
-        restore_main_window(&app);
-        return Err(e);
-    }
-
+/// 用户取消（ESC 等）
+#[tauri::command]
+fn snipaste_cancel(app: tauri::AppHandle) -> Result<(), String> {
+    cancel_session(&app);
     Ok(())
 }
 
@@ -576,8 +817,8 @@ fn snipaste_stitch_screenshots() -> Result<String, String> {
 #[tauri::command]
 async fn snipaste_capture_next(app: tauri::AppHandle) -> Result<String, String> {
     // 隐藏覆盖窗口，避免把 overlay 自己拍进去
-    let overlay = app.get_webview_window("snipaste-overlay");
-    if let Some(w) = &overlay {
+    let overlays = overlay_windows(&app);
+    for w in &overlays {
         w.hide().map_err(|e| e.to_string())?;
     }
     tokio::time::sleep(std::time::Duration::from_millis(150)).await;
@@ -597,7 +838,7 @@ async fn snipaste_capture_next(app: tauri::AppHandle) -> Result<String, String> 
     })();
 
     // 恢复覆盖窗口
-    if let Some(w) = &overlay {
+    for w in &overlays {
         let _ = w.show();
         let _ = w.set_focus();
     }
@@ -661,17 +902,15 @@ async fn snipaste_create_pin(
     snipaste::SnipasteManager::save_to_file(&data, &path)
         .map_err(|e: anyhow::Error| e.to_string())?;
 
-    // 用会话显示器把 overlay 的 CSS 坐标换算成全局物理坐标（贴图 1:1 显示物理像素）
-    let (mx, my, _, _, scale) = snipaste::get_session_monitor()
-        .ok_or("没有会话显示器记录")?;
-    let px = mx as f64 + (x * scale).round();
-    let py = my as f64 + (y * scale).round();
-    let pw = ((width * scale).round().max(40.0)) as u32;
-    let ph = ((height * scale).round().max(40.0)) as u32;
+    // 前端传来的已是全局物理矩形（贴图 1:1 显示物理像素；跨屏选区时图像为 Rust 拼合图）
+    let px = x.round();
+    let py = y.round();
+    let pw = (width.round().max(40.0)) as u32;
+    let ph = (height.round().max(40.0)) as u32;
 
     let id = snipaste::next_pin_id();
     let label = format!("pin-{}", id);
-    eprintln!("[create_pin] session=({mx},{my}) scale={scale} css=({x},{y},{width},{height}) phys=({px},{py},{pw},{ph}) label={label}");
+    eprintln!("[create_pin] phys=({px},{py},{pw},{ph}) label={label}");
     snipaste::insert_pin(
         &label,
         snipaste::PinData {
@@ -776,17 +1015,8 @@ fn snipaste_history_step(delta: i32) -> Result<String, String> {
 
 #[tauri::command]
 fn snipaste_finish(app: tauri::AppHandle) -> Result<(), String> {
-    // 关闭覆盖窗口
-    if let Some(overlay) = app.get_webview_window("snipaste-overlay") {
-        overlay.close().map_err(|e: tauri::Error| e.to_string())?;
-    }
-
-    // 显示主窗口
-    if let Some(main_window) = app.get_webview_window("main") {
-        main_window.show().map_err(|e: tauri::Error| e.to_string())?;
-        main_window.set_focus().map_err(|e: tauri::Error| e.to_string())?;
-    }
-
+    // OCR/保存/复制等动作完成后由前端调用：统一走会话收尾
+    teardown_session(&app);
     Ok(())
 }
 
@@ -817,17 +1047,19 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
-            start_screenshot_overlay, select_image_files, save_temp_files,
+            select_image_files, save_temp_files,
             ocr_paddleocr, ocr_rapidocr, get_local_components_status, install_local_component, remove_local_component,
             ocr_openai, ocr_ollama, translate_google, translate_custom, translate_claude, translate_hymt,
             ocr_custom_vision, ocr_claude, list_models, set_autostart, get_autostart, clear_temp_cache,
-            register_shortcuts, set_tray_behavior, set_screenshot_mode, focus_main_window, quit_app,
+            register_shortcuts, set_tray_behavior, focus_main_window, quit_app,
             start_snipaste, start_long_screenshot, snipaste_crop_region,
             snipaste_stitch_screenshots, snipaste_capture_next, snipaste_save_screenshot,
             snipaste_copy_to_clipboard, snipaste_get_screenshot_base64,
             snipaste_create_pin, snipaste_finish, snipaste_get_pin_image,
             snipaste_list_pins, snipaste_set_pin_visible, snipaste_close_pin,
-            snipaste_toggle_mouse_through, snipaste_detect_window, snipaste_history_step
+            snipaste_toggle_mouse_through, snipaste_detect_window, snipaste_history_step,
+            snipaste_get_monitor_base64, snipaste_get_monitors, snipaste_select_event,
+            snipaste_crop_session, snipaste_cancel
         ])
         .on_window_event(|window, event| {
             let label = window.label().to_string();
@@ -862,10 +1094,14 @@ pub fn run() {
         })
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(|_app, event| {
-            // 退出时收掉本地翻译的 llama-server 子进程，别让它变成孤儿进程继续占内存
+        .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
+                // 退出时收掉本地翻译的 llama-server 子进程，别让它变成孤儿进程继续占内存
                 let _ = translate_engine::shutdown();
+                // 截图覆盖层窗口虽在主进程内、会随进程消失，这里显式关一遍兜底
+                for w in overlay_windows(app) {
+                    let _ = w.close();
+                }
             }
         });
 }

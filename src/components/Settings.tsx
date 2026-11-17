@@ -26,14 +26,11 @@ const TRANSLATE_QUANTS = [
   { id: 'standard', label: '标准（约 1081 MB，内存约 2.1 GB，翻译最快）', download_mb: 1081 },
 ];
 
-/** 本地组件总览：OCR/截图共用隔离运行时，translate（HY-MT 翻译）独立装配 */
+/** 本地组件总览：OCR 用隔离运行时，translate（HY-MT 翻译）独立装配 */
 interface ComponentsStatus {
   runtime_installed: boolean;
   runtime_download_mb: number;
   ocr: ComponentStatus;
-  /** Windows 安装包自带覆盖层，截图组件就不必再下载 */
-  screenshot_bundled: boolean;
-  screenshot: ComponentStatus;
   translate: ComponentStatus;
   /** -local-inference 变体把 llama.cpp 打进了安装包，推理器无需下载 */
   translate_runtime_bundled: boolean;
@@ -122,7 +119,7 @@ function Settings({ shortcutIssues = {}, autostartIssue = null }: {
     return () => { unlisten.then((fn) => fn()); };
   }, []);
 
-  const installComponent = async (id: 'ocr' | 'screenshot' | 'translate', quant?: string) => {
+  const installComponent = async (id: 'ocr' | 'translate', quant?: string) => {
     setEngineBusy(id);
     setEngineMsg((m) => ({ ...m, [id]: null }));
     setEngineProgress({ stage: 'python', percent: 0, detail: '正在准备下载…' });
@@ -138,7 +135,7 @@ function Settings({ shortcutIssues = {}, autostartIssue = null }: {
     }
   };
 
-  const removeComponent = async (id: 'ocr' | 'screenshot' | 'translate', label: string) => {
+  const removeComponent = async (id: 'ocr' | 'translate', label: string) => {
     if (!window.confirm(`移除${label}？需要时再重新下载。`)) return;
     setEngineBusy(id);
     setEngineMsg((m) => ({ ...m, [id]: null }));
@@ -267,23 +264,6 @@ function Settings({ shortcutIssues = {}, autostartIssue = null }: {
         {/* ===== 截图 ===== */}
         {activeTab === 'screenshot' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-            <SettingsCard title="截图组件">
-              <LocalComponentPanel
-                id="screenshot"
-                title="截图覆盖层"
-                description="抓屏与选区用的全屏覆盖窗口（PyQt5）。Windows 安装包已随包自带，其他平台按需下载到应用自己的目录。"
-                status={components?.screenshot ?? null}
-                bundled={components?.screenshot_bundled ?? false}
-                runtimeInstalled={components?.runtime_installed ?? false}
-                runtimeDownloadMb={components?.runtime_download_mb ?? 12}
-                busy={engineBusy === 'screenshot'}
-                progress={engineBusy === 'screenshot' ? engineProgress : null}
-                msg={engineMsg.screenshot ?? null}
-                onInstall={() => installComponent('screenshot')}
-                onRemove={() => removeComponent('screenshot', '截图组件')}
-                onRefresh={refreshComponents}
-              />
-            </SettingsCard>
             <SettingsCard title="截图设置">
               <CheckboxItem label="截图时隐藏主窗口" checked={screenshot.hideMainWindow} onChange={(v) => setScreenshot({ hideMainWindow: v })} />
             </SettingsCard>

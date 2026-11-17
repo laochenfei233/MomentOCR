@@ -1,7 +1,7 @@
 {
   "identifier": "default",
   "description": "Default capabilities for MomentOCR",
-  "windows": ["main", "screenshot-overlay", "snipaste-overlay", "pin-*"],
+  "windows": ["main", "snipaste-overlay-*", "pin-*"],
   "permissions": [
     "core:default",
     "core:window:default",

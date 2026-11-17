@@ -138,6 +138,264 @@ pub fn capture_session_monitor() -> Result<MonitorCapture> {
     )
 }
 
+/// 会话中的每块显示器：几何 + 该屏定格 PNG 的临时路径（多屏会话每屏一条）
+#[derive(Clone, serde::Serialize)]
+pub struct SessionMonitor {
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+    pub scale: f64,
+    pub path: String,
+}
+
+static SESSION_MONITORS: Lazy<Mutex<Vec<SessionMonitor>>> =
+    Lazy::new(|| Mutex::new(Vec::new()));
+
+pub fn set_session_monitors(monitors: Vec<SessionMonitor>) {
+    *SESSION_MONITORS.lock().unwrap() = monitors;
+}
+
+pub fn get_session_monitors() -> Vec<SessionMonitor> {
+    SESSION_MONITORS.lock().unwrap().clone()
+}
+
+/// 跨屏裁剪输出：临时文件路径 + base64（保存/复制/贴图直接用字节）
+#[derive(serde::Serialize)]
+pub struct CropOutput {
+    pub path: String,
+    pub base64: String,
+}
+
+/// 捕获全部显示器（物理像素）。scale 以 Tauri（DPI 感知）为准回填：
+/// screens crate 的 scale_factor 在部分机器上误报 1.0。
+pub fn capture_all_monitors(app: &tauri::AppHandle) -> Result<Vec<MonitorCapture>> {
+    let screens = Screen::all()?;
+    if screens.is_empty() {
+        return Err(anyhow::anyhow!("找不到可用屏幕"));
+    }
+    let tauri_monitors = app.available_monitors().unwrap_or_default();
+    let mut caps = Vec::with_capacity(screens.len());
+    for screen in screens {
+        let d = &screen.display_info;
+        let img = screen.capture()?;
+        let scale = tauri_monitors
+            .iter()
+            .find(|m| {
+                m.position().x == d.x
+                    && m.position().y == d.y
+                    && m.size().width == d.width
+                    && m.size().height == d.height
+            })
+            .map(|m| m.scale_factor())
+            .unwrap_or(d.scale_factor as f64);
+        let mut buf = Cursor::new(Vec::new());
+        img.write_to(&mut buf, screenshots::image::ImageOutputFormat::Png)?;
+        caps.push(MonitorCapture {
+            png: buf.into_inner(),
+            scale,
+            x: d.x,
+            y: d.y,
+            width: d.width,
+            height: d.height,
+        });
+    }
+    Ok(caps)
+}
+
+// ============ 跨屏选区会话 ============
+
+/// 跨屏选区的共享状态：所有 overlay 窗口把全局物理坐标上报到 Rust，
+/// 由 Rust 广播给每个窗口渲染。覆盖层铺满全部屏幕，拖拽期间的 move/up
+/// 必然落在某个窗口上，因此不需要全局鼠标钩子。
+#[derive(Clone, Default, serde::Serialize)]
+pub struct SelectionState {
+    pub dragging: bool,
+    pub start: Option<(f64, f64)>,
+    pub current: (f64, f64),
+}
+
+impl SelectionState {
+    /// 归一化后的全局物理矩形 (x, y, w, h)；未开始拖拽时为 None
+    pub fn rect(&self) -> Option<(f64, f64, f64, f64)> {
+        let (sx, sy) = self.start?;
+        let (cx, cy) = self.current;
+        Some((
+            sx.min(cx),
+            sy.min(cy),
+            (sx - cx).abs(),
+            (sy - cy).abs(),
+        ))
+    }
+}
+
+static SELECTION: Lazy<Mutex<SelectionState>> = Lazy::new(|| Mutex::new(SelectionState::default()));
+
+/// 当前会话是否为「松开即识别」模式（instant）
+static SESSION_INSTANT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// 最后一次用户活动时刻（空闲超时用）
+static LAST_ACTIVITY: Lazy<Mutex<std::time::Instant>> =
+    Lazy::new(|| Mutex::new(std::time::Instant::now()));
+
+pub fn set_session_instant(instant: bool) {
+    SESSION_INSTANT.store(instant, std::sync::atomic::Ordering::SeqCst);
+}
+
+pub fn is_session_instant() -> bool {
+    SESSION_INSTANT.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+pub fn touch_activity() {
+    *LAST_ACTIVITY.lock().unwrap() = std::time::Instant::now();
+}
+
+pub fn activity_elapsed_secs() -> u64 {
+    LAST_ACTIVITY.lock().unwrap().elapsed().as_secs()
+}
+
+pub fn selection_down(x: f64, y: f64) {
+    *SELECTION.lock().unwrap() = SelectionState {
+        dragging: true,
+        start: Some((x, y)),
+        current: (x, y),
+    };
+}
+
+pub fn selection_move(x: f64, y: f64) {
+    let mut s = SELECTION.lock().unwrap();
+    if s.dragging {
+        s.current = (x, y);
+    }
+}
+
+pub fn selection_up() {
+    SELECTION.lock().unwrap().dragging = false;
+}
+
+/// 清空选区（历史切换/贴图后继续框选等场景）
+pub fn selection_clear() {
+    *SELECTION.lock().unwrap() = SelectionState::default();
+}
+
+/// 单击吸附窗口：直接采纳完整矩形
+pub fn selection_set_rect(x: f64, y: f64, w: f64, h: f64) {
+    *SELECTION.lock().unwrap() = SelectionState {
+        dragging: false,
+        start: Some((x, y)),
+        current: (x + w, y + h),
+    };
+}
+
+pub fn selection_snapshot() -> SelectionState {
+    SELECTION.lock().unwrap().clone()
+}
+
+/// 清空会话状态（显示器列表、选区、instant 标记）
+pub fn clear_session() {
+    SESSION_MONITORS.lock().unwrap().clear();
+    *SELECTION.lock().unwrap() = SelectionState::default();
+    SESSION_INSTANT.store(false, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// 从会话显示器定格图中裁剪全局物理矩形（可跨屏）。
+/// 相交屏缩放不一致时统一放大到最大 scale（内容密度对齐，OCR 友好），
+/// 与旧 PyQt 覆盖层「最大 ratio 画布」同思路。
+pub fn crop_session_region(rect: (f64, f64, f64, f64)) -> Result<Vec<u8>> {
+    use screenshots::image::{imageops, io::Reader, ImageOutputFormat, RgbaImage};
+
+    let (rx, ry, rw, rh) = rect;
+    if rw < 1.0 || rh < 1.0 {
+        anyhow::bail!("选区太小");
+    }
+    let (rx, ry) = (rx.round() as i32, ry.round() as i32);
+    let (rw, rh) = (rw.round() as i32, rh.round() as i32);
+    let (rx2, ry2) = (rx + rw, ry + rh);
+
+    let monitors = get_session_monitors();
+    let mut hits: Vec<&SessionMonitor> = monitors
+        .iter()
+        .filter(|m| {
+            rx < m.x + m.width as i32
+                && rx2 > m.x
+                && ry < m.y + m.height as i32
+                && ry2 > m.y
+        })
+        .collect();
+    if hits.is_empty() {
+        anyhow::bail!("选区不在任何屏幕内");
+    }
+    // 拼接顺序稳定：按阅读序（先上后下、先左后右）
+    hits.sort_by_key(|m| (m.y, m.x));
+
+    let max_scale = hits.iter().map(|m| m.scale).fold(0.0_f64, f64::max);
+    let mut parts: Vec<RgbaImage> = Vec::with_capacity(hits.len());
+    for m in &hits {
+        let ix = rx.max(m.x);
+        let iy = ry.max(m.y);
+        let ix2 = rx2.min(m.x + m.width as i32);
+        let iy2 = ry2.min(m.y + m.height as i32);
+        if ix2 <= ix || iy2 <= iy {
+            continue;
+        }
+        let data = std::fs::read(&m.path)?;
+        let img = Reader::new(Cursor::new(data))
+            .with_guessed_format()?
+            .decode()?
+            .to_rgba8();
+        let crop = imageops::crop_imm(
+            &img,
+            (ix - m.x) as u32,
+            (iy - m.y) as u32,
+            (ix2 - ix) as u32,
+            (iy2 - iy) as u32,
+        )
+        .to_image();
+        // 低密度屏放大到最大 scale，保证拼接后文字大小一致
+        let part = if (m.scale - max_scale).abs() > f64::EPSILON && m.scale > 0.0 {
+            let f = max_scale / m.scale;
+            let nw = ((crop.width() as f64) * f).round().max(1.0) as u32;
+            let nh = ((crop.height() as f64) * f).round().max(1.0) as u32;
+            imageops::resize(&crop, nw, nh, imageops::FilterType::CatmullRom)
+        } else {
+            crop
+        };
+        parts.push(part);
+    }
+    if parts.is_empty() {
+        anyhow::bail!("选区不在任何屏幕内");
+    }
+
+    let encoded = if parts.len() == 1 {
+        let mut buf = Cursor::new(Vec::new());
+        parts[0].write_to(&mut buf, ImageOutputFormat::Png)?;
+        buf.into_inner()
+    } else {
+        // 同一行的屏横向拼接；仅上下排布的屏纵向拼接
+        let vertical = hits.iter().all(|m| m.x == hits[0].x);
+        let total: u32 = parts.iter().map(|p| if vertical { p.height() } else { p.width() }).sum();
+        let span: u32 = parts.iter().map(|p| if vertical { p.width() } else { p.height() }).max().unwrap_or(1);
+        let mut canvas = RgbaImage::new(
+            if vertical { span } else { total },
+            if vertical { total } else { span },
+        );
+        let mut pos = 0u32;
+        for p in &parts {
+            if vertical {
+                imageops::overlay(&mut canvas, p, 0, pos as i64);
+                pos += p.height();
+            } else {
+                imageops::overlay(&mut canvas, p, pos as i64, 0);
+                pos += p.width();
+            }
+        }
+        let mut buf = Cursor::new(Vec::new());
+        canvas.write_to(&mut buf, ImageOutputFormat::Png)?;
+        buf.into_inner()
+    };
+    Ok(encoded)
+}
+
 /// 截图历史环形缓冲（最近 10 张），供 overlay 历史回放
 static HISTORY: Lazy<Mutex<std::collections::VecDeque<String>>> =
     Lazy::new(|| Mutex::new(std::collections::VecDeque::new()));

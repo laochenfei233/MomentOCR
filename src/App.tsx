@@ -68,7 +68,7 @@ function App() {
       const { action } = event.payload;
       switch (action) {
         case 'screenshot':
-          invoke('start_screenshot_overlay');
+          invoke('start_snipaste', { mode: 'instant' });
           break;
         case 'copy':
           copyRef.current();
@@ -85,15 +85,6 @@ function App() {
       }
     });
     return () => { unlisten.then((fn) => fn()); };
-  }, []);
-
-  // PyQt 截图流程裁剪完成：结果归位「截图识别」标签页
-  useEffect(() => {
-    const u = listen<string>('screenshot-cropped', () => {
-      setTab('screenshot');
-      setShowSettings(false);
-    });
-    return () => { u.then((fn) => fn()); };
   }, []);
 
   // snipaste overlay 的 OCR / 长截图结果：路径 → 走主识别管线（结果进 OcrResult 与历史）
@@ -270,11 +261,14 @@ function App() {
     }).catch((err) => console.error('[tray] sync behavior failed:', err));
   }, [quickAction]);
 
-  // 截图模式同理：截图覆盖层是独立子进程，托盘菜单那条入口又完全不经过前端。
-  // 框选松开即识别是唯一行为，恒为 instant（原 instantRecognize 设置项已删）。
+  // 截图链路的致命错误（如 mac 未授权「屏幕录制」）要用户看得见：
+  // 主窗口可能正缩在托盘里，先拉回前台再弹内容
   useEffect(() => {
-    invoke('set_screenshot_mode', { instant: true })
-      .catch((err) => console.error('[screenshot] sync mode failed:', err));
+    const u = listen<string>('snipaste-error', (e) => {
+      invoke('focus_main_window').catch(() => {});
+      alert(e.payload);
+    });
+    return () => { u.then((fn) => fn()); };
   }, []);
 
   // 菜单里的「退出」就该真退出。走 quit_app 而不是关窗口：

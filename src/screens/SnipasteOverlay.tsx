@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { emit, listen } from '@tauri-apps/api/event';
 import { useSnipasteStore, type Point, type Annotation, type AnnotationType } from '../stores/snipasteStore';
 import { drawAnnotation, hitTestAnnotation, getResizeHandles } from '../lib/annotations';
 import {
@@ -14,6 +15,14 @@ interface Selection {
   startY: number;
   endX: number;
   endY: number;
+}
+
+/// Rust snipaste::SelectionState（全局物理坐标）。选区是会话级共享状态：
+/// Rust 为唯一事实源，所有 overlay 窗口渲染同一份广播。
+interface GlobalSelection {
+  dragging: boolean;
+  start: [number, number] | null;
+  current: [number, number];
 }
 
 interface GhostRect {
@@ -31,15 +40,42 @@ interface DetectRectRaw {
   height: number;
 }
 
+/// Rust snipaste::CropOutput
+interface CropOutput {
+  path: string;
+  base64: string;
+}
+
+/// 本窗口所属显示器（Rust 建窗时经 URL 参数写入）：
+/// ?mode=instant|toolbar|long&m={index}&mx={物理原点}&my=…&mscale={scale}
+function initMonitor() {
+  const params = new URLSearchParams(window.location.search);
+  return {
+    index: params.get('m') ? Number(params.get('m')) : 0,
+    x: Number(params.get('mx') ?? 0),
+    y: Number(params.get('my') ?? 0),
+    scale: Number(params.get('mscale') ?? 0) || 1,
+    fromUrl: params.get('mx') !== null,
+    mode: params.get('mode') ?? 'toolbar',
+  };
+}
+
+function base64ToBytes(b64: string): Uint8Array {
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
 const COLORS = ['#FF3B30', '#FF9500', '#FFCC00', '#34C759', '#007AFF', '#5856D6', '#AF52DE', '#000000', '#FFFFFF'];
 
 export default function SnipasteOverlay() {
   const [imageSrc, setImageSrc] = useState<string>('');
-  const [selection, setSelection] = useState<Selection | null>(null);
-  const [isDragging, setIsDragging] = useState(false);
-  const [showToolbar, setShowToolbar] = useState(false);
+  const [globalSel, setGlobalSel] = useState<GlobalSelection>({ dragging: false, start: null, current: [0, 0] });
   const [isLongScreenshot, setIsLongScreenshot] = useState(false);
-  const [showContinueBtn, setShowContinueBtn] = useState(false);
+  const [isInstant, setIsInstant] = useState(false);
   const [showColorPicker, setShowColorPicker] = useState(false);
   const [picking, setPicking] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
@@ -80,32 +116,93 @@ export default function SnipasteOverlay() {
   const containerRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
   const loupeRef = useRef<HTMLCanvasElement>(null);
-  const outerOriginRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  const monitorRef = useRef(initMonitor());
+  const monitorsRef = useRef<{ x: number; y: number; width: number; height: number }[]>([]);
   const lastDetectRef = useRef(0);
 
-  // 检查是否为长截图模式
+  // CSS↔全局物理坐标换算（dpr 与该屏 scale 一致，沿用分支已验证手法）
+  const dpr = window.devicePixelRatio || 1;
+  const toGlobal = useCallback((cssX: number, cssY: number) => ({
+    x: monitorRef.current.x + cssX * dpr,
+    y: monitorRef.current.y + cssY * dpr,
+  }), [dpr]);
+  const toLocalX = useCallback((gx: number) => (gx - monitorRef.current.x) / dpr, [dpr]);
+  const toLocalY = useCallback((gy: number) => (gy - monitorRef.current.y) / dpr, [dpr]);
+
+  // 选区（本地 CSS 视角，由全局广播换算；跨屏时坐标可能在视口外，遮罩/边框公式天然兼容）
+  const isDragging = globalSel.dragging;
+  const selection: Selection | null = globalSel.start ? {
+    startX: toLocalX(globalSel.start[0]),
+    startY: toLocalY(globalSel.start[1]),
+    endX: toLocalX(globalSel.current[0]),
+    endY: toLocalY(globalSel.current[1]),
+  } : null;
+
+  // 全局物理矩形（跨屏裁剪/贴图/工具栏归属判断用）
+  const gRect = globalSel.start ? (() => {
+    const sx = globalSel.start![0];
+    const sy = globalSel.start![1];
+    return {
+      x: Math.min(sx, globalSel.current[0]),
+      y: Math.min(sy, globalSel.current[1]),
+      width: Math.abs(globalSel.current[0] - sx),
+      height: Math.abs(globalSel.current[1] - sy),
+    };
+  })() : null;
+
+  // 工具栏归属：选区中心落在哪块屏，就由那块屏的窗口显示（跨屏选区只出现一个工具栏）
+  const ownBounds = {
+    x: monitorRef.current.x,
+    y: monitorRef.current.y,
+    w: window.innerWidth * dpr,
+    h: window.innerHeight * dpr,
+  };
+  const showToolbar = !!(gRect && !isDragging
+    && gRect.x + gRect.width / 2 >= ownBounds.x && gRect.x + gRect.width / 2 < ownBounds.x + ownBounds.w
+    && gRect.y + gRect.height / 2 >= ownBounds.y && gRect.y + gRect.height / 2 < ownBounds.y + ownBounds.h);
+
+  // 检查是否为长截图 / instant 模式
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    setIsLongScreenshot(params.get('mode') === 'long');
+    setIsLongScreenshot(monitorRef.current.mode === 'long');
+    setIsInstant(monitorRef.current.mode === 'instant');
   }, []);
 
-  // 加载截图（base64 data URL，避免依赖未启用的 asset 协议）
+  // 加载本屏定格图（多屏会话按显示器下标取；加载失败退回旧命令兜底）
   useEffect(() => {
     const loadScreenshot = async () => {
       try {
-        const base64 = await invoke<string>('snipaste_get_screenshot_base64');
+        const base64 = await invoke<string>('snipaste_get_monitor_base64', { index: monitorRef.current.index });
         setImageSrc(`data:image/png;base64,${base64}`);
-      } catch (err) {
-        console.error('Failed to load screenshot:', err);
+      } catch {
+        try {
+          const base64 = await invoke<string>('snipaste_get_screenshot_base64');
+          setImageSrc(`data:image/png;base64,${base64}`);
+        } catch (err) {
+          console.error('Failed to load screenshot:', err);
+        }
       }
     };
     loadScreenshot();
   }, []);
 
-  // 记录 overlay 窗口的全局物理原点（= 所在显示器原点），CSS↔全局物理坐标换算用
+  // 会话显示器列表（跨屏选区判断用）
   useEffect(() => {
+    invoke<{ x: number; y: number; width: number; height: number }[]>('snipaste_get_monitors')
+      .then((ms) => { monitorsRef.current = ms; })
+      .catch(() => {});
+  }, []);
+
+  // 订阅 Rust 广播的选区状态
+  useEffect(() => {
+    const un = listen<GlobalSelection>('snipaste-selection', (e) => setGlobalSel(e.payload));
+    return () => { un.then((f) => f()).catch(() => {}); };
+  }, []);
+
+  // URL 参数缺失（开发直接开窗口）时退回 outerPosition
+  useEffect(() => {
+    if (monitorRef.current.fromUrl) return;
     getCurrentWindow().outerPosition()
-      .then((p) => { outerOriginRef.current = { x: p.x, y: p.y }; })
+      .then((p) => { monitorRef.current.x = p.x; monitorRef.current.y = p.y; })
       .catch((err) => console.error('outerPosition failed:', err));
   }, []);
 
@@ -114,51 +211,54 @@ export default function SnipasteOverlay() {
     setTimeout(() => setToast(null), 1600);
   }, []);
 
+  // 指针事件上报（全局物理坐标，Rust 广播回所有窗口）
+  const reportPointer = useCallback((kind: 'down' | 'move' | 'up', e: React.MouseEvent) => {
+    const g = toGlobal(e.clientX, e.clientY);
+    void invoke('snipaste_select_event', { kind, x: g.x, y: g.y }).catch(() => {});
+  }, [toGlobal]);
+
   // 历史回放：,/. 在最近截图间切换
   const stepHistory = useCallback(async (delta: number) => {
     try {
       const base64 = await invoke<string>('snipaste_history_step', { delta });
       setImageSrc(`data:image/png;base64,${base64}`);
-      setSelection(null);
-      setShowToolbar(false);
-      setShowContinueBtn(false);
       setSelectedId(null);
       clearAnnotations();
       setDetectRect(null);
+      // 选区是会话级状态，历史切换后一并清空
+      void invoke('snipaste_select_event', { kind: 'clear' }).catch(() => {});
     } catch (err) {
       console.error('history failed:', err);
     }
   }, [clearAnnotations]);
 
-  // 窗口自动检测：光标下窗口高亮（物理坐标 = overlay 原点 + CSS×dpr）
+  // 窗口自动检测：光标下窗口高亮（物理坐标 = 本屏原点 + CSS×dpr）
   const detectWindowAt = useCallback(async (cssX: number, cssY: number) => {
     const now = Date.now();
     if (now - lastDetectRef.current < 60) return;
     lastDetectRef.current = now;
     try {
-      const dpr = window.devicePixelRatio || 1;
-      const origin = outerOriginRef.current;
+      const g = toGlobal(cssX, cssY);
       const r = await invoke<DetectRectRaw | null>('snipaste_detect_window', {
-        x: origin.x + Math.round(cssX * dpr),
-        y: origin.y + Math.round(cssY * dpr),
+        x: Math.round(g.x),
+        y: Math.round(g.y),
       });
       setDetectRect(r ? {
-        left: (r.x - origin.x) / dpr,
-        top: (r.y - origin.y) / dpr,
+        left: (r.x - monitorRef.current.x) / dpr,
+        top: (r.y - monitorRef.current.y) / dpr,
         width: r.width / dpr,
         height: r.height / dpr,
       } : null);
     } catch {
       /* 检测失败静默忽略 */
     }
-  }, []);
+  }, [toGlobal, dpr]);
 
   // 取色：跟随光标绘制放大镜
   const drawLoupeAt = useCallback((cssX: number, cssY: number) => {
     const canvas = loupeRef.current;
     const img = imgRef.current;
     if (!canvas || !img) return;
-    const dpr = window.devicePixelRatio || 1;
     canvas.width = canvas.clientWidth * dpr;
     canvas.height = canvas.clientHeight * dpr;
     const ctx = canvas.getContext('2d');
@@ -166,12 +266,12 @@ export default function SnipasteOverlay() {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
     drawLoupe(ctx, img, cssX, cssY, { dpr, cssW: canvas.clientWidth, cssH: canvas.clientHeight });
-  }, []);
+  }, [dpr]);
 
   const copyPickedColor = useCallback(async (cssX: number, cssY: number) => {
     const img = imgRef.current;
     if (!img) return;
-    const info = pickColorFromImage(img, cssX, cssY, window.devicePixelRatio || 1);
+    const info = pickColorFromImage(img, cssX, cssY, dpr);
     if (!info) return;
     try {
       await navigator.clipboard.writeText(info.hex);
@@ -179,7 +279,7 @@ export default function SnipasteOverlay() {
     } catch {
       showToast(info.hex);
     }
-  }, [showToast]);
+  }, [showToast, dpr]);
 
   // 绘制画布
   useEffect(() => {
@@ -242,13 +342,27 @@ export default function SnipasteOverlay() {
     }
   }, [annotations, selectedId]);
 
-  // 选区外的暗色遮罩
+  // 选区外的暗色遮罩（跨屏时本屏表现为全屏变暗）
   const rect = selection ? {
     left: Math.min(selection.startX, selection.endX),
     top: Math.min(selection.startY, selection.endY),
     width: Math.abs(selection.endX - selection.startX),
     height: Math.abs(selection.endY - selection.startY),
   } : null;
+
+  // 选区是否跨屏（与超过一块会话显示器相交时无法用窗口局部标注导出）
+  const selectionCrosses = useCallback(() => {
+    if (!gRect) return false;
+    const ms = monitorsRef.current;
+    if (ms.length === 0) return false;
+    const x2 = gRect.x + gRect.width;
+    const y2 = gRect.y + gRect.height;
+    let count = 0;
+    for (const m of ms) {
+      if (gRect.x < m.x + m.width && x2 > m.x && gRect.y < m.y + m.height && y2 > m.y) count++;
+    }
+    return count > 1;
+  }, [gRect]);
 
   // 鼠标按下
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
@@ -258,7 +372,7 @@ export default function SnipasteOverlay() {
       return;
     }
 
-    // 如果有活动工具，开始绘图
+    // 如果有活动工具，开始绘图（标注是窗口局部状态，不走会话）
     if (activeTool) {
       setIsDrawing(true);
       const point = { x: e.clientX, y: e.clientY };
@@ -299,18 +413,11 @@ export default function SnipasteOverlay() {
       return;
     }
 
-    // 否则开始选区
+    // 否则开始选区（上报 Rust，广播回来渲染）
     if (showToolbar) return;
     setSelectedId(null);
-    setIsDragging(true);
-    setShowToolbar(false);
-    setSelection({
-      startX: e.clientX,
-      startY: e.clientY,
-      endX: e.clientX,
-      endY: e.clientY
-    });
-  }, [activeTool, showToolbar, selectedId, annotations]);
+    reportPointer('down', e);
+  }, [activeTool, showToolbar, selectedId, annotations, picking, copyPickedColor, reportPointer]);
 
   // 鼠标移动
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
@@ -400,17 +507,14 @@ export default function SnipasteOverlay() {
       return;
     }
 
-    // 选区模式
+    // 选区模式：任何窗口都转发 move（覆盖层铺满全部屏，跨屏拖拽时事件
+    // 会落到光标所在的那块屏，不需要全局鼠标钩子）
     if (!isDragging) return;
-    setSelection(prev => prev ? {
-      ...prev,
-      endX: e.clientX,
-      endY: e.clientY
-    } : null);
-  }, [isResizing, selectedId, resizeStart, resizeHandle, annotations, isDrawing, drawStart, activeTool, isDragging, picking, drawLoupeAt, detectWindowAt, selection]);
+    reportPointer('move', e);
+  }, [isResizing, selectedId, resizeStart, resizeHandle, annotations, isDrawing, drawStart, activeTool, isDragging, picking, drawLoupeAt, detectWindowAt, selection, reportPointer]);
 
   // 鼠标抬起
-  const handleMouseUp = useCallback(() => {
+  const handleMouseUp = useCallback((e: React.MouseEvent) => {
     // 移动模式 - 结束移动
     if (isMoving) {
       setIsMoving(false);
@@ -476,31 +580,33 @@ export default function SnipasteOverlay() {
       return;
     }
 
-    // 选区模式 - 完成选区
-    if (!isDragging || !selection) return;
-    setIsDragging(false);
-    const width = Math.abs(selection.endX - selection.startX);
-    const height = Math.abs(selection.endY - selection.startY);
+    // 选区模式 - 完成选区。mouseup 必然落在某个 overlay 窗口上，
+    // 拖拽跨屏时真正收到它的可能是另一个窗口，所以按全局状态判断
+    if (!isDragging || !globalSel.start) return;
+    const startLocalX = toLocalX(globalSel.start[0]);
+    const startLocalY = toLocalY(globalSel.start[1]);
+    const width = Math.abs(e.clientX - startLocalX);
+    const height = Math.abs(e.clientY - startLocalY);
     if (width > 10 && height > 10) {
-      setShowToolbar(true);
-      // 长截图模式下显示继续按钮
-      if (isLongScreenshot) {
-        setShowContinueBtn(true);
-      }
+      reportPointer('up', e);
     } else if (detectRect) {
-      // 近似单击：采纳检测到的窗口区域（Snipaste 同款行为）
-      setSelection({
-        startX: detectRect.left,
-        startY: detectRect.top,
-        endX: detectRect.left + detectRect.width,
-        endY: detectRect.top + detectRect.height,
-      });
-      setShowToolbar(true);
+      // 近似单击：采纳检测到的窗口区域（全局物理矩形直接上报）
+      void invoke('snipaste_select_event', {
+        kind: 'adopt',
+        x: monitorRef.current.x + detectRect.left * dpr,
+        y: monitorRef.current.y + detectRect.top * dpr,
+        w: detectRect.width * dpr,
+        h: detectRect.height * dpr,
+      }).catch(() => {});
       setDetectRect(null);
+    } else if (isInstant) {
+      // 空白处单击：Rust 侧按取消处理
+      reportPointer('up', e);
     } else {
-      setSelection(null);
+      // 工具栏模式：太小的矩形不值得出工具栏，直接清掉
+      void invoke('snipaste_select_event', { kind: 'clear' }).catch(() => {});
     }
-  }, [isMoving, isResizing, isDrawing, drawStart, drawEnd, activeTool, currentPoints, annotationColor, strokeWidth, opacity, isDragging, selection, isLongScreenshot, detectRect]);
+  }, [isMoving, isResizing, isDrawing, drawStart, drawEnd, activeTool, currentPoints, annotationColor, strokeWidth, opacity, isDragging, globalSel, toLocalX, toLocalY, reportPointer, detectRect, isInstant, dpr]);
 
   // ESC 取消 / 快捷键
   useEffect(() => {
@@ -556,13 +662,13 @@ export default function SnipasteOverlay() {
     }
   }, [activeTool, annotations]);
 
-  // 生成带标注的图片（物理像素分辨率：CSS 坐标 × devicePixelRatio 映射到背景图）
-  const generateAnnotatedImage = useCallback(async (selection: Selection): Promise<string> => {
-    const x = Math.min(selection.startX, selection.endX);
-    const y = Math.min(selection.startY, selection.endY);
-    const width = Math.abs(selection.endX - selection.startX);
-    const height = Math.abs(selection.endY - selection.startY);
-    const dpr = window.devicePixelRatio || 1;
+  // 生成带标注的图片（物理像素分辨率：CSS 坐标 × devicePixelRatio 映射到背景图）。
+  // 仅用于选区完整落在本屏内的场景；跨屏选区走 Rust 的 crop_session。
+  const generateAnnotatedImage = useCallback(async (sel: Selection): Promise<string> => {
+    const x = Math.min(sel.startX, sel.endX);
+    const y = Math.min(sel.startY, sel.endY);
+    const width = Math.abs(sel.endX - sel.startX);
+    const height = Math.abs(sel.endY - sel.startY);
     const px = Math.round(x * dpr);
     const py = Math.round(y * dpr);
     const pw = Math.max(1, Math.round(width * dpr));
@@ -591,93 +697,87 @@ export default function SnipasteOverlay() {
 
     // 转换为 base64
     return tempCanvas.toDataURL('image/png').split(',')[1];
-  }, [imageSrc, annotations]);
+  }, [imageSrc, annotations, dpr]);
 
   const handleCancel = useCallback(async () => {
     try {
-      await invoke('snipaste_finish');
+      await invoke('snipaste_cancel');
     } catch (err) {
       console.error('Cancel failed:', err);
     }
   }, []);
 
+  // 跨屏选区的拼合裁剪（无标注，Rust 侧统一密度）
+  const cropSession = useCallback(async () => {
+    if (!gRect) throw new Error('没有选区');
+    return invoke<CropOutput>('snipaste_crop_session', {
+      rect: { x: gRect.x, y: gRect.y, width: gRect.width, height: gRect.height },
+    });
+  }, [gRect]);
+
   const handleSave = useCallback(async () => {
-    if (!selection) return;
+    if (!gRect || !selection) return;
     try {
-      const imageData = await generateAnnotatedImage(selection);
-      // 转换为 Uint8Array
-      const binaryString = atob(imageData);
-      const bytes = new Uint8Array(binaryString.length);
-      for (let i = 0; i < binaryString.length; i++) {
-        bytes[i] = binaryString.charCodeAt(i);
+      if (selectionCrosses()) {
+        const out = await cropSession();
+        await invoke('snipaste_save_screenshot', { data: Array.from(base64ToBytes(out.base64)), path: null });
+        showToast('跨屏选区已保存（不含标注）');
+        await invoke('snipaste_finish');
+        return;
       }
-      // 未指定路径时由命令侧落到桌面
-      await invoke('snipaste_save_screenshot', { data: Array.from(bytes), path: null });
+      const imageData = await generateAnnotatedImage(selection);
+      await invoke('snipaste_save_screenshot', { data: Array.from(base64ToBytes(imageData)), path: null });
       await invoke('snipaste_finish');
     } catch (err) {
       console.error('Save failed:', err);
     }
-  }, [selection, generateAnnotatedImage]);
+  }, [gRect, selection, selectionCrosses, cropSession, generateAnnotatedImage, showToast]);
 
   const handleCopy = useCallback(async () => {
-    if (!selection) return;
+    if (!gRect || !selection) return;
     try {
-      const imageData = await generateAnnotatedImage(selection);
-      const binaryString = atob(imageData);
-      const bytes = new Uint8Array(binaryString.length);
-      for (let i = 0; i < binaryString.length; i++) {
-        bytes[i] = binaryString.charCodeAt(i);
-      }
-      await invoke('snipaste_copy_to_clipboard', { data: Array.from(bytes) });
+      const imageData = selectionCrosses()
+        ? (await cropSession()).base64
+        : await generateAnnotatedImage(selection);
+      await invoke('snipaste_copy_to_clipboard', { data: Array.from(base64ToBytes(imageData)) });
       await invoke('snipaste_finish');
     } catch (err) {
       console.error('Copy failed:', err);
     }
-  }, [selection, generateAnnotatedImage]);
+  }, [gRect, selection, selectionCrosses, cropSession, generateAnnotatedImage]);
 
   const handlePin = useCallback(async () => {
-    if (!selection) return;
-    const x = Math.min(selection.startX, selection.endX);
-    const y = Math.min(selection.startY, selection.endY);
-    const width = Math.abs(selection.endX - selection.startX);
-    const height = Math.abs(selection.endY - selection.startY);
-
+    if (!gRect || !selection) return;
     try {
-      // 带标注导出的 base64，Rust 侧创建 pin 窗口并保存数据
-      const imageData = await generateAnnotatedImage(selection);
-      await invoke('snipaste_create_pin', { imageData, x, y, width, height });
-
-      setShowToolbar(false);
-      setSelection(null);
+      // 带标注导出的 base64（跨屏时为 Rust 拼合图），矩形按全局物理像素传
+      const imageData = selectionCrosses()
+        ? (await cropSession()).base64
+        : await generateAnnotatedImage(selection);
+      await invoke('snipaste_create_pin', {
+        imageData,
+        x: gRect.x,
+        y: gRect.y,
+        width: gRect.width,
+        height: gRect.height,
+      });
+      // 贴图后清空选区，留在 overlay 里继续下一次框选（与原行为一致）
+      void invoke('snipaste_select_event', { kind: 'clear' }).catch(() => {});
     } catch (err) {
       console.error('Pin failed:', err);
       alert(`贴图失败: ${err}`);
     }
-  }, [selection, generateAnnotatedImage]);
+  }, [gRect, selection, selectionCrosses, cropSession, generateAnnotatedImage]);
 
   const handleOCR = useCallback(async () => {
-    if (!selection) return;
-    const x = Math.min(selection.startX, selection.endX);
-    const y = Math.min(selection.startY, selection.endY);
-    const width = Math.abs(selection.endX - selection.startX);
-    const height = Math.abs(selection.endY - selection.startY);
-    // CSS 坐标 → 物理像素（背景图为物理分辨率）
-    const dpr = window.devicePixelRatio || 1;
-
+    if (!gRect) return;
     try {
-      const cropPath = await invoke<string>('snipaste_crop_region', {
-        x: Math.round(x * dpr),
-        y: Math.round(y * dpr),
-        width: Math.max(1, Math.round(width * dpr)),
-        height: Math.max(1, Math.round(height * dpr)),
-      });
-      const { emit } = await import('@tauri-apps/api/event');
-      await emit('snipaste-ocr', { path: cropPath });
+      const out = await cropSession();
+      await emit('snipaste-ocr', { path: out.path });
       await invoke('snipaste_finish');
     } catch (err) {
       console.error('OCR failed:', err);
     }
-  }, [selection]);
+  }, [gRect, cropSession]);
 
   const handleContinueLongScreenshot = useCallback(async () => {
     try {
@@ -685,9 +785,7 @@ export default function SnipasteOverlay() {
       // capture_next 已更新 last_screenshot，直接重取 base64
       const base64 = await invoke<string>('snipaste_get_screenshot_base64');
       setImageSrc(`data:image/png;base64,${base64}`);
-      setSelection(null);
-      setShowToolbar(false);
-      setShowContinueBtn(false);
+      void invoke('snipaste_select_event', { kind: 'clear' }).catch(() => {});
     } catch (err) {
       console.error('Continue long screenshot failed:', err);
     }
@@ -696,7 +794,6 @@ export default function SnipasteOverlay() {
   const handleFinishLongScreenshot = useCallback(async () => {
     try {
       const stitchedPath = await invoke<string>('snipaste_stitch_screenshots');
-      const { emit } = await import('@tauri-apps/api/event');
       await emit('snipaste-stitched', { path: stitchedPath });
       await invoke('snipaste_finish');
     } catch (err) {
@@ -787,7 +884,7 @@ export default function SnipasteOverlay() {
         <>
           <div style={{ position: 'absolute', left: rect.left, top: rect.top, width: rect.width, height: rect.height, border: '2px solid #007AFF', pointerEvents: 'none' }} />
           <div style={{ position: 'absolute', left: rect.left + rect.width / 2, top: rect.top - 24, transform: 'translateX(-50%)', padding: '2px 8px', background: 'rgba(0,0,0,0.75)', color: 'white', fontSize: 11, borderRadius: 3, pointerEvents: 'none', whiteSpace: 'nowrap' }}>
-            {Math.round(rect.width)} × {Math.round(rect.height)}
+            {Math.round(rect.width * dpr)} × {Math.round(rect.height * dpr)}
           </div>
         </>
       )}
@@ -795,7 +892,11 @@ export default function SnipasteOverlay() {
       {/* 提示文字 */}
       {!isDragging && !showToolbar && !selection && !activeTool && !isDrawing && !picking && (
         <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', padding: '8px 16px', background: 'rgba(0,0,0,0.6)', color: 'white', fontSize: 13, borderRadius: 6, pointerEvents: 'none' }}>
-          {isLongScreenshot ? '拖拽选择区域 · C 取色 · ESC 取消' : '拖拽选择要识别的区域 · 单击选窗口 · C 取色 · ,/. 历史 · ESC 取消'}
+          {isInstant
+            ? '拖拽选择要识别的区域 · 单击选窗口 · ESC 取消'
+            : isLongScreenshot
+              ? '拖拽选择区域 · C 取色 · ESC 取消'
+              : '拖拽选择要识别的区域 · 单击选窗口 · C 取色 · ,/. 历史 · ESC 取消'}
         </div>
       )}
 
@@ -952,7 +1053,7 @@ export default function SnipasteOverlay() {
       )}
 
       {/* 长截图继续按钮 */}
-      {isLongScreenshot && showContinueBtn && (
+      {isLongScreenshot && showToolbar && (
         <div style={{
           position: 'absolute',
           bottom: 40,

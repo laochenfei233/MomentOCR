@@ -40,6 +40,10 @@ dirs = "5"
 [profile.dev.package."*"]
 debug = false
 
+# macOS 覆盖层窗口要盖住菜单栏（NSWindow setLevel），tao 的 always_on_top 层级不够
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.58", features = [
     "Win32_Foundation",

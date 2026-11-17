@@ -16,8 +16,6 @@ jobs:
     name: ${{ matrix.label }}
     runs-on: ${{ matrix.platform }}
     env:
-      # 覆盖层必须按目标架构打包：arm64 机器上给 Intel 包打出 arm64 覆盖层，用户会看到 CPU 不匹配
-      MOMENTOCR_OVERLAY_ARCH: ${{ matrix.overlay_arch }}
       # Windows runner 的 Python 默认用旧代码页，打印非 ASCII 会 UnicodeEncodeError，这里统一成 UTF-8
       PYTHONUTF8: '1'
       PYTHONIOENCODING: utf-8
@@ -28,43 +26,35 @@ jobs:
           # 标准变体：推理器在设置里按需下载
           - platform: windows-latest
             target: x86_64-pc-windows-msvc
-            overlay_arch: x86_64
             label: windows-x64
             variant: standard
           - platform: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
-            overlay_arch: x86_64
             label: linux-x64
             variant: standard
           - platform: macos-latest
             target: aarch64-apple-darwin
-            overlay_arch: arm64
             label: macos-arm64
             variant: standard
           - platform: macos-latest
             target: x86_64-apple-darwin
-            overlay_arch: x86_64
             label: macos-x64
             variant: standard
           # -local-inference 变体：llama.cpp 推理器打进安装包（国内免下 23MB，规避不稳的代理源）
           - platform: windows-latest
             target: x86_64-pc-windows-msvc
-            overlay_arch: x86_64
             label: windows-x64-local-inference
             variant: local-inference
           - platform: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
-            overlay_arch: x86_64
             label: linux-x64-local-inference
             variant: local-inference
           - platform: macos-latest
             target: aarch64-apple-darwin
-            overlay_arch: arm64
             label: macos-arm64-local-inference
             variant: local-inference
           - platform: macos-latest
             target: x86_64-apple-darwin
-            overlay_arch: x86_64
             label: macos-x64-local-inference
             variant: local-inference
     steps:
@@ -111,9 +101,7 @@ jobs:
         if: matrix.platform == 'ubuntu-22.04'
         run: |
           sudo apt-get update
-          # 自带覆盖层里的 PyQt5 需要这些运行时库：PyInstaller 分析要 libGL 系列，
-          # linuxdeploy 打 AppImage 时还要能解析 Qt 的 xcb 依赖，
-          # 否则报 "Could not find dependency: libxcb-icccm.so.4" 直接失败
+          # Tauri/AppImage 构建所需的系统库（PyQt 覆盖层的 Qt xcb 依赖已随 helper 退役）
           sudo apt-get install -y \
             libwebkit2gtk-4.1-dev \
             libappindicator3-dev \
@@ -129,19 +117,7 @@ jobs:
             libxkbcommon-dev \
             libxdo-dev \
             libssl-dev \
-            rpm \
-            libgl1 \
-            libegl1 \
-            libxkbcommon-x11-0 \
-            libxcb-icccm4 \
-            libxcb-image0 \
-            libxcb-keysyms1 \
-            libxcb-render-util0 \
-            libxcb-xinerama0 \
-            libxcb-xkb1 \
-            libxcb-shape0 \
-            libxcb-util1 \
-            libxcb-cursor0
+            rpm
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -175,42 +151,13 @@ jobs:
           python-version: '3.12'
           architecture: x64
 
-      # arm64 runner 上出 Intel 包：必须让工具链真的按 x86_64 跑，
-      # 否则 pip 会装 arm64 的 PyQt5 wheel、PyInstaller 也产出 arm64 覆盖层
+      # arm64 runner 上出 Intel 包：让工具链按 x86_64 跑（Rust target 已固定）
       - name: Install Rosetta (Intel mac target)
         if: matrix.target == 'x86_64-apple-darwin'
         run: sudo softwareupdate --install-rosetta --agree-to-license || true
 
-      - name: Install overlay packaging tools
-        shell: bash
-        run: |
-          PY="python"
-          if [ "${{ matrix.target }}" = "x86_64-apple-darwin" ]; then PY="arch -x86_64 python"; fi
-          $PY -m pip install --upgrade pip
-          $PY -m pip install pyinstaller PyQt5
-          $PY -c "import platform,sys; print('toolchain arch:', platform.machine(), 'python', sys.version.split()[0])"
-
       - name: Install frontend dependencies
         run: npm ci
-
-      # 单独一步准备覆盖层：失败时把原因写进 check-run 注解。
-      # 构建步骤的日志需要仓库管理员权限才能读，注解不需要，出问题能第一时间看到原因。
-      - name: Prepare bundled overlay
-        shell: bash
-        run: |
-          # 用 tee：成功时也能在日志里看到架构校验那行（否则出问题时无从判断）
-          if ! node scripts/prepare-overlay.mjs 2>&1 | tee overlay-build.log; then
-            detail=$(tail -c 1500 overlay-build.log | tr '\n' ' ' | sed 's/%/%25/g; s/\r//g')
-            echo "::error title=overlay packaging failed::$detail"
-            tail -40 overlay-build.log
-            exit 1
-          fi
-          if [ ! -f src-tauri/binaries/screenshot_overlay/screenshot_overlay ] \
-             && [ ! -f src-tauri/binaries/screenshot_overlay/screenshot_overlay.exe ]; then
-            echo "::error title=overlay artifact missing::脚本退出成功但没有产物，检查 build-overlay.py"
-            exit 1
-          fi
-          du -sh src-tauri/binaries/screenshot_overlay
 
       - name: Build and publish
         uses: tauri-apps/tauri-action@v0
