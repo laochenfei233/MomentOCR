@@ -117,10 +117,14 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
             "screenshot" => {
+                // 托盘回调在主线程，抓屏+PNG 编码放异步任务，别冻结事件循环；
                 // 托盘入口不过前端，直接起 instant 会话（框选松开即识别）
-                if let Err(e) = start_overlay_session(app, SnipasteMode::Instant) {
-                    let _ = app.emit("snipaste-error", e);
-                }
+                let handle = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(e) = start_overlay_session(&handle, SnipasteMode::Instant) {
+                        let _ = handle.emit("snipaste-error", e);
+                    }
+                });
             }
             "show" => show_main_window(app),
             "quit" => exit_now(app),
@@ -389,8 +393,11 @@ const OVERLAY_PREFIX: &str = "snipaste-overlay";
 /// 防止「开着截图层过夜」把整块屏幕锁死
 const OVERLAY_IDLE_TIMEOUT_SECS: u64 = 120;
 
-/// 会话代次：新一轮截图会话开始时递增，让上一轮的空闲计时任务自行退出
+/// 会话代次：会话结束/取消时递增，让上一轮的空闲计时任务自行退出
 static SESSION_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// 会话互斥：抓屏 + 建窗要几百毫秒，期间第二次热键不能并发再起一轮
+static SESSION_LOCK: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone, Copy, PartialEq)]
 enum SnipasteMode {
@@ -446,6 +453,7 @@ fn build_overlay_window(
     index: usize,
     m: &snipaste::SessionMonitor,
     mode: SnipasteMode,
+    focus: bool,
 ) -> Result<tauri::WebviewWindow, String> {
     use tauri::{PhysicalPosition, PhysicalSize, Position, Size, WebviewUrl, WebviewWindowBuilder};
     let label = format!("{OVERLAY_PREFIX}-{index}");
@@ -478,7 +486,11 @@ fn build_overlay_window(
     #[cfg(target_os = "macos")]
     mac_overlay_chrome(&win);
     win.show().map_err(|e| e.to_string())?;
-    let _ = win.set_focus();
+    // 键盘焦点（ESC 可用性）只给光标屏那一块；每屏都 set_focus 会让
+    // 焦点落在 Screen::all() 枚举的最后一屏，随枚举顺序漂移
+    if focus {
+        let _ = win.set_focus();
+    }
     Ok(win)
 }
 
@@ -521,11 +533,12 @@ fn preflight_screen_capture() -> bool {
 }
 
 /// 结束本轮会话：清状态、关全部 overlay、还主窗口。
-/// overlay 窗口都活在主进程内，不存在子进程孤儿问题；这里同时递增会话代次，
-/// 让空闲计时任务退出。
+/// overlay 窗口都活在主进程内，不存在子进程孤儿问题；这里同时递增会话代次
+/// 让空闲计时任务退出、放开会话互斥锁。
 fn teardown_session(app: &tauri::AppHandle) {
     snipaste::clear_session();
     SESSION_SEQ.fetch_add(1, Ordering::SeqCst);
+    SESSION_LOCK.store(false, Ordering::SeqCst);
     close_stale_overlays(app);
     restore_main_window(app);
 }
@@ -557,6 +570,23 @@ fn start_idle_timeout(app: &tauri::AppHandle) {
 /// 截图会话入口：抓屏（普通/识别模式抓全部屏支持跨屏拖选，长截图锁光标屏）→
 /// 每屏建一个覆盖窗口
 fn start_overlay_session(app: &tauri::AppHandle, mode: SnipasteMode) -> Result<(), String> {
+    // 重入守卫：抓屏+建窗要几百毫秒，期间再按热键直接忽略（等第一轮把窗口建出来），
+    // 否则两轮并发写会话状态、互相关窗口
+    if SESSION_LOCK
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return Err("截图会话已在进行中".to_string());
+    }
+    let result = start_overlay_session_inner(app, mode);
+    if result.is_err() {
+        // 失败路径就地放锁（成功路径由 teardown_session 放锁）
+        SESSION_LOCK.store(false, Ordering::SeqCst);
+    }
+    result
+}
+
+fn start_overlay_session_inner(app: &tauri::AppHandle, mode: SnipasteMode) -> Result<(), String> {
     // 热键连按：先收掉上一轮，防止 label 冲突与窗口堆积
     close_stale_overlays(app);
     snipaste::clear_session();
@@ -638,7 +668,7 @@ fn start_overlay_session(app: &tauri::AppHandle, mode: SnipasteMode) -> Result<(
     }
 
     for (i, m) in monitors.iter().enumerate() {
-        if let Err(e) = build_overlay_window(app, i, m, mode) {
+        if let Err(e) = build_overlay_window(app, i, m, mode, i == cursor_index) {
             teardown_session(app);
             return Err(e);
         }
@@ -667,13 +697,23 @@ async fn start_snipaste(app: tauri::AppHandle, mode: Option<String>) -> Result<(
         Some("long") => SnipasteMode::Long,
         _ => SnipasteMode::Toolbar,
     };
-    start_overlay_session(&app, mode)
+    // 失败统一广播给主窗口（App.tsx 的 snipaste-error 监听负责让用户看见），
+    // 别让热键这类不过工具栏的入口静默失败
+    if let Err(e) = start_overlay_session(&app, mode) {
+        let _ = app.emit("snipaste-error", e.clone());
+        return Err(e);
+    }
+    Ok(())
 }
 
 /// 兼容既有前端入口：长截图独立命令
 #[tauri::command]
 async fn start_long_screenshot(app: tauri::AppHandle) -> Result<(), String> {
-    start_overlay_session(&app, SnipasteMode::Long)
+    if let Err(e) = start_overlay_session(&app, SnipasteMode::Long) {
+        let _ = app.emit("snipaste-error", e.clone());
+        return Err(e);
+    }
+    Ok(())
 }
 
 /// 各 overlay 窗口加载自己那块屏的定格图
@@ -1063,19 +1103,27 @@ pub fn run() {
         ])
         .on_window_event(|window, event| {
             let label = window.label().to_string();
-            if !label.starts_with("pin-") {
+            if label.starts_with("pin-") {
+                match event {
+                    // 贴图窗口被用户关闭时同步清理状态表
+                    tauri::WindowEvent::Destroyed => {
+                        snipaste::remove_pin(&label);
+                    }
+                    // 拖动后记录新位置，隐藏再显示才能回到原位
+                    tauri::WindowEvent::Moved(tauri::PhysicalPosition::<i32> { x, y }) => {
+                        snipaste::update_pin_position(&label, *x, *y);
+                    }
+                    _ => {}
+                }
                 return;
             }
-            match event {
-                // 贴图窗口被用户关闭时同步清理状态表
-                tauri::WindowEvent::Destroyed => {
-                    snipaste::remove_pin(&label);
-                }
-                // 拖动后记录新位置，隐藏再显示才能回到原位
-                tauri::WindowEvent::Moved(tauri::PhysicalPosition::<i32> { x, y }) => {
-                    snipaste::update_pin_position(&label, *x, *y);
-                }
-                _ => {}
+            // overlay 被 Alt+F4 等外部方式关掉时，会话还活着就整体取消，
+            // 别让主窗口一直藏着等 120s 空闲兜底（正常收尾先清状态再关窗，不会进到这里）
+            if label.starts_with(OVERLAY_PREFIX)
+                && matches!(event, tauri::WindowEvent::Destroyed)
+                && snipaste::session_active()
+            {
+                cancel_session(window.app_handle());
             }
         })
         .setup(|app| {

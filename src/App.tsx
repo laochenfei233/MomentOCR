@@ -68,7 +68,8 @@ function App() {
       const { action } = event.payload;
       switch (action) {
         case 'screenshot':
-          invoke('start_snipaste', { mode: 'instant' });
+          invoke('start_snipaste', { mode: 'instant' })
+            .catch((err) => console.error('[screenshot] start failed:', err));
           break;
         case 'copy':
           copyRef.current();

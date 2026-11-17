@@ -35,7 +35,7 @@ src-tauri/scripts/dist/
 __pycache__/
 *.pyc
 
-# 截图覆盖层产物：由 scripts/prepare-overlay.mjs 在构建前生成，不进仓库
+# 本地构建产物目录（调试可执行、图标预览等），不进仓库
 src-tauri/binaries/
 
 # 图标预览是构建产物，由 scripts/build-icons.mjs 生成

@@ -119,6 +119,9 @@ export default function SnipasteOverlay() {
   const monitorRef = useRef(initMonitor());
   const monitorsRef = useRef<{ x: number; y: number; width: number; height: number }[]>([]);
   const lastDetectRef = useRef(0);
+  // 背景当前显示的是不是历史回放帧：是则 OCR/保存/复制/贴图都裁「显示中的这张图」，
+  // 而不是本轮会话的冻结图（两者可能是不同内容，裁错就是静默返回错误结果）
+  const sourceIsHistoryRef = useRef(false);
 
   // CSS↔全局物理坐标换算（dpr 与该屏 scale 一致，沿用分支已验证手法）
   const dpr = window.devicePixelRatio || 1;
@@ -170,6 +173,8 @@ export default function SnipasteOverlay() {
   // 加载本屏定格图（多屏会话按显示器下标取；加载失败退回旧命令兜底）
   useEffect(() => {
     const loadScreenshot = async () => {
+      // 会话开始加载的必然是会话冻结图，重置历史回放态
+      sourceIsHistoryRef.current = false;
       try {
         const base64 = await invoke<string>('snipaste_get_monitor_base64', { index: monitorRef.current.index });
         setImageSrc(`data:image/png;base64,${base64}`);
@@ -222,6 +227,7 @@ export default function SnipasteOverlay() {
     try {
       const base64 = await invoke<string>('snipaste_history_step', { delta });
       setImageSrc(`data:image/png;base64,${base64}`);
+      sourceIsHistoryRef.current = true;
       setSelectedId(null);
       clearAnnotations();
       setDetectRect(null);
@@ -707,7 +713,8 @@ export default function SnipasteOverlay() {
     }
   }, []);
 
-  // 跨屏选区的拼合裁剪（无标注，Rust 侧统一密度）
+  // 跨屏选区的拼合裁剪（无标注，Rust 侧按全局物理坐标无缝重建）。
+  // 历史回放态不用它：显示的是某一张历史帧，必须裁显示中的那张图。
   const cropSession = useCallback(async () => {
     if (!gRect) throw new Error('没有选区');
     return invoke<CropOutput>('snipaste_crop_session', {
@@ -718,7 +725,7 @@ export default function SnipasteOverlay() {
   const handleSave = useCallback(async () => {
     if (!gRect || !selection) return;
     try {
-      if (selectionCrosses()) {
+      if (selectionCrosses() && !sourceIsHistoryRef.current) {
         const out = await cropSession();
         await invoke('snipaste_save_screenshot', { data: Array.from(base64ToBytes(out.base64)), path: null });
         showToast('跨屏选区已保存（不含标注）');
@@ -736,21 +743,24 @@ export default function SnipasteOverlay() {
   const handleCopy = useCallback(async () => {
     if (!gRect || !selection) return;
     try {
-      const imageData = selectionCrosses()
+      const cross = selectionCrosses() && !sourceIsHistoryRef.current;
+      const imageData = cross
         ? (await cropSession()).base64
         : await generateAnnotatedImage(selection);
       await invoke('snipaste_copy_to_clipboard', { data: Array.from(base64ToBytes(imageData)) });
+      if (cross) showToast('跨屏选区已复制（不含标注）');
       await invoke('snipaste_finish');
     } catch (err) {
       console.error('Copy failed:', err);
     }
-  }, [gRect, selection, selectionCrosses, cropSession, generateAnnotatedImage]);
+  }, [gRect, selection, selectionCrosses, cropSession, generateAnnotatedImage, showToast]);
 
   const handlePin = useCallback(async () => {
     if (!gRect || !selection) return;
     try {
       // 带标注导出的 base64（跨屏时为 Rust 拼合图），矩形按全局物理像素传
-      const imageData = selectionCrosses()
+      const cross = selectionCrosses() && !sourceIsHistoryRef.current;
+      const imageData = cross
         ? (await cropSession()).base64
         : await generateAnnotatedImage(selection);
       await invoke('snipaste_create_pin', {
@@ -760,24 +770,34 @@ export default function SnipasteOverlay() {
         width: gRect.width,
         height: gRect.height,
       });
+      if (cross) showToast('跨屏选区已贴图（不含标注）');
       // 贴图后清空选区，留在 overlay 里继续下一次框选（与原行为一致）
       void invoke('snipaste_select_event', { kind: 'clear' }).catch(() => {});
     } catch (err) {
       console.error('Pin failed:', err);
       alert(`贴图失败: ${err}`);
     }
-  }, [gRect, selection, selectionCrosses, cropSession, generateAnnotatedImage]);
+  }, [gRect, selection, selectionCrosses, cropSession, generateAnnotatedImage, showToast]);
 
   const handleOCR = useCallback(async () => {
-    if (!gRect) return;
+    if (!gRect || !selection || !rect) return;
     try {
-      const out = await cropSession();
-      await emit('snipaste-ocr', { path: out.path });
+      // 历史回放态：裁当前显示的那张历史帧（last_screenshot，与画面一致）；
+      // 会话态：按全局物理矩形从会话冻结图裁剪
+      const cropPath = sourceIsHistoryRef.current
+        ? await invoke<string>('snipaste_crop_region', {
+            x: Math.max(0, Math.round(rect.left * dpr)),
+            y: Math.max(0, Math.round(rect.top * dpr)),
+            width: Math.max(1, Math.round(rect.width * dpr)),
+            height: Math.max(1, Math.round(rect.height * dpr)),
+          })
+        : (await cropSession()).path;
+      await emit('snipaste-ocr', { path: cropPath });
       await invoke('snipaste_finish');
     } catch (err) {
       console.error('OCR failed:', err);
     }
-  }, [gRect, cropSession]);
+  }, [gRect, selection, rect, cropSession, dpr]);
 
   const handleContinueLongScreenshot = useCallback(async () => {
     try {

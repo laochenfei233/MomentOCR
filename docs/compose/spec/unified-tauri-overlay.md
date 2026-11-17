@@ -1,16 +1,26 @@
 ---
 feature: unified-tauri-overlay
-status: in-progress
-updated: 2026-11-17
+status: delivered
+updated: 2026-11-18
 branch: feat/unified-tauri-overlay
 base: feat/snipaste-screenshot (43870f7，已包含 master 全部提交)
+commits: 43870f7..1e26d95
 ---
 
 # 统一 Tauri 截图覆盖层（多屏 + PyQt helper 退役）
 
 ## Report
 
-（交付时填写）
+**What was built** — 截图全链路统一到主 App 进程内的 Tauri 多屏覆盖层：启动会话时主进程用 screenshots crate 抓全部显示器（mac 上直接命中主 bundle 的「屏幕录制」授权），每屏建一个 `snipaste-overlay-{i}` 窗口（物理落位 + macOS setLevel 25/canJoinAllSpaces），选区状态以 Rust 为唯一事实源、经 `snipaste-selection` 广播给各窗口渲染，覆盖层铺满全部屏幕因此跨屏拖选无需全局鼠标钩子。instant 模式（热键/托盘/相机三入口）框选松开即识别；工具栏模式保留标注/贴图/取色/历史/长截图。跨屏裁剪按全局物理坐标无缝重建（各屏交集原样摆放，输出=选区物理尺寸）。PyQt helper 子进程整体退役：源码、构建脚本、随包二进制、CI 打包步骤、设置页「截图组件」（PyQt 运行时）全部移除，事件统一为 snipaste-ocr/cancel/error。生命周期：无截图子进程=无孤儿；会话互斥锁防连按重入；Alt+F4 关层=整会话取消；120s 空闲自动取消；退出兜底关窗。
+
+**Verification** — cargo check / cargo clippy --all-targets / cargo test：PASS（19 passed、2 ignored 为预存联网测试；clippy 仅剩 3 个预存 warning）；npx tsc --noEmit / npx vite build：PASS。评审子代理 12 项发现全部处置：3 个 major（会话重入竞态→SESSION_LOCK compare_exchange；跨屏拼合几何错位→改全局偏移无缝拼接并同步修订 S2.4；历史回放帧 OCR 裁错内容→前端按 sourceIsHistory 路由回 snipaste_crop_region 裁显示中的帧）+ 9 个 minor（托盘异步化、失败路径统一 emit snipaste-error、焦点只给光标屏、mouseup 前广播未达的丢 up、Alt+F4 清理、SESSION_SEQ 注释、.gitignore 注释、跨屏 toast 补齐、snipaste_crop_region 复用）均修毕复验。CDP 双屏真机冒烟（4K@150% + 1080p@125% 混合 DPI）：A instant 单屏裁剪 PASS（crop 375x150 与选区一致）；B 跨屏选区+工具栏归属屏1+无缝拼合 PASS（crop 3515x325 精确等于选区物理尺寸）；C cancel 清窗 PASS；连按两次会话恰为每屏 1 个 overlay、cancel 后 0 残留。冒烟脚本在 %TEMP%\momentocr-smoke\（CDP 驱动，探针镜像广播事件，不进仓库）。
+
+**Journey log**:
+- 「拼合按最大 scale 归一」的第一版算法是从 PyQt 覆盖层的 CSS 坐标管线类比来的；在全局物理坐标管线里两屏定格图本就同一坐标系，重采样反而制造拼缝错位——评审抓出后改成全局偏移原样摆放，冒烟「公式自洽」掩盖问题的教训：期望值必须独立于实现推导。
+- 跨屏拖选不需要全局鼠标钩子：覆盖层铺满全部屏幕，拖拽期间的 move/up 必然落在某个 overlay 窗口上，每个窗口都以全局坐标上报即可。mac 上全局钩子还需要辅助功能授权，这设计顺带绕开了它。
+- CDP 冒烟的合成事件必须以 `#root > div`（React 容器）为目标，发到 `#root` 不冒泡给子元素；target 出现≠页面就绪，必须等 `#root > div` 存在；探针事件要镜像到 console（Runtime.consoleAPICalled），否则窗口随会话关闭后无法取证。
+- 真实鼠标会污染合成事件测试（真鼠标的 mousemove 也被当拖拽上报——真实使用中这正是唯一输入源）；断言改为从探针读「实际最终选区」推算期望，实现与测试解耦。
+- tauri 2 debug 构建走 devUrl，独立 exe 冒烟要 `npm run tauri dev` 而不是直接跑 target/debug 的 exe。
 
 ## [S1] Problem
 
@@ -26,7 +36,7 @@ macOS 端截图全黑，且每按一次热键泄漏一个孤儿进程：
 
 - `capture_all_monitors(app)`：`Screen::all()` 逐屏 capture；scale 用 `app.available_monitors()` 按物理原点+尺寸匹配回填（screens crate `scale_factor` 误报 1.0 的既有对策，见分支 lib.rs:470-473）。
 - 会话状态 `SESSION_MONITORS: Vec<SessionMonitor{ x, y, width, height, scale, path }>`，每屏 PNG 落临时文件；按屏取图命令 `snipaste_get_monitor_base64(index)` 供各 overlay 窗口加载自己的背景。
-- 长截图维持单屏 `SESSION_MONITOR`（锁光标屏）不动；历史回放沿用环形缓冲，每屏 PNG 各入队一次。
+- 长截图维持单屏 `SESSION_MONITOR`（锁光标屏）不动；历史回放沿用环形缓冲，每会话只入队光标屏一帧（避免多屏帧污染回放序列）。
 
 ### S2.2 每屏一个 overlay 窗口（lib.rs）
 
@@ -43,15 +53,19 @@ macOS 端截图全黑，且每按一次热键泄漏一个孤儿进程：
 
 ### S2.4 跨屏裁剪与贴图
 
-- `crop_session_region(rect: 全局物理)`：对每块屏求交集，按统一缩放（取相交屏的最大 scale，低 DPI 部分放大对齐——与 master PyQt 版「最大 ratio 画布」同思路）拼到一张画布 → 临时 PNG。OCR/保存/复制统一走它。
-- 带标注导出仅在选区完整落在单屏内可用（标注是窗口局部 CSS 状态）；跨屏选区时标注跳过并 toast 提示。
-- 贴图坐标：用选区中心落在哪块屏的 scale/origin 换算（替换现 `get_session_monitor` 单屏假设）。
+- `crop_session_region(rect: 全局物理)`：各屏定格图本就处于同一全局物理坐标系，把每块屏与选区的交集按「交集原点 − 选区原点」原样摆放，1:1 无缝重建选区内容，输出尺寸 = 选区全局物理尺寸；不做跨屏密度重采样（密度差异是屏幕真实像素密度，重采样反而失真）。OCR 恒走它；保存/复制/贴图在「跨屏选区且非历史回放态」走它。
+- 带标注导出仅在选区完整落在单屏内可用（标注是窗口局部 CSS 状态）；跨屏选区时保存/复制/贴图均 toast 提示「不含标注」。
+- 历史回放态（`,/.` 切帧后）一切裁剪都路由回显示中的那帧（`snipaste_crop_region` 裁 `last_screenshot`），会话冻结图与显示内容永不错位。
+- 贴图坐标：前端直接传全局物理矩形（替换原 CSS×scale 换算）。
 
 ### S2.5 生命周期与孤儿根除
 
 - overlay 窗口全部活在主 App 进程内：主 App 退出即消失；`RunEvent::Exit` 再兜底关一遍 `snipaste-overlay-*`。
-- 热键连按：`close_stale_overlay` 改为关闭所有 `snipaste-overlay-*`。
+- 会话互斥锁（SESSION_LOCK compare_exchange）：抓屏+建窗的几百毫秒内再按热键直接忽略，防并发重入互相关窗。
+- 热键连按（上一轮已建窗时）：`close_stale_overlays` 关闭所有 `snipaste-overlay-*` 后重建。
 - 会话空闲超时：Rust 侧 120s 无指针活动自动取消（防"开着 overlay 过夜"），有活动重置。
+- overlay 被 Alt+F4 等外部关闭且会话仍活着 → 整会话取消（正常收尾先清状态再关窗，不会误触）。
+- 键盘焦点只给光标屏的窗口（ESC 可用性不随 Screen::all() 枚举顺序漂移）；托盘入口在异步任务里跑会话，不冻结主线程事件循环。
 - 不再有截图子进程 → 孤儿进程/内存泄漏/replayd 打爆在结构上消失。
 
 ### S2.6 入口切换与 PyQt helper 退役
@@ -68,8 +82,8 @@ macOS 端截图全黑，且每按一次热键泄漏一个孤儿进程：
 ### S2.7 macOS 适配
 
 - **TCC 预检**：cfg(macos) 在启动会话时 `CGPreflightScreenCaptureAccess()`（extern "C" 直连 CoreGraphics），未授权 → emit `snipaste-error` 并提示去系统设置，不建 overlay。
-- **窗口层级/Space**：cfg(macos) 经 `ns_window()` 取 NSWindow，`setLevel: 25`（盖菜单栏，对齐 Python 版常量）、`setCollectionBehavior: canJoinAllSpaces | fullScreenAuxiliary`（全屏 App 所在 Space 也能盖住）。新增 macos-only 依赖 objc2/objc2-app-kit。
-- **验证移交**：TCC 授权、菜单栏、全屏 App、多屏的真机验证只能由用户在 mac 执行，交付时给出 30 秒自检清单；本机验证 Windows 双屏 + 编译级检查（CI macos build 兜底编译正确性）。
+- **窗口层级/Space**：cfg(macos) 经 `ns_window()` 取 NSWindow，`setLevel: 25`（盖菜单栏，对齐 Python 版常量）、`setCollectionBehavior: canJoinAllSpaces | fullScreenAuxiliary`（全屏 App 所在 Space 也能盖住）。新增 macos-only 依赖 objc2（raw msg_send，不引 objc2-app-kit）。
+- **验证移交**：TCC 授权、菜单栏、全屏 App、多屏（含不同缩放的「全局物理坐标」模型在 mac point 系下的表现）真机验证只能由用户在 mac 执行，交付时给出 30 秒自检清单；本机验证 Windows 双屏 + 编译级检查（CI macos build 兜底编译正确性）。
 
 ## [S3] Out of Scope
 

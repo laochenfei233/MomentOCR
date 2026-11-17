@@ -298,9 +298,17 @@ pub fn clear_session() {
     SESSION_INSTANT.store(false, std::sync::atomic::Ordering::SeqCst);
 }
 
+/// 会话是否还在进行（显示器列表非空）。
+/// overlay 窗口被外部关闭（Alt+F4）时用它区分「正常收尾中」和「会话仍活着」。
+pub fn session_active() -> bool {
+    !SESSION_MONITORS.lock().unwrap().is_empty()
+}
+
 /// 从会话显示器定格图中裁剪全局物理矩形（可跨屏）。
-/// 相交屏缩放不一致时统一放大到最大 scale（内容密度对齐，OCR 友好），
-/// 与旧 PyQt 覆盖层「最大 ratio 画布」同思路。
+/// 各屏定格图本就处于同一全局物理坐标系（screens crate 按物理像素逐屏捕获，
+/// 显示器在虚拟桌面平铺），把每块屏的交集部分按「交集原点 − 选区原点」原样
+/// 摆放即可 1:1 无缝重建选区内容，输出尺寸 = 选区全局物理尺寸。
+/// 不做跨屏密度归一：密度差异是屏幕的真实像素密度，重采样反而引入失真。
 pub fn crop_session_region(rect: (f64, f64, f64, f64)) -> Result<Vec<u8>> {
     use screenshots::image::{imageops, io::Reader, ImageOutputFormat, RgbaImage};
 
@@ -309,32 +317,16 @@ pub fn crop_session_region(rect: (f64, f64, f64, f64)) -> Result<Vec<u8>> {
         anyhow::bail!("选区太小");
     }
     let (rx, ry) = (rx.round() as i32, ry.round() as i32);
-    let (rw, rh) = (rw.round() as i32, rh.round() as i32);
-    let (rx2, ry2) = (rx + rw, ry + rh);
+    let (rw, rh) = (rw.round().max(1.0) as u32, rh.round().max(1.0) as u32);
 
     let monitors = get_session_monitors();
-    let mut hits: Vec<&SessionMonitor> = monitors
-        .iter()
-        .filter(|m| {
-            rx < m.x + m.width as i32
-                && rx2 > m.x
-                && ry < m.y + m.height as i32
-                && ry2 > m.y
-        })
-        .collect();
-    if hits.is_empty() {
-        anyhow::bail!("选区不在任何屏幕内");
-    }
-    // 拼接顺序稳定：按阅读序（先上后下、先左后右）
-    hits.sort_by_key(|m| (m.y, m.x));
-
-    let max_scale = hits.iter().map(|m| m.scale).fold(0.0_f64, f64::max);
-    let mut parts: Vec<RgbaImage> = Vec::with_capacity(hits.len());
-    for m in &hits {
+    let mut canvas = RgbaImage::new(rw, rh);
+    let mut painted = false;
+    for m in &monitors {
         let ix = rx.max(m.x);
         let iy = ry.max(m.y);
-        let ix2 = rx2.min(m.x + m.width as i32);
-        let iy2 = ry2.min(m.y + m.height as i32);
+        let ix2 = (rx + rw as i32).min(m.x + m.width as i32);
+        let iy2 = (ry + rh as i32).min(m.y + m.height as i32);
         if ix2 <= ix || iy2 <= iy {
             continue;
         }
@@ -351,49 +343,15 @@ pub fn crop_session_region(rect: (f64, f64, f64, f64)) -> Result<Vec<u8>> {
             (iy2 - iy) as u32,
         )
         .to_image();
-        // 低密度屏放大到最大 scale，保证拼接后文字大小一致
-        let part = if (m.scale - max_scale).abs() > f64::EPSILON && m.scale > 0.0 {
-            let f = max_scale / m.scale;
-            let nw = ((crop.width() as f64) * f).round().max(1.0) as u32;
-            let nh = ((crop.height() as f64) * f).round().max(1.0) as u32;
-            imageops::resize(&crop, nw, nh, imageops::FilterType::CatmullRom)
-        } else {
-            crop
-        };
-        parts.push(part);
+        imageops::overlay(&mut canvas, &crop, (ix - rx) as i64, (iy - ry) as i64);
+        painted = true;
     }
-    if parts.is_empty() {
+    if !painted {
         anyhow::bail!("选区不在任何屏幕内");
     }
-
-    let encoded = if parts.len() == 1 {
-        let mut buf = Cursor::new(Vec::new());
-        parts[0].write_to(&mut buf, ImageOutputFormat::Png)?;
-        buf.into_inner()
-    } else {
-        // 同一行的屏横向拼接；仅上下排布的屏纵向拼接
-        let vertical = hits.iter().all(|m| m.x == hits[0].x);
-        let total: u32 = parts.iter().map(|p| if vertical { p.height() } else { p.width() }).sum();
-        let span: u32 = parts.iter().map(|p| if vertical { p.width() } else { p.height() }).max().unwrap_or(1);
-        let mut canvas = RgbaImage::new(
-            if vertical { span } else { total },
-            if vertical { total } else { span },
-        );
-        let mut pos = 0u32;
-        for p in &parts {
-            if vertical {
-                imageops::overlay(&mut canvas, p, 0, pos as i64);
-                pos += p.height();
-            } else {
-                imageops::overlay(&mut canvas, p, pos as i64, 0);
-                pos += p.width();
-            }
-        }
-        let mut buf = Cursor::new(Vec::new());
-        canvas.write_to(&mut buf, ImageOutputFormat::Png)?;
-        buf.into_inner()
-    };
-    Ok(encoded)
+    let mut buf = Cursor::new(Vec::new());
+    canvas.write_to(&mut buf, ImageOutputFormat::Png)?;
+    Ok(buf.into_inner())
 }
 
 /// 截图历史环形缓冲（最近 10 张），供 overlay 历史回放
