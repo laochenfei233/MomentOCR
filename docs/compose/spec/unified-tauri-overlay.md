@@ -4,7 +4,7 @@ status: delivered
 updated: 2026-11-18
 branch: feat/unified-tauri-overlay
 base: feat/snipaste-screenshot (43870f7，已包含 master 全部提交)
-commits: 43870f7..1e26d95
+commits: 43870f7..fa1f967
 ---
 
 # 统一 Tauri 截图覆盖层（多屏 + PyQt helper 退役）
@@ -94,22 +94,22 @@ macOS 端截图全黑，且每按一次热键泄漏一个孤儿进程：
 
 ## Tasks
 
-- [ ] T1: snipaste.rs 多屏捕获 + SESSION_MONITORS + 按屏取图命令 (covers: S2.1)
-- [ ] T2: lib.rs 每屏建窗 / 关闭全部 / 退出兜底 / 空闲超时 (covers: S2.2, S2.5)
-- [ ] T3: snipaste_select_event 会话 + snipaste-selection 广播 + instant 收尾 (covers: S2.3)
-- [ ] T4: crop_session_region 跨屏裁剪 + 贴图坐标改全局 (covers: S2.4)
-- [ ] T5: SnipasteOverlay.tsx 多屏适配（?m=、全局坐标、广播渲染、instant 模式） (covers: S2.3; depends: T1-T3)
-- [ ] T6: 入口切换 + helper spawn 链删除 + 事件统一 (covers: S2.6; depends: T3)
-- [ ] T7: 仓库/打包/CI 清理（py、binaries、resources、prepare-overlay、死代码） (covers: S2.6; depends: T6)
-- [ ] T8: mac 适配 shim（TCC 预检、NSWindow level/Space） (covers: S2.7; depends: T2)
-- [ ] T9: 验证 — cargo clippy/test、tsc、vite build、本机双屏冒烟 (covers: S4; depends: T1-T8)
+- [x] T1: snipaste.rs 多屏捕获 + SESSION_MONITORS + 按屏取图命令 (covers: S2.1)
+- [x] T2: lib.rs 每屏建窗 / 关闭全部 / 退出兜底 / 空闲超时 (covers: S2.2, S2.5)
+- [x] T3: snipaste_select_event 会话 + snipaste-selection 广播 + instant 收尾 (covers: S2.3)
+- [x] T4: crop_session_region 跨屏裁剪 + 贴图坐标改全局 (covers: S2.4)
+- [x] T5: SnipasteOverlay.tsx 多屏适配（?m=、全局坐标、广播渲染、instant 模式） (covers: S2.3; depends: T1-T3)
+- [x] T6: 入口切换 + helper spawn 链删除 + 事件统一 (covers: S2.6; depends: T3)
+- [x] T7: 仓库/打包/CI 清理（py、binaries、resources、prepare-overlay、死代码） (covers: S2.6; depends: T6)
+- [x] T8: mac 适配 shim（TCC 预检、NSWindow level/Space） (covers: S2.7; depends: T2)
+- [x] T9: 验证 — cargo clippy/test、tsc、vite build、本机双屏冒烟 (covers: S4; depends: T1-T8)
 
 ## [S4] Acceptance
 
-- [ ] A1 单屏行为不回归：框选/窗口吸附/标注/贴图/取色/历史与分支已交付行为一致
-- [ ] A2 双屏（4K + 1080p@125%）：每屏各出 overlay；跨屏拖选能正确裁剪（黑占比诊断 + CDP 冒烟）
-- [ ] A3 热键/托盘/相机三入口都走新链路；全仓库不再 spawn screenshot_overlay
-- [ ] A4 安装包不再携带 PyQt 覆盖层（resources 无 binaries/screenshot_overlay）
-- [ ] A5 生命周期：热键连按不留旧窗口；主 App 退出无残留；120s 空闲自动取消
-- [ ] A6 混合 DPI：125% 副屏上裁剪区域与选区一致（CSS×dpr + 物理落位手法）
+- [x] A1 单屏行为不回归：框选/窗口吸附/标注/贴图/取色/历史与分支已交付行为一致
+- [x] A2 双屏（4K + 1080p@125%）：每屏各出 overlay；跨屏拖选能正确裁剪（黑占比诊断 + CDP 冒烟）
+- [x] A3 热键/托盘/相机三入口都走新链路；全仓库不再 spawn screenshot_overlay
+- [x] A4 安装包不再携带 PyQt 覆盖层（resources 无 binaries/screenshot_overlay）
+- [x] A5 生命周期：热键连按不留旧窗口；主 App 退出无残留；120s 空闲自动取消
+- [x] A6 混合 DPI：125% 副屏上裁剪区域与选区一致（CSS×dpr + 物理落位手法）
 - [ ] A7 mac（用户真机）：授权后截图不再黑屏且明显快于 6s；盖住菜单栏；全屏 App 所在 Space 可见；连按无孤儿进程
