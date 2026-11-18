@@ -165,43 +165,63 @@ export default function SnipasteOverlay() {
     && gRect.x + gRect.width / 2 >= ownBounds.x && gRect.x + gRect.width / 2 < ownBounds.x + ownBounds.w
     && gRect.y + gRect.height / 2 >= ownBounds.y && gRect.y + gRect.height / 2 < ownBounds.y + ownBounds.h);
 
-  // 检查是否为长截图 / instant 模式
-  useEffect(() => {
-    setIsLongScreenshot(monitorRef.current.mode === 'long');
-    setIsInstant(monitorRef.current.mode === 'instant');
+  // 会话驱动加载：窗口可被预创建并在多轮会话间复用，所以「取图」不能绑在
+  // mount 上（那时可能根本没有会话），而是每次会话开始（session-reset 事件）
+  // 或挂载后发现会话已在进行（snapshot）才加载。
+  const applySessionMode = useCallback((mode: string | null) => {
+    setIsInstant(mode === 'instant');
+    setIsLongScreenshot(mode === 'long');
   }, []);
 
-  // 加载本屏显示图（JPEG）。编码在 Rust 后台进行，窗口先出现、图稍后到：
-  // 这里短暂重试，而不是让窗口等编码完成。上限约 6 秒（100×60ms）。
-  useEffect(() => {
-    let cancelled = false;
-    const loadScreenshot = async () => {
-      // 会话开始加载的必然是会话冻结图，重置历史回放态
-      sourceIsHistoryRef.current = false;
-      for (let attempt = 0; attempt < 100 && !cancelled; attempt++) {
-        try {
-          const base64 = await invoke<string>('snipaste_get_monitor_display_base64', {
-            index: monitorRef.current.index,
-          });
-          if (cancelled) return;
-          setImageSrc(`data:image/jpeg;base64,${base64}`);
-          setFramesReady(true);
-          return;
-        } catch {
-          await new Promise((r) => setTimeout(r, 60));
-        }
-      }
-      if (!cancelled) console.error('显示图加载超时');
-    };
-    loadScreenshot();
-  }, []);
-
-  // 会话显示器列表（跨屏选区判断用）
-  useEffect(() => {
+  const loadDisplayImage = useCallback(async () => {
+    // 新一轮会话必然是冻结帧，重置历史回放态与上一轮残留状态
+    sourceIsHistoryRef.current = false;
+    setImageSrc('');
+    setFramesReady(false);
+    setGlobalSel({ dragging: false, start: null, current: [0, 0] });
+    setSelectedId(null);
+    setDetectRect(null);
+    clearAnnotations();
+    // 会话显示器列表随会话刷新（跨屏选区判断用）
     invoke<{ x: number; y: number; width: number; height: number }[]>('snipaste_get_monitors')
       .then((ms) => { monitorsRef.current = ms; })
       .catch(() => {});
-  }, []);
+    // 订阅并发可能切换会话，用局部标记避免把上一轮的图写进来
+    for (let attempt = 0; attempt < 100; attempt++) {
+      try {
+        const base64 = await invoke<string>('snipaste_get_monitor_display_base64', {
+          index: monitorRef.current.index,
+        });
+        setImageSrc(`data:image/jpeg;base64,${base64}`);
+        setFramesReady(true);
+        return;
+      } catch {
+        await new Promise((r) => setTimeout(r, 60));
+      }
+    }
+    console.error('显示图加载超时');
+  }, [clearAnnotations]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const un = listen<{ mode: string }>('snipaste-session-reset', (e) => {
+      if (cancelled) return;
+      applySessionMode(e.payload.mode);
+      void loadDisplayImage();
+    });
+    // 补事件竞态：窗口创建晚于事件发出时，靠快照自恢复
+    invoke<{ active: boolean; mode: string | null }>('snipaste_session_snapshot')
+      .then((snap) => {
+        if (cancelled || !snap.active || !snap.mode) return;
+        applySessionMode(snap.mode);
+        void loadDisplayImage();
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+      un.then((f) => f()).catch(() => {});
+    };
+  }, [applySessionMode, loadDisplayImage]);
 
   // 订阅 Rust 广播的选区状态
   useEffect(() => {

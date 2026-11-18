@@ -14,7 +14,9 @@ use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 use chrono::Local;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
+use std::sync::Mutex;
+use once_cell::sync::Lazy;
 
 /// 常驻行为的开关。设置在渲染进程的 localStorage 里，但「关闭窗口」和「点托盘」
 /// 都发生在原生侧，跨 IPC 回读前端状态又要处理前端未就绪的情况，所以镜像一份。
@@ -410,6 +412,30 @@ static SESSION_SEQ: AtomicU64 = AtomicU64::new(0);
 /// 会话互斥：抓屏 + 建窗要几百毫秒，期间第二次热键不能并发再起一轮
 static SESSION_LOCK: AtomicBool = AtomicBool::new(false);
 
+/// 当前会话模式（0=无 1=instant 2=toolbar 3=long）。前端挂载时查它对齐状态：
+/// 预创建窗口可能错过 session-reset 事件。
+static SESSION_MODE: AtomicU8 = AtomicU8::new(0);
+
+fn mode_code(mode: SnipasteMode) -> u8 {
+    match mode {
+        SnipasteMode::Instant => 1,
+        SnipasteMode::Toolbar => 2,
+        SnipasteMode::Long => 3,
+    }
+}
+
+/// 前端挂载/重连时查询会话快照（弥补事件可能早于监听注册的竞态）
+#[tauri::command]
+fn snipaste_session_snapshot() -> serde_json::Value {
+    let mode = match SESSION_MODE.load(Ordering::SeqCst) {
+        1 => Some("instant"),
+        2 => Some("toolbar"),
+        3 => Some("long"),
+        _ => None,
+    };
+    serde_json::json!({ "active": snipaste::session_active(), "mode": mode })
+}
+
 #[derive(Clone, Copy, PartialEq)]
 enum SnipasteMode {
     /// 框选松开即识别（原 PyQt 覆盖层的 --instant）
@@ -448,6 +474,69 @@ fn close_stale_overlays(app: &tauri::AppHandle) {
     }
 }
 
+/// 已建好窗口对应的显示器几何指纹（x, y, w, h）。
+/// 会话复用的前提：窗口数与几何都没变；显示器增删/改分辨率就重建。
+/// 显示器几何指纹：(x, y, width, height)
+type LayoutFingerprint = Vec<(i32, i32, u32, u32)>;
+
+static LAID_OUT_LAYOUT: Lazy<Mutex<LayoutFingerprint>> = Lazy::new(|| Mutex::new(Vec::new()));
+
+fn layout_of(monitors: &[snipaste::MonitorInfo]) -> LayoutFingerprint {
+    monitors
+        .iter()
+        .map(|m| (m.x, m.y, m.width, m.height))
+        .collect()
+}
+
+/// 预创建覆盖层窗口（隐藏）。
+/// WebView2 实例创建是固定成本（每窗约 200ms，且必须走主线程无法并行），
+/// 按键后再建窗就把这 200–400ms 直接加在用户等待上。提前建好、只 hide 不 close，
+/// 按键时就只剩「抓屏 + show」。
+fn prepare_overlay_windows(app: &tauri::AppHandle) -> Result<(), String> {
+    if !overlay_windows(app).is_empty() {
+        return Ok(());
+    }
+    let monitors =
+        snipaste::enumerate_monitors(app).map_err(|e: anyhow::Error| e.to_string())?;
+    for (i, m) in monitors.iter().enumerate() {
+        build_overlay_window(app, i, m)?;
+    }
+    *LAID_OUT_LAYOUT.lock().unwrap() = layout_of(&monitors);
+    Ok(())
+}
+
+/// 让窗口与本次会话的显示器布局对齐：能复用就复用（保留已加载的页面），
+/// 不能就关掉重建。返回是否走了复用路径。
+fn ensure_overlay_windows(
+    app: &tauri::AppHandle,
+    monitors: &[snipaste::MonitorInfo],
+) -> Result<bool, String> {
+    let layout = layout_of(monitors);
+    let reusable = overlay_windows(app).len() == monitors.len()
+        && *LAID_OUT_LAYOUT.lock().unwrap() == layout;
+    if reusable {
+        return Ok(true);
+    }
+    close_stale_overlays(app);
+    for (i, m) in monitors.iter().enumerate() {
+        build_overlay_window(app, i, m)?;
+    }
+    *LAID_OUT_LAYOUT.lock().unwrap() = layout;
+    Ok(false)
+}
+
+/// 统一 show 所有覆盖窗口（同一时刻出现，消除逐窗冒出来的时间差）
+fn show_overlay_windows(app: &tauri::AppHandle, cursor_index: usize) {
+    let wins = overlay_windows(app);
+    for w in &wins {
+        let _ = w.show();
+    }
+    // 键盘焦点（ESC）只给光标屏那一块
+    if let Some(w) = wins.get(cursor_index) {
+        let _ = w.set_focus();
+    }
+}
+
 /// 收尾兜底：任何退出路径都要把主窗口还回来（build 失败等异常场景）
 fn restore_main_window(app: &tauri::AppHandle) {
     if let Some(main_window) = app.get_webview_window("main") {
@@ -462,20 +551,15 @@ fn restore_main_window(app: &tauri::AppHandle) {
 fn build_overlay_window(
     app: &tauri::AppHandle,
     index: usize,
-    m: &snipaste::SessionMonitor,
-    mode: SnipasteMode,
-    focus: bool,
+    m: &snipaste::MonitorInfo,
 ) -> Result<tauri::WebviewWindow, String> {
     use tauri::{PhysicalPosition, PhysicalSize, Position, Size, WebviewUrl, WebviewWindowBuilder};
     let label = format!("{OVERLAY_PREFIX}-{index}");
-    // 显示器几何经 URL 参数带给窗口：CSS↔全局物理坐标换算不需要再异步取
+    // 只把显示器几何写进 URL（会话模式走事件，窗口因此可跨模式复用）
     let url = WebviewUrl::App(
         format!(
-            "/snipaste-overlay?mode={}&m={index}&mx={}&my={}&mscale={}",
-            mode.url_param(),
-            m.x,
-            m.y,
-            m.scale
+            "/snipaste-overlay?m={index}&mx={}&my={}&mscale={}",
+            m.x, m.y, m.scale
         )
         .into(),
     );
@@ -496,12 +580,7 @@ fn build_overlay_window(
         .map_err(|e| e.to_string())?;
     #[cfg(target_os = "macos")]
     mac_overlay_chrome(&win);
-    win.show().map_err(|e| e.to_string())?;
-    // 键盘焦点（ESC 可用性）只给光标屏那一块；每屏都 set_focus 会让
-    // 焦点落在 Screen::all() 枚举的最后一屏，随枚举顺序漂移
-    if focus {
-        let _ = win.set_focus();
-    }
+    // 保持隐藏：由 show_overlay_windows 在抓屏完成后统一 show
     Ok(win)
 }
 
@@ -543,14 +622,18 @@ fn preflight_screen_capture() -> bool {
     unsafe { CGPreflightScreenCaptureAccess() != 0 }
 }
 
-/// 结束本轮会话：清状态、关全部 overlay、还主窗口。
-/// overlay 窗口都活在主进程内，不存在子进程孤儿问题；这里同时递增会话代次
+/// 结束本轮会话：清状态、隐藏全部 overlay（窗口保留复用）、还主窗口。
+/// 窗口都活在主进程内，不存在子进程孤儿问题；这里同时递增会话代次
 /// 让空闲计时任务退出、放开会话互斥锁。
 fn teardown_session(app: &tauri::AppHandle) {
     snipaste::clear_session();
     SESSION_SEQ.fetch_add(1, Ordering::SeqCst);
     SESSION_LOCK.store(false, Ordering::SeqCst);
-    close_stale_overlays(app);
+    SESSION_MODE.store(0, Ordering::SeqCst);
+    // 只隐藏不关闭：WebView2 实例留着，下一轮按热键时省掉 200–400ms 的建窗成本
+    for w in overlay_windows(app) {
+        let _ = w.hide();
+    }
     restore_main_window(app);
 }
 
@@ -598,8 +681,7 @@ fn start_overlay_session(app: &tauri::AppHandle, mode: SnipasteMode) -> Result<(
 }
 
 fn start_overlay_session_inner(app: &tauri::AppHandle, mode: SnipasteMode) -> Result<(), String> {
-    // 热键连按：先收掉上一轮，防止 label 冲突与窗口堆积
-    close_stale_overlays(app);
+    let t0 = std::time::Instant::now();
     snipaste::clear_session();
     snipaste::touch_activity();
 
@@ -615,128 +697,196 @@ fn start_overlay_session_inner(app: &tauri::AppHandle, mode: SnipasteMode) -> Re
 
     let cursor = app.cursor_position().map_err(|e| e.to_string())?;
 
-    // 抓屏：只取原始帧，不编码。编码（尤其 4K 的 PNG）要几百毫秒到秒级，
-    // 放在建窗之前会让「按键到出罩」的时间全花在用户看不见的编码上。
-    let mut monitors: Vec<snipaste::SessionMonitor> = Vec::new();
-    let mut frames: Vec<screenshots::image::RgbaImage> = Vec::new();
-    if mode == SnipasteMode::Long {
-        // 长截图续拍要锁定同一块屏
+    // 1) 先只枚举显示器几何（几毫秒）：建窗与抓屏因此可以并行，
+    //    窗口不必等抓屏/编码，抓屏也不必等建窗。
+    let infos: Vec<snipaste::MonitorInfo> = if mode == SnipasteMode::Long {
+        // 长截图锁光标所在屏
         snipaste::SnipasteManager::clear_long_screenshot_paths();
-        let mut cap = snipaste::capture_monitor_containing(cursor.x, cursor.y)
-            .map_err(|e: anyhow::Error| e.to_string())?;
-        // screens crate 的 scale_factor 在部分机器上误报 1.0，以 Tauri（tao，DPI 感知）为准
-        if let Ok(Some(m)) = app.monitor_from_point(cursor.x, cursor.y) {
-            cap.scale = m.scale_factor();
-        }
-        snipaste::set_session_monitor(cap.x, cap.y, cap.width, cap.height, cap.scale);
-        monitors.push(snipaste::SessionMonitor {
-            x: cap.x,
-            y: cap.y,
-            width: cap.width,
-            height: cap.height,
-            scale: cap.scale,
+        let all = snipaste::enumerate_monitors(app).map_err(|e: anyhow::Error| e.to_string())?;
+        let target = all
+            .iter()
+            .find(|m| {
+                cursor.x >= m.x as f64
+                    && cursor.x < (m.x + m.width as i32) as f64
+                    && cursor.y >= m.y as f64
+                    && cursor.y < (m.y + m.height as i32) as f64
+            })
+            .or_else(|| all.first())
+            .cloned()
+            .ok_or_else(|| "找不到可用屏幕".to_string())?;
+        snipaste::set_session_monitor(target.x, target.y, target.width, target.height, target.scale);
+        vec![target]
+    } else {
+        snipaste::enumerate_monitors(app).map_err(|e: anyhow::Error| e.to_string())?
+    };
+
+    let monitors: Vec<snipaste::SessionMonitor> = infos
+        .iter()
+        .map(|m| snipaste::SessionMonitor {
+            x: m.x,
+            y: m.y,
+            width: m.width,
+            height: m.height,
+            scale: m.scale,
             // 路径由后台编码完成后再回填
             path: String::new(),
-        });
-        frames.push(cap.frame);
-    } else {
-        let caps = snipaste::capture_all_monitors(app)
-            .map_err(|e: anyhow::Error| e.to_string())?;
-        for cap in caps {
-            monitors.push(snipaste::SessionMonitor {
-                x: cap.x,
-                y: cap.y,
-                width: cap.width,
-                height: cap.height,
-                scale: cap.scale,
-                path: String::new(),
-            });
-            frames.push(cap.frame);
-        }
-    }
+        })
+        .collect();
 
-    let cursor_index = monitors.iter().position(|m| {
-        cursor.x >= m.x as f64
-            && cursor.x < (m.x + m.width as i32) as f64
-            && cursor.y >= m.y as f64
-            && cursor.y < (m.y + m.height as i32) as f64
-    })
-    .unwrap_or(0);
+    let cursor_index = monitors
+        .iter()
+        .position(|m| {
+            cursor.x >= m.x as f64
+                && cursor.x < (m.x + m.width as i32) as f64
+                && cursor.y >= m.y as f64
+                && cursor.y < (m.y + m.height as i32) as f64
+        })
+        .unwrap_or(0);
 
-    snipaste::set_session_monitors(monitors.clone());
-    snipaste::set_session_frames(frames.clone());
+    snipaste::set_session_monitors(monitors);
     snipaste::set_session_instant(mode == SnipasteMode::Instant);
+    SESSION_MODE.store(mode_code(mode), Ordering::SeqCst);
 
-    // 隐藏主窗口
+    // 隐藏主窗口（必须在抓屏前完成，别把自己拍进去）
     if let Some(main_window) = app.get_webview_window("main") {
         main_window.hide().map_err(|e: tauri::Error| e.to_string())?;
     }
 
-    // 先建窗：窗口与提示立刻可见，图在后台补（前端显示"正在截取屏幕…"）
-    for (i, m) in monitors.iter().enumerate() {
-        if let Err(e) = build_overlay_window(app, i, m, mode, i == cursor_index) {
-            teardown_session(app);
-            return Err(e);
-        }
+    // 2) 对齐窗口：预创建的窗口几何与本次一致就直接复用（页面已加载好），
+    //    否则重建。两种情况下窗口此刻都是隐藏的。
+    if let Err(e) = ensure_overlay_windows(app, &infos) {
+        teardown_session(app);
+        return Err(e);
     }
 
-    // 后台编码：显示图（JPEG）优先给前端，无损 PNG 落盘随后；每屏一个线程并行。
-    // 裁剪不依赖 PNG（crop_session_region 直接读内存帧），所以落盘慢不影响识别。
-    spawn_encode_session(app.clone(), frames, cursor_index, mode);
+    // 3) 必须先抓屏再 show：把窗口排除出捕获（WDA_EXCLUDEFROMCAPTURE）虽然能让
+    //    BitBlt 忽略窗口，但实测会把被遮住的区域挖成黑色——overlay 铺满全屏时抓到
+    //    的就是一张黑图，所以这条捷径不通。抓屏 4K 约 150–230ms 是 GDI 的物理成本。
+    spawn_capture_then_show(app.clone(), cursor_index, mode, t0);
 
     start_idle_timeout(app);
     Ok(())
 }
 
-/// 会话定格帧的后台编码。用会话代次做失效判断：新一轮截图已经开始就放弃，
-/// 别把上一轮的图写进新会话或已清空的静态表。
-fn spawn_encode_session(
+/// 抓本次会话的帧（长截图锁光标屏，其余全部屏）
+fn capture_session_frames(
+    app: &tauri::AppHandle,
+    mode: SnipasteMode,
+    t0: std::time::Instant,
+) -> Option<Vec<screenshots::image::RgbaImage>> {
+    let frames = if mode == SnipasteMode::Long {
+        match snipaste::capture_session_monitor() {
+            Ok(frame) => vec![frame],
+            Err(_) => return None,
+        }
+    } else {
+        match snipaste::capture_all_monitors(app) {
+            Ok(frames) => frames,
+            Err(_) => return None,
+        }
+    };
+    timing_log(t0, "capture done");
+    Some(frames)
+}
+
+/// 诊断计时：把关键阶段耗时追加到 %TEMP%/momentocr-timing.log。
+/// GUI 进程没有 stderr，出罩延迟这类问题只能落盘取证；每轮 4 行，代价可忽略。
+fn timing_log(t0: std::time::Instant, stage: &str) {
+    use std::io::Write;
+    let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(std::env::temp_dir().join("momentocr-timing.log"))
+    else {
+        return;
+    };
+    let _ = writeln!(f, "{:>6} ms  {}", t0.elapsed().as_millis(), stage);
+}
+
+/// 后台抓屏，抓到后统一显示窗口并通知前端换图，随后并行编码。
+/// 抓屏必须早于 show（否则会把覆盖层自己拍进画面），所以这里先抓后显。
+fn spawn_capture_then_show(
     app: tauri::AppHandle,
-    frames: Vec<screenshots::image::RgbaImage>,
     cursor_index: usize,
     mode: SnipasteMode,
+    t0: std::time::Instant,
 ) {
     let seq = SESSION_SEQ.load(Ordering::SeqCst);
     tauri::async_runtime::spawn_blocking(move || {
-        std::thread::scope(|scope| {
-            for (i, frame) in frames.into_iter().enumerate() {
-                let app = app.clone();
-                scope.spawn(move || {
-                    let stale = || SESSION_SEQ.load(Ordering::SeqCst) != seq;
+        let Some(frames) = capture_session_frames(&app, mode, t0) else {
+            return;
+        };
+        if SESSION_SEQ.load(Ordering::SeqCst) != seq {
+            return;
+        }
+        snipaste::set_session_frames(frames.clone());
 
-                    // 1) 显示图：JPEG 编码快、体积小一个数量级，前端等的就是它
-                    if let Ok(b64) = snipaste::encode_display_jpeg(&frame) {
-                        if stale() {
-                            return;
-                        }
-                        snipaste::set_display_image(i, b64);
-                        let _ = app.emit("snipaste-frame-ready", i);
-                    }
+        // 统一 show + 通知前端进入新一轮会话（窗口已预创建，这里是纯 show）
+        let app_show = app.clone();
+        let mode_str = mode.url_param();
+        let _ = app.run_on_main_thread(move || {
+            show_overlay_windows(&app_show, cursor_index);
+            timing_log(t0, "windows shown");
+            let _ = app_show.emit(
+                "snipaste-session-reset",
+                serde_json::json!({ "mode": mode_str, "cursorIndex": cursor_index }),
+            );
+        });
 
-                    // 2) 无损 PNG 落盘（OCR 与历史回放/长截图续拍用）
+        encode_frames(&app, frames, cursor_index, mode, seq, t0);
+    });
+}
+
+/// 会话定格帧的编码：显示图（JPEG）优先，无损 PNG 落盘随后；每屏一个线程并行。
+/// 裁剪不依赖 PNG（crop_session_region 直接读内存帧），所以落盘慢不影响识别。
+fn encode_frames(
+    app: &tauri::AppHandle,
+    frames: Vec<screenshots::image::RgbaImage>,
+    cursor_index: usize,
+    mode: SnipasteMode,
+    seq: u64,
+    t0: std::time::Instant,
+) {
+    std::thread::scope(|scope| {
+        for (i, frame) in frames.into_iter().enumerate() {
+            let app = app.clone();
+            scope.spawn(move || {
+                let stale = || SESSION_SEQ.load(Ordering::SeqCst) != seq;
+
+                // 1) 显示图：JPEG 编码快、体积小一个数量级，前端等的就是它
+                if let Ok(b64) = snipaste::encode_display_jpeg(&frame) {
                     if stale() {
                         return;
                     }
-                    if let Ok(png) = snipaste::encode_png(&frame) {
-                        if stale() {
-                            return;
+                    timing_log(t0, &format!("display jpeg ready (screen {i}, {} KB)", b64.len() / 1024));
+                    snipaste::set_display_image(i, b64);
+                    let _ = app.emit("snipaste-frame-ready", i);
+                }
+
+                // 2) 无损 PNG 落盘（OCR 与历史回放/长截图续拍用）
+                if stale() {
+                    return;
+                }
+                if let Ok(png) = snipaste::encode_png(&frame) {
+                    if stale() {
+                        return;
+                    }
+                    let path = snipaste::SnipasteManager::generate_temp_path("snipaste");
+                    if snipaste::SnipasteManager::save_to_file(&png, &path).is_ok() {
+                        timing_log(t0, &format!("png saved (screen {i})"));
+                        let path_str = path.to_string_lossy().to_string();
+                        if mode == SnipasteMode::Long {
+                            snipaste::SnipasteManager::add_long_screenshot_path(path_str.clone());
                         }
-                        let path = snipaste::SnipasteManager::generate_temp_path("snipaste");
-                        if snipaste::SnipasteManager::save_to_file(&png, &path).is_ok() {
-                            let path_str = path.to_string_lossy().to_string();
-                            if mode == SnipasteMode::Long {
-                                snipaste::SnipasteManager::add_long_screenshot_path(path_str.clone());
-                            }
-                            snipaste::set_session_monitor_path(i, path_str.clone());
-                            if i == cursor_index {
-                                snipaste::SnipasteManager::set_last_screenshot(path_str.clone());
-                                snipaste::push_history(path_str);
-                            }
+                        snipaste::set_session_monitor_path(i, path_str.clone());
+                        if i == cursor_index {
+                            snipaste::SnipasteManager::set_last_screenshot(path_str.clone());
+                            snipaste::push_history(path_str);
                         }
                     }
-                });
-            }
-        });
+                }
+            });
+        }
     });
 }
 
@@ -926,7 +1076,7 @@ async fn snipaste_capture_next(app: tauri::AppHandle) -> Result<String, String> 
         let cap = snipaste::capture_session_monitor()
             .map_err(|e: anyhow::Error| e.to_string())?;
         // 长截图是手动步进流程，同步编码一帧的耗时可接受
-        let png = snipaste::encode_png(&cap.frame)
+        let png = snipaste::encode_png(&cap)
             .map_err(|e: anyhow::Error| e.to_string())?;
         let path = snipaste::SnipasteManager::generate_temp_path("longshot");
         snipaste::SnipasteManager::save_to_file(&png, &path)
@@ -1161,6 +1311,7 @@ pub fn run() {
             snipaste_list_pins, snipaste_set_pin_visible, snipaste_close_pin,
             snipaste_toggle_mouse_through, snipaste_detect_window, snipaste_history_step,
             snipaste_get_monitor_display_base64, snipaste_get_monitors, snipaste_select_event,
+            snipaste_session_snapshot,
             snipaste_crop_session, snipaste_cancel
         ])
         .on_window_event(|window, event| {
@@ -1200,6 +1351,18 @@ pub fn run() {
                 }
             }
             setup_tray(app)?;
+
+            // 启动后延迟预创建覆盖层窗口（隐藏）。WebView2 实例创建 ~200ms/窗且
+            // 必须走主线程，按键后再建就白等这 200–400ms；提前建好让截图秒开。
+            // 延迟几秒避开启动高峰；用户已经截过图则 prepare 自己跳过。
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_secs(4)).await;
+                let inner = handle.clone();
+                let _ = handle.run_on_main_thread(move || {
+                    let _ = prepare_overlay_windows(&inner);
+                });
+            });
             Ok(())
         })
         .build(tauri::generate_context!())

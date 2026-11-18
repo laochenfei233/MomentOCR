@@ -35,6 +35,7 @@ screenshots = "0.8"
 chrono = "0.4"
 once_cell = "1"
 dirs = "5"
+jpeg-encoder = { version = "0.6", features = ["simd"] }
 
 # 依赖不产出调试符号：显著缩小构建体积、加快链接；代价是无法单步进入依赖代码
 [profile.dev.package."*"]

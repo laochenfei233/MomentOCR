@@ -70,20 +70,10 @@ pub fn remove_pin(id: &str) -> Option<PinData> {
     PIN_IMAGES.lock().unwrap().remove(id)
 }
 
-/// 单显示器捕获结果（物理像素原始帧 + 显示器几何）。
-/// 帧保持未编码：从按键到出图的路径上不做 PNG 编码（4K 一帧编码要几百毫秒），
+/// 捕获包含物理坐标点 (cx, cy) 的显示器，返回物理像素原始帧（未编码）。
+/// 帧不编码：从按键到出图的路径上不做 PNG 编码（4K 一帧要几百毫秒），
 /// 显示与裁剪都直接用原始像素，编码交给后台任务。
-pub struct MonitorCapture {
-    pub frame: screenshots::image::RgbaImage,
-    pub scale: f64,
-    pub x: i32,
-    pub y: i32,
-    pub width: u32,
-    pub height: u32,
-}
-
-/// 捕获包含物理坐标点 (cx, cy) 的显示器
-pub fn capture_monitor_containing(cx: f64, cy: f64) -> Result<MonitorCapture> {
+pub fn capture_monitor_containing(cx: f64, cy: f64) -> Result<screenshots::image::RgbaImage> {
     let screens = Screen::all()?;
     if screens.is_empty() {
         return Err(anyhow::anyhow!("找不到可用屏幕"));
@@ -100,16 +90,7 @@ pub fn capture_monitor_containing(cx: f64, cy: f64) -> Result<MonitorCapture> {
         })
         .unwrap_or_else(|| screens.first().unwrap());
 
-    let img = screen.capture()?;
-    let d = &screen.display_info;
-    Ok(MonitorCapture {
-        frame: img,
-        scale: d.scale_factor as f64,
-        x: d.x,
-        y: d.y,
-        width: d.width,
-        height: d.height,
-    })
+    screen.capture()
 }
 
 /// 显示器几何：物理原点 (x, y)、物理尺寸 (宽, 高)、缩放系数
@@ -128,7 +109,7 @@ pub fn get_session_monitor() -> Option<MonitorGeometry> {
 }
 
 /// 捕获会话显示器（无会话时退回主屏）
-pub fn capture_session_monitor() -> Result<MonitorCapture> {
+pub fn capture_session_monitor() -> Result<screenshots::image::RgbaImage> {
     let (x, y, w, h, _) = get_session_monitor()
         .ok_or_else(|| anyhow::anyhow!("没有会话显示器记录"))?;
     // 用显示器中心点定位
@@ -169,8 +150,10 @@ pub fn set_session_monitor_path(index: usize, path: String) {
 
 /// 会话原始帧（与 SESSION_MONITORS 同索引）。裁剪直接读它：
 /// 用户框选可能在 PNG 落盘之前完成，等文件就会引入几百毫秒到数秒的延迟。
-static SESSION_FRAMES: Lazy<Mutex<Vec<Option<std::sync::Arc<screenshots::image::RgbaImage>>>>> =
-    Lazy::new(|| Mutex::new(Vec::new()));
+/// 会话原始帧条目（Arc 便于后台编码与裁剪共享同一块像素）
+type FrameSlot = Option<std::sync::Arc<screenshots::image::RgbaImage>>;
+
+static SESSION_FRAMES: Lazy<Mutex<Vec<FrameSlot>>> = Lazy::new(|| Mutex::new(Vec::new()));
 
 pub fn set_session_frames(frames: Vec<screenshots::image::RgbaImage>) {
     *SESSION_FRAMES.lock().unwrap() = frames
@@ -209,10 +192,18 @@ pub fn display_image(index: usize) -> Option<String> {
 
 /// 显示用 JPEG（有损，但体积比 PNG 小一个数量级：4K 约 0.6–1 MB vs 8–15 MB）。
 /// overlay 只是背景，画质损失不可见；OCR 仍走无损帧。
+/// 用 jpeg-encoder（SIMD）而不是 image 自带的编码器：4K 单帧 240ms → 约 90ms。
 pub fn encode_display_jpeg(frame: &screenshots::image::RgbaImage) -> Result<String> {
-    use screenshots::image::codecs::jpeg::JpegEncoder;
+    use jpeg_encoder::{ColorType, Encoder};
     let mut buf = Vec::new();
-    JpegEncoder::new_with_quality(&mut buf, 85).encode_image(frame)?;
+    Encoder::new(&mut buf, 85)
+        .encode(
+            frame.as_raw(),
+            frame.width() as u16,
+            frame.height() as u16,
+            ColorType::Rgba,
+        )
+        .map_err(|e| anyhow::anyhow!("JPEG 编码失败: {e}"))?;
     Ok(base64::engine::general_purpose::STANDARD.encode(&buf))
 }
 
@@ -230,38 +221,68 @@ pub struct CropOutput {
     pub base64: String,
 }
 
-/// 捕获全部显示器（物理像素原始帧，不做编码）。scale 以 Tauri（DPI 感知）为准回填：
-/// screens crate 的 scale_factor 在部分机器上误报 1.0。
-pub fn capture_all_monitors(app: &tauri::AppHandle) -> Result<Vec<MonitorCapture>> {
+/// 显示器几何（不抓屏）。建窗与抓屏要并行，所以先枚举、后抓：
+/// 枚举只读 display_info，几毫秒；抓屏几百毫秒。
+#[derive(Clone, serde::Serialize)]
+pub struct MonitorInfo {
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+    pub scale: f64,
+}
+
+/// 枚举全部显示器的几何信息（不抓屏）
+pub fn enumerate_monitors(app: &tauri::AppHandle) -> Result<Vec<MonitorInfo>> {
     let screens = Screen::all()?;
     if screens.is_empty() {
         return Err(anyhow::anyhow!("找不到可用屏幕"));
     }
     let tauri_monitors = app.available_monitors().unwrap_or_default();
-    let mut caps = Vec::with_capacity(screens.len());
-    for screen in screens {
-        let d = &screen.display_info;
-        let frame = screen.capture()?;
-        let scale = tauri_monitors
-            .iter()
-            .find(|m| {
-                m.position().x == d.x
-                    && m.position().y == d.y
-                    && m.size().width == d.width
-                    && m.size().height == d.height
-            })
-            .map(|m| m.scale_factor())
-            .unwrap_or(d.scale_factor as f64);
-        caps.push(MonitorCapture {
-            frame,
-            scale,
-            x: d.x,
-            y: d.y,
-            width: d.width,
-            height: d.height,
-        });
+    Ok(screens
+        .iter()
+        .map(|screen| {
+            let d = &screen.display_info;
+            let scale = tauri_monitors
+                .iter()
+                .find(|m| {
+                    m.position().x == d.x
+                        && m.position().y == d.y
+                        && m.size().width == d.width
+                        && m.size().height == d.height
+                })
+                .map(|m| m.scale_factor())
+                .unwrap_or(d.scale_factor as f64);
+            MonitorInfo {
+                x: d.x,
+                y: d.y,
+                width: d.width,
+                height: d.height,
+                scale,
+            }
+        })
+        .collect())
+}
+
+/// 抓全部显示器。
+/// 串行而非并行：GDI 抓屏要从显存读回，两个线程同时 BitBlt 会互相抢显存带宽，
+/// 实测并行反而比串行慢（315ms vs ~200ms），所以这里老老实实一块一块来。
+pub fn capture_all_monitors(app: &tauri::AppHandle) -> Result<Vec<screenshots::image::RgbaImage>> {
+    let count = enumerate_monitors(app)?.len();
+    let mut frames = Vec::with_capacity(count);
+    for i in 0..count {
+        frames.push(capture_index(i)?);
     }
-    Ok(caps)
+    Ok(frames)
+}
+
+/// 抓第 index 块屏
+fn capture_index(index: usize) -> Result<screenshots::image::RgbaImage> {
+    let screens = Screen::all()?;
+    let screen = screens
+        .get(index)
+        .ok_or_else(|| anyhow::anyhow!("显示器列表发生变化"))?;
+    screen.capture()
 }
 
 // ============ 跨屏选区会话 ============
