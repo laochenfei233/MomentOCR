@@ -1,0 +1,12 @@
+fa1f967	fix: 评审修复——会话互斥防重入、跨屏裁剪改全局偏移无缝拼合、历史帧裁剪路由回显示中的图
+25de2d4	fix: setTab 移入事件回调（注册时不触发），spec 勾选 T17/T18
+72247ea	feat: 截图识别恒为框选松开即识别（删两设置项），OCR 结果自动归位截图标签页 (S2.13/T17-T18)
+26fafc4	fix: T8 真机冒烟暴露的 6 个缺陷——create_pin 主线程死锁、scale_factor 误报、capability 漏窗口、pin 容器塌陷、resizable(false) 致 setSize 崩溃、双击被拖拽吞掉 + hide/show 位置恢复
+7a4a352	fix: 评审修复——overlay 物理落位/退出恢复主窗口/贴图双击隐藏/取色缓存失效/Alt+P 上报/标注归位
+31cf872	feat: snipaste 第二轮——贴图链路修复、DPI 换算、贴图体验包、取色器、窗口检测、贴图标注、历史回放 (T9-T15)
+ec3c684	feat: add move annotation, redo, and fix long screenshot
+c277f17	feat: add save path setting and keyboard shortcuts
+6f43df9	feat: export annotated images with annotations
+30928de	feat: add annotation editing features
+2d649ec	feat: add full annotation tools support
+4da549d	feat: implement snipaste screenshot and pin feature
