@@ -73,6 +73,7 @@ const COLORS = ['#FF3B30', '#FF9500', '#FFCC00', '#34C759', '#007AFF', '#5856D6'
 
 export default function SnipasteOverlay() {
   const [imageSrc, setImageSrc] = useState<string>('');
+  const [framesReady, setFramesReady] = useState(false);
   const [globalSel, setGlobalSel] = useState<GlobalSelection>({ dragging: false, start: null, current: [0, 0] });
   const [isLongScreenshot, setIsLongScreenshot] = useState(false);
   const [isInstant, setIsInstant] = useState(false);
@@ -170,22 +171,27 @@ export default function SnipasteOverlay() {
     setIsInstant(monitorRef.current.mode === 'instant');
   }, []);
 
-  // 加载本屏定格图（多屏会话按显示器下标取；加载失败退回旧命令兜底）
+  // 加载本屏显示图（JPEG）。编码在 Rust 后台进行，窗口先出现、图稍后到：
+  // 这里短暂重试，而不是让窗口等编码完成。上限约 6 秒（100×60ms）。
   useEffect(() => {
+    let cancelled = false;
     const loadScreenshot = async () => {
       // 会话开始加载的必然是会话冻结图，重置历史回放态
       sourceIsHistoryRef.current = false;
-      try {
-        const base64 = await invoke<string>('snipaste_get_monitor_base64', { index: monitorRef.current.index });
-        setImageSrc(`data:image/png;base64,${base64}`);
-      } catch {
+      for (let attempt = 0; attempt < 100 && !cancelled; attempt++) {
         try {
-          const base64 = await invoke<string>('snipaste_get_screenshot_base64');
-          setImageSrc(`data:image/png;base64,${base64}`);
-        } catch (err) {
-          console.error('Failed to load screenshot:', err);
+          const base64 = await invoke<string>('snipaste_get_monitor_display_base64', {
+            index: monitorRef.current.index,
+          });
+          if (cancelled) return;
+          setImageSrc(`data:image/jpeg;base64,${base64}`);
+          setFramesReady(true);
+          return;
+        } catch {
+          await new Promise((r) => setTimeout(r, 60));
         }
       }
+      if (!cancelled) console.error('显示图加载超时');
     };
     loadScreenshot();
   }, []);
@@ -854,12 +860,12 @@ export default function SnipasteOverlay() {
       onMouseUp={handleMouseUp}
       onDoubleClick={handleDoubleClick}
     >
-      {/* 截图背景（物理像素图 1:1 铺满显示器逻辑尺寸） */}
+      {/* 截图背景（物理像素图 1:1 铺满显示器逻辑尺寸；后台编码完成后淡入） */}
       {imageSrc && (
         <img
           ref={imgRef}
           src={imageSrc}
-          style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', objectFit: 'fill' }}
+          style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', objectFit: 'fill', opacity: framesReady ? 1 : 0, transition: 'opacity 120ms' }}
           draggable={false}
           onError={(e) => console.error('Image load error:', e)}
         />
@@ -909,8 +915,13 @@ export default function SnipasteOverlay() {
         </>
       )}
 
-      {/* 提示文字 */}
-      {!isDragging && !showToolbar && !selection && !activeTool && !isDrawing && !picking && (
+      {/* 提示文字：图还没编码完就显示"正在截取"，别让用户以为卡死 */}
+      {!imageSrc && (
+        <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', padding: '8px 16px', background: 'rgba(0,0,0,0.6)', color: 'white', fontSize: 13, borderRadius: 6, pointerEvents: 'none' }}>
+          正在截取屏幕…
+        </div>
+      )}
+      {imageSrc && !isDragging && !showToolbar && !selection && !activeTool && !isDrawing && !picking && (
         <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', padding: '8px 16px', background: 'rgba(0,0,0,0.6)', color: 'white', fontSize: 13, borderRadius: 6, pointerEvents: 'none' }}>
           {isInstant
             ? '拖拽选择要识别的区域 · 单击选窗口 · ESC 取消'

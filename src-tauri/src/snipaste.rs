@@ -70,9 +70,11 @@ pub fn remove_pin(id: &str) -> Option<PinData> {
     PIN_IMAGES.lock().unwrap().remove(id)
 }
 
-/// 单显示器捕获结果（物理像素图像 + 显示器几何）
+/// 单显示器捕获结果（物理像素原始帧 + 显示器几何）。
+/// 帧保持未编码：从按键到出图的路径上不做 PNG 编码（4K 一帧编码要几百毫秒），
+/// 显示与裁剪都直接用原始像素，编码交给后台任务。
 pub struct MonitorCapture {
-    pub png: Vec<u8>,
+    pub frame: screenshots::image::RgbaImage,
     pub scale: f64,
     pub x: i32,
     pub y: i32,
@@ -100,10 +102,8 @@ pub fn capture_monitor_containing(cx: f64, cy: f64) -> Result<MonitorCapture> {
 
     let img = screen.capture()?;
     let d = &screen.display_info;
-    let mut buf = Cursor::new(Vec::new());
-    img.write_to(&mut buf, screenshots::image::ImageOutputFormat::Png)?;
     Ok(MonitorCapture {
-        png: buf.into_inner(),
+        frame: img,
         scale: d.scale_factor as f64,
         x: d.x,
         y: d.y,
@@ -160,6 +160,69 @@ pub fn get_session_monitors() -> Vec<SessionMonitor> {
     SESSION_MONITORS.lock().unwrap().clone()
 }
 
+/// 后台编码完成后回填某屏的 PNG 落盘路径（历史回放/长截图续拍用）
+pub fn set_session_monitor_path(index: usize, path: String) {
+    if let Some(m) = SESSION_MONITORS.lock().unwrap().get_mut(index) {
+        m.path = path;
+    }
+}
+
+/// 会话原始帧（与 SESSION_MONITORS 同索引）。裁剪直接读它：
+/// 用户框选可能在 PNG 落盘之前完成，等文件就会引入几百毫秒到数秒的延迟。
+static SESSION_FRAMES: Lazy<Mutex<Vec<Option<std::sync::Arc<screenshots::image::RgbaImage>>>>> =
+    Lazy::new(|| Mutex::new(Vec::new()));
+
+pub fn set_session_frames(frames: Vec<screenshots::image::RgbaImage>) {
+    *SESSION_FRAMES.lock().unwrap() = frames
+        .into_iter()
+        .map(|f| Some(std::sync::Arc::new(f)))
+        .collect();
+}
+
+/// 取某屏的原始帧（克隆 Arc，锁即刻释放）
+pub fn session_frame(index: usize) -> Option<std::sync::Arc<screenshots::image::RgbaImage>> {
+    SESSION_FRAMES
+        .lock()
+        .unwrap()
+        .get(index)
+        .and_then(|f| f.clone())
+}
+
+/// overlay 显示用的每屏 JPEG base64（后台编码完成后填充）
+static DISPLAY_IMAGES: Lazy<Mutex<Vec<Option<String>>>> = Lazy::new(|| Mutex::new(Vec::new()));
+
+pub fn set_display_image(index: usize, base64: String) {
+    let mut images = DISPLAY_IMAGES.lock().unwrap();
+    if images.len() <= index {
+        images.resize(index + 1, None);
+    }
+    images[index] = Some(base64);
+}
+
+pub fn display_image(index: usize) -> Option<String> {
+    DISPLAY_IMAGES
+        .lock()
+        .unwrap()
+        .get(index)
+        .and_then(|s| s.clone())
+}
+
+/// 显示用 JPEG（有损，但体积比 PNG 小一个数量级：4K 约 0.6–1 MB vs 8–15 MB）。
+/// overlay 只是背景，画质损失不可见；OCR 仍走无损帧。
+pub fn encode_display_jpeg(frame: &screenshots::image::RgbaImage) -> Result<String> {
+    use screenshots::image::codecs::jpeg::JpegEncoder;
+    let mut buf = Vec::new();
+    JpegEncoder::new_with_quality(&mut buf, 85).encode_image(frame)?;
+    Ok(base64::engine::general_purpose::STANDARD.encode(&buf))
+}
+
+/// 无损 PNG（OCR/历史/长截图的源），编码较慢，只在后台跑
+pub fn encode_png(frame: &screenshots::image::RgbaImage) -> Result<Vec<u8>> {
+    let mut buf = Cursor::new(Vec::new());
+    frame.write_to(&mut buf, screenshots::image::ImageOutputFormat::Png)?;
+    Ok(buf.into_inner())
+}
+
 /// 跨屏裁剪输出：临时文件路径 + base64（保存/复制/贴图直接用字节）
 #[derive(serde::Serialize)]
 pub struct CropOutput {
@@ -167,7 +230,7 @@ pub struct CropOutput {
     pub base64: String,
 }
 
-/// 捕获全部显示器（物理像素）。scale 以 Tauri（DPI 感知）为准回填：
+/// 捕获全部显示器（物理像素原始帧，不做编码）。scale 以 Tauri（DPI 感知）为准回填：
 /// screens crate 的 scale_factor 在部分机器上误报 1.0。
 pub fn capture_all_monitors(app: &tauri::AppHandle) -> Result<Vec<MonitorCapture>> {
     let screens = Screen::all()?;
@@ -178,7 +241,7 @@ pub fn capture_all_monitors(app: &tauri::AppHandle) -> Result<Vec<MonitorCapture
     let mut caps = Vec::with_capacity(screens.len());
     for screen in screens {
         let d = &screen.display_info;
-        let img = screen.capture()?;
+        let frame = screen.capture()?;
         let scale = tauri_monitors
             .iter()
             .find(|m| {
@@ -189,10 +252,8 @@ pub fn capture_all_monitors(app: &tauri::AppHandle) -> Result<Vec<MonitorCapture
             })
             .map(|m| m.scale_factor())
             .unwrap_or(d.scale_factor as f64);
-        let mut buf = Cursor::new(Vec::new());
-        img.write_to(&mut buf, screenshots::image::ImageOutputFormat::Png)?;
         caps.push(MonitorCapture {
-            png: buf.into_inner(),
+            frame,
             scale,
             x: d.x,
             y: d.y,
@@ -291,9 +352,11 @@ pub fn selection_snapshot() -> SelectionState {
     SELECTION.lock().unwrap().clone()
 }
 
-/// 清空会话状态（显示器列表、选区、instant 标记）
+/// 清空会话状态（显示器列表、选区、原始帧、显示图、instant 标记）
 pub fn clear_session() {
     SESSION_MONITORS.lock().unwrap().clear();
+    SESSION_FRAMES.lock().unwrap().clear();
+    DISPLAY_IMAGES.lock().unwrap().clear();
     *SELECTION.lock().unwrap() = SelectionState::default();
     SESSION_INSTANT.store(false, std::sync::atomic::Ordering::SeqCst);
 }
@@ -304,13 +367,13 @@ pub fn session_active() -> bool {
     !SESSION_MONITORS.lock().unwrap().is_empty()
 }
 
-/// 从会话显示器定格图中裁剪全局物理矩形（可跨屏）。
-/// 各屏定格图本就处于同一全局物理坐标系（screens crate 按物理像素逐屏捕获，
+/// 从会话原始帧中裁剪全局物理矩形（可跨屏）。
+/// 各屏帧本就处于同一全局物理坐标系（screens crate 按物理像素逐屏捕获，
 /// 显示器在虚拟桌面平铺），把每块屏的交集部分按「交集原点 − 选区原点」原样
 /// 摆放即可 1:1 无缝重建选区内容，输出尺寸 = 选区全局物理尺寸。
 /// 不做跨屏密度归一：密度差异是屏幕的真实像素密度，重采样反而引入失真。
 pub fn crop_session_region(rect: (f64, f64, f64, f64)) -> Result<Vec<u8>> {
-    use screenshots::image::{imageops, io::Reader, ImageOutputFormat, RgbaImage};
+    use screenshots::image::{imageops, ImageOutputFormat, RgbaImage};
 
     let (rx, ry, rw, rh) = rect;
     if rw < 1.0 || rh < 1.0 {
@@ -322,7 +385,7 @@ pub fn crop_session_region(rect: (f64, f64, f64, f64)) -> Result<Vec<u8>> {
     let monitors = get_session_monitors();
     let mut canvas = RgbaImage::new(rw, rh);
     let mut painted = false;
-    for m in &monitors {
+    for (i, m) in monitors.iter().enumerate() {
         let ix = rx.max(m.x);
         let iy = ry.max(m.y);
         let ix2 = (rx + rw as i32).min(m.x + m.width as i32);
@@ -330,13 +393,9 @@ pub fn crop_session_region(rect: (f64, f64, f64, f64)) -> Result<Vec<u8>> {
         if ix2 <= ix || iy2 <= iy {
             continue;
         }
-        let data = std::fs::read(&m.path)?;
-        let img = Reader::new(Cursor::new(data))
-            .with_guessed_format()?
-            .decode()?
-            .to_rgba8();
+        let Some(frame) = session_frame(i) else { continue };
         let crop = imageops::crop_imm(
-            &img,
+            frame.as_ref(),
             (ix - m.x) as u32,
             (iy - m.y) as u32,
             (ix2 - ix) as u32,
