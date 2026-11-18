@@ -598,7 +598,9 @@ fn build_overlay_window(
         .map_err(|e| e.to_string())?;
     #[cfg(target_os = "macos")]
     mac_overlay_chrome(&win);
-    // 保持隐藏：由 show_overlay_windows 在抓屏完成后统一 show
+    // 显式隐藏：builder 的 visible(false) 在部分 Windows 环境下不生效，
+    // 窗口会以「可见但无内容」的形式留在桌面上（预创建后尤其明显）
+    let _ = win.hide();
     Ok(win)
 }
 
