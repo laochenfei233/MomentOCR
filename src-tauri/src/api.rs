@@ -479,3 +479,4 @@ pub fn image_to_base64(path: &str) -> Result<String, anyhow::Error> {
     use base64::Engine;
     Ok(base64::engine::general_purpose::STANDARD.encode(&data))
 }
+

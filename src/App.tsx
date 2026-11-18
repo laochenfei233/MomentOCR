@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import ScreenshotTool from './components/ScreenshotTool';
+import PinPanel from './components/PinPanel';
 import FileUploader from './components/FileUploader';
 import OcrResult from './components/OcrResult';
 import Settings from './components/Settings';
@@ -7,11 +8,11 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { useOcrStore } from './stores/ocrStore';
 import { useSettingsStore } from './stores/settingsStore';
-import { builtinPlugins, findPlugin } from './plugins';
+import { builtinPlugins, findPlugin, runOcr } from './plugins';
 import { GOOGLE_TARGET_CODES } from './utils/languages';
 import { validateShortcut, type ShortcutRegistration } from './utils/shortcut';
 
-type Tab = 'screenshot' | 'file' | 'settings';
+type Tab = 'screenshot' | 'file' | 'settings' | 'snipaste';
 
 function App() {
   const [tab, setTab] = useState<Tab>('screenshot');
@@ -22,7 +23,7 @@ function App() {
   const [translation, setTranslation] = useState('');
   const [translateFeedback, setTranslateFeedback] = useState<{ ok: boolean; msg: string } | null>(null);
   const { history, restoreFromHistory, clearHistory, result: storeResult } = useOcrStore();
-  const { shortcuts, quickAction, config, activeOcrPlugin, activeTranslationPlugin, pluginSettings, language, screenshot, setActiveOcrPlugin, setActiveTranslationPlugin, setPluginSetting } = useSettingsStore();
+  const { shortcuts, quickAction, config, activeOcrPlugin, activeTranslationPlugin, pluginSettings, language, setActiveOcrPlugin, setActiveTranslationPlugin, setPluginSetting } = useSettingsStore();
 
   const showTranslateFeedback = (ok: boolean, msg: string) => {
     setTranslateFeedback({ ok, msg });
@@ -67,7 +68,8 @@ function App() {
       const { action } = event.payload;
       switch (action) {
         case 'screenshot':
-          invoke('start_screenshot_overlay');
+          invoke('start_snipaste', { mode: 'instant' })
+            .catch((err) => console.error('[screenshot] start failed:', err));
           break;
         case 'copy':
           copyRef.current();
@@ -75,9 +77,43 @@ function App() {
         case 'translate':
           translateRef.current();
           break;
+        case 'snipaste':
+          handleSnipaste();
+          break;
+        case 'long-screenshot':
+          handleLongScreenshot();
+          break;
       }
     });
     return () => { unlisten.then((fn) => fn()); };
+  }, []);
+
+  // snipaste overlay 的 OCR / 长截图结果：路径 → 走主识别管线（结果进 OcrResult 与历史）
+  useEffect(() => {
+    const runSnipasteOcr = async (imagePath: string) => {
+      const { setProcessing, setResult, addToHistory } = useOcrStore.getState();
+      const { activeOcrPlugin, pluginSettings, afterRecognize } = useSettingsStore.getState();
+      setProcessing(true);
+      try {
+        const ocrResult = await runOcr(activeOcrPlugin, imagePath, pluginSettings);
+        const result = { success: !ocrResult.startsWith('错误'), data: ocrResult, confidence: 0, language: 'auto' };
+        setResult(result);
+        addToHistory(result);
+        if (afterRecognize.autoCopy && result.success) {
+          try { await navigator.clipboard.writeText(result.data); } catch { /* 剪贴板不可用不影响识别 */ }
+        }
+      } catch (err) {
+        setResult({ success: false, data: '', error: String(err) });
+      } finally {
+        setProcessing(false);
+      }
+      invoke('focus_main_window').catch(() => {});
+    };
+    // 识别结果的家在「截图识别」标签页：识别一触发就切过去
+    const goHome = () => { setTab('screenshot'); setShowSettings(false); };
+    const u1 = listen<{ path: string }>('snipaste-ocr', (e) => { goHome(); runSnipasteOcr(e.payload.path); });
+    const u2 = listen<{ path: string }>('snipaste-stitched', (e) => { goHome(); runSnipasteOcr(e.payload.path); });
+    return () => { u1.then((fn) => fn()); u2.then((fn) => fn()); };
   }, []);
 
   // 开机自启：系统里的启动项会被卸载/重装清掉（覆盖安装时 NSIS 会删除 Run 键），
@@ -198,6 +234,22 @@ function App() {
     }
   };
 
+  const handleSnipaste = async () => {
+    try {
+      await invoke('start_snipaste');
+    } catch (err) {
+      console.error('Snipaste failed:', err);
+    }
+  };
+
+  const handleLongScreenshot = async () => {
+    try {
+      await invoke('start_long_screenshot');
+    } catch (err) {
+      console.error('Long screenshot failed:', err);
+    }
+  };
+
   // 供快捷键调用最新版本的 handler
   translateRef.current = handleTranslate;
   copyRef.current = handleCopy;
@@ -213,13 +265,15 @@ function App() {
       .catch((err) => console.error('[dock] sync visibility failed:', err));
   }, [quickAction]);
 
-  // 截图模式同理：截图覆盖层是独立子进程，托盘菜单那条入口又完全不经过前端。
-  // 放在这里而不是 ScreenshotTool 里 —— 后者切到「文件」标签页就卸载了。
-  // `!!` 兜住老用户 localStorage 里没有这个键的情况（undefined 会被 Rust 的 bool 参数拒绝）
+  // 截图链路的致命错误（如 mac 未授权「屏幕录制」）要用户看得见：
+  // 主窗口可能正缩在托盘里，先拉回前台再弹内容
   useEffect(() => {
-    invoke('set_screenshot_mode', { instant: !!screenshot.instantRecognize })
-      .catch((err) => console.error('[screenshot] sync mode failed:', err));
-  }, [screenshot.instantRecognize]);
+    const u = listen<string>('snipaste-error', (e) => {
+      invoke('focus_main_window').catch(() => {});
+      alert(e.payload);
+    });
+    return () => { u.then((fn) => fn()); };
+  }, []);
 
   // 菜单里的「退出」就该真退出。走 quit_app 而不是关窗口：
   // 关窗口会按设置的驻留策略被拦下来，变成点了没反应
@@ -279,6 +333,12 @@ function App() {
         <button className={`tool-btn ${tab === 'file' && !showSettings ? 'active' : ''}`} title="文件识别" onClick={() => { setTab('file'); setShowSettings(false); }}>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>
         </button>
+        <button className={`tool-btn ${tab === 'snipaste' && !showSettings ? 'active' : ''}`} title="截图贴图" onClick={() => { setTab('snipaste'); setShowSettings(false); handleSnipaste(); }}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+        </button>
+        <button className={`tool-btn ${tab === 'snipaste' && !showSettings ? 'active' : ''}`} title="长截图" onClick={handleLongScreenshot}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+        </button>
         <div className="flex-1" />
         <button className="tool-btn" title="翻译" onClick={handleTranslate}>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M5 8l6 6"/><path d="M4 14l6-6 2-3"/><path d="M2 5h12"/><path d="M7 2v3"/><path d="M22 22l-5-10-5 10"/><path d="M14 18h6"/></svg>
@@ -309,6 +369,7 @@ function App() {
               <ScreenshotTool />
             </div>
           )}
+          {tab === 'snipaste' && <PinPanel />}
           {translateFeedback && (
             <div style={{
               padding: '8px 16px',

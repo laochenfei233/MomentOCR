@@ -75,29 +75,24 @@ const PYTHON_OVERRIDE_ENV: &str = "MOMENTOCR_PYTHON";
 pub enum Component {
     /// 本地识别引擎
     Ocr,
-    /// 截图覆盖层（PyQt5）
-    Screenshot,
 }
 
 impl Component {
     pub fn id(self) -> &'static str {
         match self {
             Component::Ocr => "ocr",
-            Component::Screenshot => "screenshot",
         }
     }
 
     pub fn label(self) -> &'static str {
         match self {
             Component::Ocr => "本地识别引擎",
-            Component::Screenshot => "截图组件",
         }
     }
 
     pub fn parse(id: &str) -> Result<Self> {
         match id {
             "ocr" => Ok(Component::Ocr),
-            "screenshot" => Ok(Component::Screenshot),
             other => anyhow::bail!("未知的本地组件：{other}"),
         }
     }
@@ -107,7 +102,6 @@ impl Component {
         match self {
             // onnxruntime 不在 rapidocr 的依赖里，必须显式装
             Component::Ocr => &["rapidocr", "onnxruntime"],
-            Component::Screenshot => &["PyQt5"],
         }
     }
 
@@ -115,7 +109,6 @@ impl Component {
     fn marker(self) -> &'static str {
         match self {
             Component::Ocr => "rapidocr",
-            Component::Screenshot => "PyQt5",
         }
     }
 
@@ -123,7 +116,6 @@ impl Component {
     fn selftest(self) -> &'static str {
         match self {
             Component::Ocr => "ocr_selftest.py",
-            Component::Screenshot => "screenshot_selftest.py",
         }
     }
 
@@ -131,7 +123,6 @@ impl Component {
     pub fn download_mb(self) -> u64 {
         match self {
             Component::Ocr => 112,
-            Component::Screenshot => 55,
         }
     }
 
@@ -139,7 +130,6 @@ impl Component {
     pub fn disk_mb(self) -> u64 {
         match self {
             Component::Ocr => 271,
-            Component::Screenshot => 150,
         }
     }
 }
@@ -168,9 +158,6 @@ pub struct Status {
     pub runtime_installed: bool,
     pub runtime_download_mb: u64,
     pub ocr: ComponentStatus,
-    /// Windows 安装包随包自带覆盖层，这个组件就不必下载
-    pub screenshot_bundled: bool,
-    pub screenshot: ComponentStatus,
     /// 本地翻译模型（HY-MT），不依赖 Python 运行时，见 translate_engine
     pub translate: ComponentStatus,
     /// -local-inference 变体把 llama.cpp 打进了安装包，推理器无需下载
@@ -316,15 +303,9 @@ pub fn prepare(app: &AppHandle, component: Component) -> Result<PythonEnv> {
     })
 }
 
-/// 私有解释器（若已装），供截图覆盖层这类需要「有 Python 就行」的场景使用
-pub fn private_python(app: &AppHandle, component: Component) -> Option<PathBuf> {
-    let layout = Layout::resolve(app).ok()?;
-    layout.has(component).then(|| layout.python())
-}
-
 pub fn status(app: &AppHandle) -> Status {
     let layout = Layout::resolve(app).ok();
-    let versions = read_versions(app, &["rapidocr", "PyQt5"]);
+    let versions = read_versions(app, &["rapidocr"]);
 
     let component_status = |component: Component| {
         let installed = layout.as_ref().map(|l| l.has(component)).unwrap_or(false);
@@ -350,8 +331,6 @@ pub fn status(app: &AppHandle) -> Status {
         runtime_installed: layout.as_ref().map(|l| l.installed()).unwrap_or(false),
         runtime_download_mb: RUNTIME_DOWNLOAD_MB,
         ocr: component_status(Component::Ocr),
-        screenshot_bundled: super::overlay::bundled_overlay().is_some(),
-        screenshot: component_status(Component::Screenshot),
         translate: crate::translate_engine::status(app),
         translate_runtime_bundled: crate::translate_engine::runtime_bundled(app),
         runtime_bytes: layout.as_ref().map(|l| l.size()).unwrap_or(0),
@@ -386,7 +365,7 @@ fn remove_component_into(root: &Path, component: Component) -> Result<(u64, bool
     let _ = std::fs::remove_file(&manifest);
     prune_empty_dirs(&layout.site());
 
-    let others = [Component::Ocr, Component::Screenshot]
+    let others = [Component::Ocr]
         .into_iter()
         .any(|other| other != component && layout.manifest(other).exists());
     let runtime_removed = if others {
@@ -1011,7 +990,7 @@ mod tests {
     async fn installs_component_and_selftests() {
         let component = match std::env::var("MOMENTOCR_TEST_COMPONENT") {
             Ok(id) => Component::parse(&id).expect("组件名不对"),
-            Err(_) => Component::Screenshot,
+            Err(_) => Component::Ocr,
         };
         let root = std::env::temp_dir().join(format!("momentocr-{}-test", component.id()));
         let _ = std::fs::remove_dir_all(&root);
