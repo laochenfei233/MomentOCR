@@ -157,7 +157,9 @@ jobs:
           # 避免测试运行反复产生草稿，装包直接从 Actions 运行页下载即可。
           # local-inference 变体的产物名与标准版相同，不能直接传（会撞 release 资产），
           # 改为跳过 tauri-action 上传，由下面的重命名步骤改完名再传
-          tagName: ${{ github.event_name == 'push' && matrix.variant == 'standard' && 'v__VERSION__' || '' }}
+          # 不上传 release：8 个 job 并行各自 gh release create 会建出多个同名草稿
+          # （v0.3.3 实测建了 6 个），统一由下面的 publish job 汇总上传
+          tagName: ''
           releaseName: 须臾OCR v__VERSION__
           releaseBody: |
             ## 须臾OCR v__VERSION__
@@ -223,28 +225,39 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      # 变体产物跳过了 tauri-action 上传，在这里把重命名后的安装包补传到草稿 release。
-      # 各平台文件名不同不会互撞；草稿由标准版 job 的 tauri-action 创建，
-      # 变体 job 先跑完时这里兜底建一个（已有则忽略）。
-      - name: Upload variant installers to release
-        if: github.event_name == 'push' && matrix.variant == 'local-inference'
+  # 收敛点：所有平台的安装包由这一个 job 汇总上传，避免并行 job 各自创建同名草稿。
+  # 只在推 tag 时运行；任一平台构建失败则不发版（needs 默认全成功）。
+  publish:
+    name: publish draft release
+    needs: build
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download all installers
+        uses: actions/download-artifact@v4
+        with:
+          path: dist-installers
+          merge-multiple: true
+
+      - name: Create draft release and upload installers
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           TAG="$GITHUB_REF_NAME"
-          gh release create "$TAG" --draft --verify-tag --title "须臾OCR ${TAG#v}" --notes "" >/dev/null 2>&1 || true
+          VERSION="${TAG#v}"
+          ls -la dist-installers
+          gh release create "$TAG" --draft --verify-tag --title "须臾OCR $VERSION" --notes "" \
+            || echo "draft already exists, reusing"
           gh release upload "$TAG" dist-installers/* --clobber
 
-      # 发布说明由 .changelog/ 片段生成：取 CHANGELOG.md 里该版本的段落，
-      # 后面拼上下载表与签名提示（.github/release-notes-footer.md）。
-      # 四个平台 job 改的是同一份草稿，只让 windows-x64 改一次，避免并发互踩。
       - name: Rewrite release notes from changelog
-        if: github.event_name == 'push' && matrix.label == 'windows-x64'
         shell: bash
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
