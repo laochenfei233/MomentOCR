@@ -528,11 +528,7 @@ fn ensure_overlay_windows(
 }
 
 /// 统一 show 所有覆盖窗口（同一时刻出现，消除逐窗冒出来的时间差）
-fn show_overlay_windows(app: &tauri::AppHandle, cursor_index: usize) {
-    show_overlay_windows_timed(app, cursor_index, None);
-}
-
-fn show_overlay_windows_timed(
+fn show_overlay_windows(
     app: &tauri::AppHandle,
     cursor_index: usize,
     t0: Option<std::time::Instant>,
@@ -721,7 +717,7 @@ fn capture_session_frames(
     t0: std::time::Instant,
 ) -> Option<Vec<snipaste::Frame>> {
     let frames = if mode == SnipasteMode::Long {
-        match snipaste::capture_session_monitor() {
+        match snipaste::capture_session_monitor(app) {
             Ok(frame) => vec![frame],
             Err(_) => return None,
         }
@@ -823,7 +819,7 @@ fn start_overlay_session_inner(app: &tauri::AppHandle, mode: SnipasteMode) -> Re
         return Err("抓屏失败".to_string());
     };
     snipaste::set_session_frames(frames.clone());
-    show_overlay_windows_timed(app, cursor_index, Some(t0));
+    show_overlay_windows(app, cursor_index, Some(t0));
     timing_log(t0, "windows shown");
     let _ = app.emit(
         "snipaste-session-reset",
@@ -1077,7 +1073,7 @@ async fn snipaste_capture_next(app: tauri::AppHandle) -> Result<String, String> 
 
     // 捕获会话显示器（长截图锁定同一块屏）
     let result = (|| -> Result<String, String> {
-        let cap = snipaste::capture_session_monitor()
+        let cap = snipaste::capture_session_monitor(&app)
             .map_err(|e: anyhow::Error| e.to_string())?;
         // 长截图是手动步进流程，同步编码一帧的耗时可接受
         let png = snipaste::encode_png(&cap)

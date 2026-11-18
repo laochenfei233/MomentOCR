@@ -30,7 +30,8 @@ impl Frame {
     /// 转成 image 的 RgbaImage（PNG 编码、长截图拼接用；有损路径不需要）
     fn to_rgba(&self) -> screenshots::image::RgbaImage {
         let mut data = self.data.clone();
-        for px in data.chunks_exact_mut(4) {
+        let (pixels, _) = data.as_chunks_mut::<4>();
+        for px in pixels {
             px.swap(0, 2);
         }
         screenshots::image::RgbaImage::from_raw(self.width, self.height, data)
@@ -42,7 +43,8 @@ impl Frame {
 fn frame_from_rgba(rgba: screenshots::image::RgbaImage) -> Frame {
     let (w, h) = rgba.dimensions();
     let mut data = rgba.into_raw();
-    for px in data.chunks_exact_mut(4) {
+    let (pixels, _) = data.as_chunks_mut::<4>();
+    for px in pixels {
         px.swap(0, 2);
     }
     Frame { width: w, height: h, data }
@@ -119,24 +121,22 @@ pub fn remove_pin(id: &str) -> Option<PinData> {
 /// 捕获包含物理坐标点 (cx, cy) 的显示器，返回物理像素原始帧（未编码）。
 /// 帧不编码：从按键到出图的路径上不做 PNG 编码（4K 一帧要几百毫秒），
 /// 显示与裁剪都直接用原始像素，编码交给后台任务。
-pub fn capture_monitor_containing(cx: f64, cy: f64) -> Result<Frame> {
-    let screens = Screen::all()?;
-    if screens.is_empty() {
-        return Err(anyhow::anyhow!("找不到可用屏幕"));
-    }
-
-    let screen = screens
+pub fn capture_monitor_containing(app: &tauri::AppHandle, cx: f64, cy: f64) -> Result<Frame> {
+    let infos = enumerate_monitors(app)?;
+    let info = infos
         .iter()
-        .find(|s| {
-            let d = &s.display_info;
-            cx >= d.x as f64
-                && cx < (d.x + d.width as i32) as f64
-                && cy >= d.y as f64
-                && cy < (d.y + d.height as i32) as f64
+        .find(|m| {
+            cx >= m.x as f64
+                && cx < (m.x + m.width as i32) as f64
+                && cy >= m.y as f64
+                && cy < (m.y + m.height as i32) as f64
         })
-        .unwrap_or_else(|| screens.first().unwrap());
-
-    screen.capture().map(frame_from_rgba)
+        .or_else(|| infos.first())
+        .ok_or_else(|| anyhow::anyhow!("找不到可用屏幕"))?;
+    let screens = Screen::all()?;
+    let screen = find_screen(&screens, info)
+        .ok_or_else(|| anyhow::anyhow!("显示器列表与系统几何不一致"))?;
+    Ok(fit_frame(frame_from_rgba(screen.capture()?), info))
 }
 
 /// 显示器几何：物理原点 (x, y)、物理尺寸 (宽, 高)、缩放系数
@@ -155,11 +155,12 @@ pub fn get_session_monitor() -> Option<MonitorGeometry> {
 }
 
 /// 捕获会话显示器（无会话时退回主屏）
-pub fn capture_session_monitor() -> Result<Frame> {
+pub fn capture_session_monitor(app: &tauri::AppHandle) -> Result<Frame> {
     let (x, y, w, h, _) = get_session_monitor()
         .ok_or_else(|| anyhow::anyhow!("没有会话显示器记录"))?;
     // 用显示器中心点定位
     capture_monitor_containing(
+        app,
         x as f64 + w as f64 / 2.0,
         y as f64 + h as f64 / 2.0,
     )
@@ -264,8 +265,9 @@ pub struct CropOutput {
     pub base64: String,
 }
 
-/// 显示器几何（不抓屏）。建窗与抓屏要并行，所以先枚举、后抓：
-/// 枚举只读 display_info，几毫秒；抓屏几百毫秒。
+/// 显示器几何（不抓屏）。以 Tauri/tao 的 Monitor 为准：它返回的 position/size
+/// 明确是物理像素。screenshots crate 的 display_info 在 macOS 上是逻辑尺寸
+/// （Retina 上只有物理的一半），拿它去 set_size(Physical) 会让覆盖层只有半屏大。
 #[derive(Clone, serde::Serialize)]
 pub struct MonitorInfo {
     pub x: i32,
@@ -275,36 +277,57 @@ pub struct MonitorInfo {
     pub scale: f64,
 }
 
-/// 枚举全部显示器的几何信息（不抓屏）
+/// 枚举全部显示器的物理几何（不抓屏）
 pub fn enumerate_monitors(app: &tauri::AppHandle) -> Result<Vec<MonitorInfo>> {
-    let screens = Screen::all()?;
-    if screens.is_empty() {
+    let monitors = app
+        .available_monitors()
+        .map_err(|e| anyhow::anyhow!("枚举显示器失败: {e}"))?;
+    if monitors.is_empty() {
         return Err(anyhow::anyhow!("找不到可用屏幕"));
     }
-    let tauri_monitors = app.available_monitors().unwrap_or_default();
-    Ok(screens
+    Ok(monitors
         .iter()
-        .map(|screen| {
-            let d = &screen.display_info;
-            let scale = tauri_monitors
-                .iter()
-                .find(|m| {
-                    m.position().x == d.x
-                        && m.position().y == d.y
-                        && m.size().width == d.width
-                        && m.size().height == d.height
-                })
-                .map(|m| m.scale_factor())
-                .unwrap_or(d.scale_factor as f64);
-            MonitorInfo {
-                x: d.x,
-                y: d.y,
-                width: d.width,
-                height: d.height,
-                scale,
-            }
+        .map(|m| MonitorInfo {
+            x: m.position().x,
+            y: m.position().y,
+            width: m.size().width,
+            height: m.size().height,
+            scale: m.scale_factor(),
         })
         .collect())
+}
+
+/// 把 screenshots 的 Screen 与物理几何对应起来。
+/// display_info 的宽高单位跨平台不一致（Windows 是物理像素，mac 是逻辑点），
+/// 所以两种口径都试：直接比，或乘上 scale 后比。
+fn find_screen<'a>(
+    screens: &'a [screenshots::Screen],
+    info: &MonitorInfo,
+) -> Option<&'a screenshots::Screen> {
+    screens.iter().find(|s| {
+        let d = &s.display_info;
+        let phys_w = (d.width as f64 * d.scale_factor as f64).round() as i64;
+        let phys_h = (d.height as f64 * d.scale_factor as f64).round() as i64;
+        (d.width as i64 == info.width as i64 && d.height as i64 == info.height as i64)
+            || (phys_w == info.width as i64 && phys_h == info.height as i64)
+    })
+}
+
+/// 抓图尺寸与几何不一致时按几何缩放，保证「窗口尺寸 == 图尺寸」
+/// （否则 Retina 上会出现半屏窗口里缩着一整张图）
+fn fit_frame(frame: Frame, info: &MonitorInfo) -> Frame {
+    if frame.width == info.width && frame.height == info.height {
+        return frame;
+    }
+    use screenshots::image::imageops;
+    let rgba = frame.to_rgba();
+    let resized = imageops::resize(
+        &rgba,
+        info.width.max(1),
+        info.height.max(1),
+        imageops::FilterType::Triangle,
+    );
+    frame_from_rgba(resized)
 }
 
 /// 抓全部显示器。
@@ -316,10 +339,13 @@ pub fn capture_all_monitors(app: &tauri::AppHandle) -> Result<Vec<Frame>> {
         return Ok(frames);
     }
     // 回退：GDI 逐屏抓（4K 一帧约 200ms，只在 DXGI 不可用时走到）
-    let count = enumerate_monitors(app)?.len();
-    let mut frames = Vec::with_capacity(count);
-    for i in 0..count {
-        frames.push(capture_index(i)?);
+    let infos = enumerate_monitors(app)?;
+    let screens = Screen::all()?;
+    let mut frames = Vec::with_capacity(infos.len());
+    for info in &infos {
+        let screen = find_screen(&screens, info)
+            .ok_or_else(|| anyhow::anyhow!("显示器列表与系统几何不一致"))?;
+        frames.push(fit_frame(frame_from_rgba(screen.capture()?), info));
     }
     Ok(frames)
 }
@@ -371,15 +397,6 @@ pub fn prepare_capture_backend(app: &tauri::AppHandle) -> Result<()> {
 #[cfg(not(windows))]
 pub fn prepare_capture_backend(_app: &tauri::AppHandle) -> Result<()> {
     Ok(())
-}
-
-/// 抓第 index 块屏
-fn capture_index(index: usize) -> Result<Frame> {
-    let screens = Screen::all()?;
-    let screen = screens
-        .get(index)
-        .ok_or_else(|| anyhow::anyhow!("显示器列表发生变化"))?;
-    screen.capture().map(frame_from_rgba)
 }
 
 // ============ 跨屏选区会话 ============

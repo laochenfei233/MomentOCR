@@ -89,6 +89,14 @@
             "3d8333a",
             "e68896f"
           ]
+        },
+        {
+          "type": "fixed",
+          "text": "修复 macOS 上截图覆盖层只占屏幕一半大小的问题：窗口尺寸与位置改用系统物理像素（Retina 屏之前按逻辑点数建窗，覆盖层只有半屏，画面被缩在小窗口里）。",
+          "breaking": false,
+          "audience": "user",
+          "highlight": false,
+          "commits": []
         }
       ]
     },
