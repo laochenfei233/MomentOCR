@@ -125,8 +125,10 @@ jobs:
           node-version: 20
           cache: npm
 
+      # 版本固定：screenshots 0.8.10 的 X11 代码在 rustc 1.100 上因类型推断变更
+      # 编译失败（rust-lang/rust#148922 相关），1.99.1 是 0.3.1 轮次验证过的版本
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.99.1
         with:
           targets: ${{ matrix.target }}
 
@@ -135,21 +137,6 @@ jobs:
         with:
           workspaces: src-tauri -> target
           key: ${{ matrix.label }}
-
-      # 每个平台各打一份自带运行时的截图覆盖层（PyInstaller 不能交叉编译）
-      - name: Setup Python
-        if: matrix.target != 'x86_64-apple-darwin'
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      # Intel mac 目标跑在 arm64 runner 上，覆盖层也必须编成 x86_64，否则在 Intel 机上跑不了
-      - name: Setup Python (x64 for Intel mac)
-        if: matrix.target == 'x86_64-apple-darwin'
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-          architecture: x64
 
       # arm64 runner 上出 Intel 包：让工具链按 x86_64 跑（Rust target 已固定）
       - name: Install Rosetta (Intel mac target)

@@ -3,3 +3,4 @@
 2e3b467	perf(screenshot): 覆盖层预创建复用，出罩 725ms→364ms
 3d8333a	perf(screenshot): 抓屏后端换 DXGI，出罩 364ms→150ms
 e68896f	chore(changelog): 出罩延迟片段更新实测数字（0.15s 出罩 / 0.22s 画面）
+d061308	chore(release): v0.3.3 补入截图出罩性能修复条目
