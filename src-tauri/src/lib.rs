@@ -1,4 +1,6 @@
 mod api;
+#[cfg(windows)]
+mod dxgi_capture;
 mod local_engine;
 mod overlay;
 mod recognizer;
@@ -527,13 +529,29 @@ fn ensure_overlay_windows(
 
 /// 统一 show 所有覆盖窗口（同一时刻出现，消除逐窗冒出来的时间差）
 fn show_overlay_windows(app: &tauri::AppHandle, cursor_index: usize) {
+    show_overlay_windows_timed(app, cursor_index, None);
+}
+
+fn show_overlay_windows_timed(
+    app: &tauri::AppHandle,
+    cursor_index: usize,
+    t0: Option<std::time::Instant>,
+) {
     let wins = overlay_windows(app);
     for w in &wins {
         let _ = w.show();
+        if let Some(t0) = t0 {
+            timing_log(t0, &format!("show {}", w.label()));
+        }
     }
-    // 键盘焦点（ESC）只给光标屏那一块
+    // 键盘焦点（ESC）只给光标屏那一块；focus 可能触发一次合成等待，
+    // 放到后台 30ms 后再做，不挡出罩
     if let Some(w) = wins.get(cursor_index) {
-        let _ = w.set_focus();
+        let w = w.clone();
+        tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+            let _ = w.set_focus();
+        });
     }
 }
 
@@ -680,6 +698,41 @@ fn start_overlay_session(app: &tauri::AppHandle, mode: SnipasteMode) -> Result<(
     result
 }
 
+/// 诊断计时：把关键阶段耗时追加到 %TEMP%/momentocr-timing.log。
+/// GUI 进程没有 stderr，出罩延迟这类问题只能落盘取证；每轮 4 行，代价可忽略。
+fn timing_log(t0: std::time::Instant, stage: &str) {
+    use std::io::Write;
+    let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(std::env::temp_dir().join("momentocr-timing.log"))
+    else {
+        return;
+    };
+    let _ = writeln!(f, "{:>6} ms  {}", t0.elapsed().as_millis(), stage);
+}
+
+/// 抓本次会话的帧（长截图锁光标屏，其余全部屏）。Windows 上走 DXGI，约 40ms。
+fn capture_session_frames(
+    app: &tauri::AppHandle,
+    mode: SnipasteMode,
+    t0: std::time::Instant,
+) -> Option<Vec<snipaste::Frame>> {
+    let frames = if mode == SnipasteMode::Long {
+        match snipaste::capture_session_monitor() {
+            Ok(frame) => vec![frame],
+            Err(_) => return None,
+        }
+    } else {
+        match snipaste::capture_all_monitors(app) {
+            Ok(frames) => frames,
+            Err(_) => return None,
+        }
+    };
+    timing_log(t0, "capture done");
+    Some(frames)
+}
+
 fn start_overlay_session_inner(app: &tauri::AppHandle, mode: SnipasteMode) -> Result<(), String> {
     let t0 = std::time::Instant::now();
     snipaste::clear_session();
@@ -759,89 +812,38 @@ fn start_overlay_session_inner(app: &tauri::AppHandle, mode: SnipasteMode) -> Re
         return Err(e);
     }
 
-    // 3) 必须先抓屏再 show：把窗口排除出捕获（WDA_EXCLUDEFROMCAPTURE）虽然能让
-    //    BitBlt 忽略窗口，但实测会把被遮住的区域挖成黑色——overlay 铺满全屏时抓到
-    //    的就是一张黑图，所以这条捷径不通。抓屏 4K 约 150–230ms 是 GDI 的物理成本。
-    spawn_capture_then_show(app.clone(), cursor_index, mode, t0);
+    // 3) 抓屏 + show 同步做（调用线程就是主线程）：
+    //    DXGI 抓屏约 40ms，show 约 20ms；走 async 命令再 run_on_main_thread 派发
+    //    会多排 80–100ms 的队，直接同步反而快。
+    //    必须先抓屏再 show，否则会把覆盖层自己拍进冻结画面。
+    let Some(frames) = capture_session_frames(app, mode, t0) else {
+        teardown_session(app);
+        return Err("抓屏失败".to_string());
+    };
+    snipaste::set_session_frames(frames.clone());
+    show_overlay_windows_timed(app, cursor_index, Some(t0));
+    timing_log(t0, "windows shown");
+    let _ = app.emit(
+        "snipaste-session-reset",
+        serde_json::json!({ "mode": mode.url_param(), "cursorIndex": cursor_index }),
+    );
+
+    // 4) 编码放后台（JPEG 显示图 ~60ms、PNG 落盘更慢，都不该挡出罩）
+    let seq = SESSION_SEQ.load(Ordering::SeqCst);
+    let app_enc = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        encode_frames(&app_enc, frames, cursor_index, mode, seq, t0);
+    });
 
     start_idle_timeout(app);
     Ok(())
-}
-
-/// 抓本次会话的帧（长截图锁光标屏，其余全部屏）
-fn capture_session_frames(
-    app: &tauri::AppHandle,
-    mode: SnipasteMode,
-    t0: std::time::Instant,
-) -> Option<Vec<screenshots::image::RgbaImage>> {
-    let frames = if mode == SnipasteMode::Long {
-        match snipaste::capture_session_monitor() {
-            Ok(frame) => vec![frame],
-            Err(_) => return None,
-        }
-    } else {
-        match snipaste::capture_all_monitors(app) {
-            Ok(frames) => frames,
-            Err(_) => return None,
-        }
-    };
-    timing_log(t0, "capture done");
-    Some(frames)
-}
-
-/// 诊断计时：把关键阶段耗时追加到 %TEMP%/momentocr-timing.log。
-/// GUI 进程没有 stderr，出罩延迟这类问题只能落盘取证；每轮 4 行，代价可忽略。
-fn timing_log(t0: std::time::Instant, stage: &str) {
-    use std::io::Write;
-    let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(std::env::temp_dir().join("momentocr-timing.log"))
-    else {
-        return;
-    };
-    let _ = writeln!(f, "{:>6} ms  {}", t0.elapsed().as_millis(), stage);
-}
-
-/// 后台抓屏，抓到后统一显示窗口并通知前端换图，随后并行编码。
-/// 抓屏必须早于 show（否则会把覆盖层自己拍进画面），所以这里先抓后显。
-fn spawn_capture_then_show(
-    app: tauri::AppHandle,
-    cursor_index: usize,
-    mode: SnipasteMode,
-    t0: std::time::Instant,
-) {
-    let seq = SESSION_SEQ.load(Ordering::SeqCst);
-    tauri::async_runtime::spawn_blocking(move || {
-        let Some(frames) = capture_session_frames(&app, mode, t0) else {
-            return;
-        };
-        if SESSION_SEQ.load(Ordering::SeqCst) != seq {
-            return;
-        }
-        snipaste::set_session_frames(frames.clone());
-
-        // 统一 show + 通知前端进入新一轮会话（窗口已预创建，这里是纯 show）
-        let app_show = app.clone();
-        let mode_str = mode.url_param();
-        let _ = app.run_on_main_thread(move || {
-            show_overlay_windows(&app_show, cursor_index);
-            timing_log(t0, "windows shown");
-            let _ = app_show.emit(
-                "snipaste-session-reset",
-                serde_json::json!({ "mode": mode_str, "cursorIndex": cursor_index }),
-            );
-        });
-
-        encode_frames(&app, frames, cursor_index, mode, seq, t0);
-    });
 }
 
 /// 会话定格帧的编码：显示图（JPEG）优先，无损 PNG 落盘随后；每屏一个线程并行。
 /// 裁剪不依赖 PNG（crop_session_region 直接读内存帧），所以落盘慢不影响识别。
 fn encode_frames(
     app: &tauri::AppHandle,
-    frames: Vec<screenshots::image::RgbaImage>,
+    frames: Vec<snipaste::Frame>,
     cursor_index: usize,
     mode: SnipasteMode,
     seq: u64,
@@ -903,7 +905,7 @@ fn finish_instant_ocr(app: &tauri::AppHandle, rect: (f64, f64, f64, f64)) -> Res
 }
 
 #[tauri::command]
-async fn start_snipaste(app: tauri::AppHandle, mode: Option<String>) -> Result<(), String> {
+fn start_snipaste(app: tauri::AppHandle, mode: Option<String>) -> Result<(), String> {
     let mode = match mode.as_deref() {
         Some("instant") => SnipasteMode::Instant,
         Some("long") => SnipasteMode::Long,
@@ -920,7 +922,7 @@ async fn start_snipaste(app: tauri::AppHandle, mode: Option<String>) -> Result<(
 
 /// 兼容既有前端入口：长截图独立命令
 #[tauri::command]
-async fn start_long_screenshot(app: tauri::AppHandle) -> Result<(), String> {
+fn start_long_screenshot(app: tauri::AppHandle) -> Result<(), String> {
     if let Err(e) = start_overlay_session(&app, SnipasteMode::Long) {
         let _ = app.emit("snipaste-error", e.clone());
         return Err(e);
@@ -1358,6 +1360,15 @@ pub fn run() {
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 tokio::time::sleep(std::time::Duration::from_secs(4)).await;
+                // 抓屏后端预热（D3D11 设备创建 200–500ms，放后台线程别卡 UI）
+                let cap_handle = handle.clone();
+                let _ = tauri::async_runtime::spawn_blocking(move || {
+                    if let Err(e) = snipaste::prepare_capture_backend(&cap_handle) {
+                        eprintln!("[capture] DXGI 预热失败，将回退 GDI: {e}");
+                    }
+                })
+                .await;
+                // 覆盖层窗口预创建（必须主线程）
                 let inner = handle.clone();
                 let _ = handle.run_on_main_thread(move || {
                     let _ = prepare_overlay_windows(&inner);

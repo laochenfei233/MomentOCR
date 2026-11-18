@@ -182,24 +182,32 @@ export default function SnipasteOverlay() {
     setSelectedId(null);
     setDetectRect(null);
     clearAnnotations();
+
+    const myIndex = monitorRef.current.index;
+    const tryFetch = async (): Promise<boolean> => {
+      try {
+        const base64 = await invoke<string>('snipaste_get_monitor_display_base64', { index: myIndex });
+        setImageSrc(`data:image/jpeg;base64,${base64}`);
+        setFramesReady(true);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
     // 会话显示器列表随会话刷新（跨屏选区判断用）
     invoke<{ x: number; y: number; width: number; height: number }[]>('snipaste_get_monitors')
       .then((ms) => { monitorsRef.current = ms; })
       .catch(() => {});
-    // 订阅并发可能切换会话，用局部标记避免把上一轮的图写进来
-    for (let attempt = 0; attempt < 100; attempt++) {
-      try {
-        const base64 = await invoke<string>('snipaste_get_monitor_display_base64', {
-          index: monitorRef.current.index,
-        });
-        setImageSrc(`data:image/jpeg;base64,${base64}`);
-        setFramesReady(true);
-        return;
-      } catch {
-        await new Promise((r) => setTimeout(r, 60));
-      }
-    }
-    console.error('显示图加载超时');
+
+    // 先直接查一次；还没编码好就等 frame-ready 事件，避免固定轮询间隔带来的额外等待
+    if (await tryFetch()) return;
+    const un = await listen<number>('snipaste-frame-ready', async (e) => {
+      if (e.payload !== myIndex) return;
+      if (await tryFetch()) un();
+    });
+    // 兜底：编码异常时别让监听泄漏
+    setTimeout(() => { un(); }, 6000);
   }, [clearAnnotations]);
 
   useEffect(() => {

@@ -7,6 +7,52 @@ use screenshots::Screen;
 use chrono::Local;
 use base64::Engine;
 
+/// 会话帧：BGRA 排列、行紧密排版。
+/// Windows 的 DXGI 抓屏原生就是 BGRA，JPEG 编码器可直接消费，
+/// 因此抓屏路径上完全没有逐像素通道交换（4K 一次要 20–30ms，正好吃掉 DXGI 的收益）。
+#[derive(Clone)]
+pub struct Frame {
+    pub width: u32,
+    pub height: u32,
+    /// BGRA 像素，长度 = width * height * 4
+    pub data: Vec<u8>,
+}
+
+impl Frame {
+    pub fn from_bgra(width: u32, height: u32, data: Vec<u8>) -> Option<Self> {
+        if data.len() == (width as usize) * (height as usize) * 4 {
+            Some(Self { width, height, data })
+        } else {
+            None
+        }
+    }
+
+    /// 转成 image 的 RgbaImage（PNG 编码、长截图拼接用；有损路径不需要）
+    fn to_rgba(&self) -> screenshots::image::RgbaImage {
+        let mut data = self.data.clone();
+        for px in data.chunks_exact_mut(4) {
+            px.swap(0, 2);
+        }
+        screenshots::image::RgbaImage::from_raw(self.width, self.height, data)
+            .expect("图像尺寸与数据长度不符")
+    }
+}
+
+/// RGBA（screenshots crate / 其他平台）→ Frame
+fn frame_from_rgba(rgba: screenshots::image::RgbaImage) -> Frame {
+    let (w, h) = rgba.dimensions();
+    let mut data = rgba.into_raw();
+    for px in data.chunks_exact_mut(4) {
+        px.swap(0, 2);
+    }
+    Frame { width: w, height: h, data }
+}
+
+/// 当前会话抓屏后端：Windows 上优先 DXGI（单帧 ~15ms），不可用时回退 GDI（~200ms/4K）
+#[cfg(windows)]
+static DUPLICATORS: Lazy<Mutex<Vec<Option<crate::dxgi_capture::Duplicator>>>> =
+    Lazy::new(|| Mutex::new(Vec::new()));
+
 static LAST_SCREENSHOT: Lazy<Mutex<Option<String>>> = Lazy::new(|| Mutex::new(None));
 static LONG_SCREENSHOT_PATHS: Lazy<Mutex<Vec<String>>> = Lazy::new(|| Mutex::new(Vec::new()));
 
@@ -73,7 +119,7 @@ pub fn remove_pin(id: &str) -> Option<PinData> {
 /// 捕获包含物理坐标点 (cx, cy) 的显示器，返回物理像素原始帧（未编码）。
 /// 帧不编码：从按键到出图的路径上不做 PNG 编码（4K 一帧要几百毫秒），
 /// 显示与裁剪都直接用原始像素，编码交给后台任务。
-pub fn capture_monitor_containing(cx: f64, cy: f64) -> Result<screenshots::image::RgbaImage> {
+pub fn capture_monitor_containing(cx: f64, cy: f64) -> Result<Frame> {
     let screens = Screen::all()?;
     if screens.is_empty() {
         return Err(anyhow::anyhow!("找不到可用屏幕"));
@@ -90,7 +136,7 @@ pub fn capture_monitor_containing(cx: f64, cy: f64) -> Result<screenshots::image
         })
         .unwrap_or_else(|| screens.first().unwrap());
 
-    screen.capture()
+    screen.capture().map(frame_from_rgba)
 }
 
 /// 显示器几何：物理原点 (x, y)、物理尺寸 (宽, 高)、缩放系数
@@ -109,7 +155,7 @@ pub fn get_session_monitor() -> Option<MonitorGeometry> {
 }
 
 /// 捕获会话显示器（无会话时退回主屏）
-pub fn capture_session_monitor() -> Result<screenshots::image::RgbaImage> {
+pub fn capture_session_monitor() -> Result<Frame> {
     let (x, y, w, h, _) = get_session_monitor()
         .ok_or_else(|| anyhow::anyhow!("没有会话显示器记录"))?;
     // 用显示器中心点定位
@@ -151,11 +197,11 @@ pub fn set_session_monitor_path(index: usize, path: String) {
 /// 会话原始帧（与 SESSION_MONITORS 同索引）。裁剪直接读它：
 /// 用户框选可能在 PNG 落盘之前完成，等文件就会引入几百毫秒到数秒的延迟。
 /// 会话原始帧条目（Arc 便于后台编码与裁剪共享同一块像素）
-type FrameSlot = Option<std::sync::Arc<screenshots::image::RgbaImage>>;
+type FrameSlot = Option<std::sync::Arc<Frame>>;
 
 static SESSION_FRAMES: Lazy<Mutex<Vec<FrameSlot>>> = Lazy::new(|| Mutex::new(Vec::new()));
 
-pub fn set_session_frames(frames: Vec<screenshots::image::RgbaImage>) {
+pub fn set_session_frames(frames: Vec<Frame>) {
     *SESSION_FRAMES.lock().unwrap() = frames
         .into_iter()
         .map(|f| Some(std::sync::Arc::new(f)))
@@ -163,7 +209,7 @@ pub fn set_session_frames(frames: Vec<screenshots::image::RgbaImage>) {
 }
 
 /// 取某屏的原始帧（克隆 Arc，锁即刻释放）
-pub fn session_frame(index: usize) -> Option<std::sync::Arc<screenshots::image::RgbaImage>> {
+pub fn session_frame(index: usize) -> Option<std::sync::Arc<Frame>> {
     SESSION_FRAMES
         .lock()
         .unwrap()
@@ -193,24 +239,21 @@ pub fn display_image(index: usize) -> Option<String> {
 /// 显示用 JPEG（有损，但体积比 PNG 小一个数量级：4K 约 0.6–1 MB vs 8–15 MB）。
 /// overlay 只是背景，画质损失不可见；OCR 仍走无损帧。
 /// 用 jpeg-encoder（SIMD）而不是 image 自带的编码器：4K 单帧 240ms → 约 90ms。
-pub fn encode_display_jpeg(frame: &screenshots::image::RgbaImage) -> Result<String> {
+pub fn encode_display_jpeg(frame: &Frame) -> Result<String> {
     use jpeg_encoder::{ColorType, Encoder};
     let mut buf = Vec::new();
     Encoder::new(&mut buf, 85)
-        .encode(
-            frame.as_raw(),
-            frame.width() as u16,
-            frame.height() as u16,
-            ColorType::Rgba,
-        )
+        .encode(&frame.data, frame.width as u16, frame.height as u16, ColorType::Bgra)
         .map_err(|e| anyhow::anyhow!("JPEG 编码失败: {e}"))?;
     Ok(base64::engine::general_purpose::STANDARD.encode(&buf))
 }
 
 /// 无损 PNG（OCR/历史/长截图的源），编码较慢，只在后台跑
-pub fn encode_png(frame: &screenshots::image::RgbaImage) -> Result<Vec<u8>> {
+pub fn encode_png(frame: &Frame) -> Result<Vec<u8>> {
     let mut buf = Cursor::new(Vec::new());
-    frame.write_to(&mut buf, screenshots::image::ImageOutputFormat::Png)?;
+    frame
+        .to_rgba()
+        .write_to(&mut buf, screenshots::image::ImageOutputFormat::Png)?;
     Ok(buf.into_inner())
 }
 
@@ -267,7 +310,12 @@ pub fn enumerate_monitors(app: &tauri::AppHandle) -> Result<Vec<MonitorInfo>> {
 /// 抓全部显示器。
 /// 串行而非并行：GDI 抓屏要从显存读回，两个线程同时 BitBlt 会互相抢显存带宽，
 /// 实测并行反而比串行慢（315ms vs ~200ms），所以这里老老实实一块一块来。
-pub fn capture_all_monitors(app: &tauri::AppHandle) -> Result<Vec<screenshots::image::RgbaImage>> {
+pub fn capture_all_monitors(app: &tauri::AppHandle) -> Result<Vec<Frame>> {
+    #[cfg(windows)]
+    if let Some(frames) = capture_via_dxgi(app) {
+        return Ok(frames);
+    }
+    // 回退：GDI 逐屏抓（4K 一帧约 200ms，只在 DXGI 不可用时走到）
     let count = enumerate_monitors(app)?.len();
     let mut frames = Vec::with_capacity(count);
     for i in 0..count {
@@ -276,13 +324,62 @@ pub fn capture_all_monitors(app: &tauri::AppHandle) -> Result<Vec<screenshots::i
     Ok(frames)
 }
 
+/// 用 DXGI Desktop Duplication 抓全部屏；任何一块屏不匹配/失败都整体回退到 GDI。
+#[cfg(windows)]
+fn capture_via_dxgi(app: &tauri::AppHandle) -> Option<Vec<Frame>> {
+    let geometry = enumerate_monitors(app).ok()?;
+    let mut guards = DUPLICATORS.lock().ok()?;
+    if guards.len() != geometry.len() {
+        return None;
+    }
+    let mut frames = Vec::with_capacity(geometry.len());
+    for (i, geo) in geometry.iter().enumerate() {
+        let dup = guards.get_mut(i)?.as_mut()?;
+        // 显示器位置/尺寸变了（热插拔、改分辨率）→ 复制器过期，整体回退
+        if dup.origin != (geo.x, geo.y) || dup.size() != (geo.width, geo.height) {
+            return None;
+        }
+        let data = dup.capture_bgra().ok()?;
+        let (w, h) = dup.size();
+        frames.push(Frame::from_bgra(w, h, data)?);
+    }
+    Some(frames)
+}
+
+/// 预热抓屏后端：为每块屏建立 DXGI 复制器（初始化 ~30–250ms/屏）。
+/// 放在启动后的预热任务里做，避免把初始化成本算到按键路径上。
+#[cfg(windows)]
+pub fn prepare_capture_backend(app: &tauri::AppHandle) -> Result<()> {
+    let geometry = enumerate_monitors(app)?;
+    let outputs = crate::dxgi_capture::enumerate_outputs();
+    let mut duplicators = Vec::with_capacity(geometry.len());
+    for geo in &geometry {
+        let matched = outputs.iter().find(|o| {
+            o.x == geo.x && o.y == geo.y && o.width == geo.width && o.height == geo.height
+        });
+        duplicators.push(match matched {
+            Some(info) => crate::dxgi_capture::Duplicator::new(info.adapter_index, info.output_index).ok(),
+            None => None,
+        });
+    }
+    let usable = duplicators.iter().filter(|d| d.is_some()).count();
+    eprintln!("[capture] DXGI 预热：{usable}/{} 块屏", duplicators.len());
+    *DUPLICATORS.lock().unwrap() = duplicators;
+    Ok(())
+}
+
+#[cfg(not(windows))]
+pub fn prepare_capture_backend(_app: &tauri::AppHandle) -> Result<()> {
+    Ok(())
+}
+
 /// 抓第 index 块屏
-fn capture_index(index: usize) -> Result<screenshots::image::RgbaImage> {
+fn capture_index(index: usize) -> Result<Frame> {
     let screens = Screen::all()?;
     let screen = screens
         .get(index)
         .ok_or_else(|| anyhow::anyhow!("显示器列表发生变化"))?;
-    screen.capture()
+    screen.capture().map(frame_from_rgba)
 }
 
 // ============ 跨屏选区会话 ============
@@ -394,8 +491,6 @@ pub fn session_active() -> bool {
 /// 摆放即可 1:1 无缝重建选区内容，输出尺寸 = 选区全局物理尺寸。
 /// 不做跨屏密度归一：密度差异是屏幕的真实像素密度，重采样反而引入失真。
 pub fn crop_session_region(rect: (f64, f64, f64, f64)) -> Result<Vec<u8>> {
-    use screenshots::image::{imageops, ImageOutputFormat, RgbaImage};
-
     let (rx, ry, rw, rh) = rect;
     if rw < 1.0 || rh < 1.0 {
         anyhow::bail!("选区太小");
@@ -404,7 +499,11 @@ pub fn crop_session_region(rect: (f64, f64, f64, f64)) -> Result<Vec<u8>> {
     let (rw, rh) = (rw.round().max(1.0) as u32, rh.round().max(1.0) as u32);
 
     let monitors = get_session_monitors();
-    let mut canvas = RgbaImage::new(rw, rh);
+    let mut canvas = Frame {
+        width: rw,
+        height: rh,
+        data: vec![0u8; (rw as usize) * (rh as usize) * 4],
+    };
     let mut painted = false;
     for (i, m) in monitors.iter().enumerate() {
         let ix = rx.max(m.x);
@@ -415,23 +514,18 @@ pub fn crop_session_region(rect: (f64, f64, f64, f64)) -> Result<Vec<u8>> {
             continue;
         }
         let Some(frame) = session_frame(i) else { continue };
-        let crop = imageops::crop_imm(
-            frame.as_ref(),
-            (ix - m.x) as u32,
-            (iy - m.y) as u32,
-            (ix2 - ix) as u32,
-            (iy2 - iy) as u32,
-        )
-        .to_image();
-        imageops::overlay(&mut canvas, &crop, (ix - rx) as i64, (iy - ry) as i64);
+        let row_bytes = (ix2 - ix) as usize * 4;
+        for row in iy..iy2 {
+            let src = (((row - m.y) as usize) * (frame.width as usize) + (ix - m.x) as usize) * 4;
+            let dst = (((row - ry) as usize) * (rw as usize) + (ix - rx) as usize) * 4;
+            canvas.data[dst..dst + row_bytes].copy_from_slice(&frame.data[src..src + row_bytes]);
+        }
         painted = true;
     }
     if !painted {
         anyhow::bail!("选区不在任何屏幕内");
     }
-    let mut buf = Cursor::new(Vec::new());
-    canvas.write_to(&mut buf, ImageOutputFormat::Png)?;
-    Ok(buf.into_inner())
+    encode_png(&canvas)
 }
 
 /// 截图历史环形缓冲（最近 10 张），供 overlay 历史回放
