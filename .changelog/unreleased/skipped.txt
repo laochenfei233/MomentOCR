@@ -1,0 +1,1 @@
+9f1155f	fix(screenshot): 预创建后显式 hide，避免覆盖层窗口以可见态留在桌面
