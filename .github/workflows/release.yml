@@ -251,8 +251,15 @@ jobs:
           TAG="$GITHUB_REF_NAME"
           VERSION="${TAG#v}"
           ls -la dist-installers
-          gh release create "$TAG" --draft --verify-tag --title "须臾OCR $VERSION" --notes "" \
-            || echo "draft already exists, reusing"
+          # GitHub 允许同 tag 存在多个 draft release，`gh release create` 在已有草稿时
+          # 也不会失败——直接 create 会建出重复草稿（v0.3.3 实测过）。先查再建。
+          EXISTING=$(gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+            --jq "map(select(.tag_name==\"${TAG}\"))|length" 2>/dev/null || echo 0)
+          if [ "${EXISTING:-0}" = "0" ]; then
+            gh release create "$TAG" --draft --verify-tag --title "须臾OCR $VERSION" --notes ""
+          else
+            echo "release for ${TAG} already exists, reusing"
+          fi
           gh release upload "$TAG" dist-installers/* --clobber
 
       - name: Rewrite release notes from changelog
