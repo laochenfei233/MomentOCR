@@ -6,3 +6,4 @@ e68896f	chore(changelog): 出罩延迟片段更新实测数字（0.15s 出罩 / 
 d061308	chore(release): v0.3.3 补入截图出罩性能修复条目
 45e3959	ci(release): 固定 Rust 1.99.1，修复 Linux 构建失败
 87dc0a0	fix(screenshot): macOS 覆盖层只有半屏大——几何改用系统物理像素
+83d2e73	chore(screenshot): 覆盖层几何诊断日志 + 建窗即带真实尺寸
