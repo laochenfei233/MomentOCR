@@ -1485,8 +1485,8 @@ pub fn run() {
         })
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(|app, event| {
-            if let tauri::RunEvent::Exit = event {
+        .run(|app, event| match event {
+            tauri::RunEvent::Exit => {
                 // 退出时收掉本地翻译的 llama-server 子进程，别让它变成孤儿进程继续占内存
                 let _ = translate_engine::shutdown();
                 // 截图覆盖层窗口虽在主进程内、会随进程消失，这里显式关一遍兜底
@@ -1494,6 +1494,16 @@ pub fn run() {
                     let _ = w.close();
                 }
             }
+            // macOS：关窗只是隐藏、进程还在，Dock/Launchpad 再点不会起第二个进程，
+            // 只会发 Reopen 事件（单实例插件的聚焦回调依赖第二进程通知，接不住）。
+            // 没这个分支窗口一直藏着，看起来就像点了没反应。
+            // has_visible_windows: false 同时覆盖「已隐藏」和「最小化」两种情况；
+            // 变体本身 cfg(macos) 门控（tauri app.rs），非 macOS 构建走 _ 分支。
+            #[cfg(target_os = "macos")]
+            tauri::RunEvent::Reopen { has_visible_windows: false, .. } => {
+                show_main_window(app);
+            }
+            _ => {}
         });
 }
 
