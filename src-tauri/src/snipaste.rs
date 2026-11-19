@@ -277,6 +277,22 @@ pub struct MonitorInfo {
     pub scale: f64,
 }
 
+/// 诊断：screenshots/display_info 侧报的几何（x, y, w, h, scale）。
+/// 和 tao 的 Monitor 对照一次就能确认「谁给的是物理像素」，别再靠猜。
+pub fn screen_infos() -> Vec<(i32, i32, u32, u32, f32)> {
+    Screen::all()
+        .map(|screens| {
+            screens
+                .iter()
+                .map(|s| {
+                    let d = &s.display_info;
+                    (d.x, d.y, d.width, d.height, d.scale_factor)
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// 枚举全部显示器的物理几何（不抓屏）
 pub fn enumerate_monitors(app: &tauri::AppHandle) -> Result<Vec<MonitorInfo>> {
     let monitors = app

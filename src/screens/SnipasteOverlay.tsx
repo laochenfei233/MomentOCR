@@ -126,6 +126,23 @@ export default function SnipasteOverlay() {
 
   // CSS↔全局物理坐标换算（dpr 与该屏 scale 一致，沿用分支已验证手法）
   const dpr = window.devicePixelRatio || 1;
+
+  // 诊断：挂载时先报一次视口。覆盖层若只盖住屏幕上一条，这行能区分
+  // 「窗口不对」和「窗口对了但 webview 视口没跟上」。
+  useEffect(() => {
+    invoke('snipaste_report_viewport', {
+      payload: JSON.stringify({
+        stage: 'mount',
+        innerW: window.innerWidth,
+        innerH: window.innerHeight,
+        dpr,
+        screenW: window.screen.width,
+        screenH: window.screen.height,
+        monitor: monitorRef.current,
+      }),
+    }).catch(() => {});
+  }, [dpr]);
+
   const toGlobal = useCallback((cssX: number, cssY: number) => ({
     x: monitorRef.current.x + cssX * dpr,
     y: monitorRef.current.y + cssY * dpr,
@@ -895,6 +912,23 @@ export default function SnipasteOverlay() {
           src={imageSrc}
           style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', objectFit: 'fill', opacity: framesReady ? 1 : 0, transition: 'opacity 120ms' }}
           draggable={false}
+          onLoad={(e) => {
+            // 诊断：视口/图片尺寸对不上时，覆盖层会表现为「整套桌面缩在一小块里」。
+            // 只在图片就绪时报一次，成本可忽略。
+            const img = e.currentTarget;
+            invoke('snipaste_report_viewport', {
+              payload: JSON.stringify({
+                innerW: window.innerWidth,
+                innerH: window.innerHeight,
+                dpr: window.devicePixelRatio || 1,
+                screenW: window.screen.width,
+                screenH: window.screen.height,
+                imgW: img.naturalWidth,
+                imgH: img.naturalHeight,
+                monitor: monitorRef.current,
+              }),
+            }).catch(() => {});
+          }}
           onError={(e) => console.error('Image load error:', e)}
         />
       )}

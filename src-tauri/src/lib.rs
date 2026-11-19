@@ -531,6 +531,7 @@ fn ensure_overlay_windows(
 fn show_overlay_windows(
     app: &tauri::AppHandle,
     cursor_index: usize,
+    monitors: &[snipaste::MonitorInfo],
     t0: Option<std::time::Instant>,
 ) {
     let wins = overlay_windows(app);
@@ -549,6 +550,44 @@ fn show_overlay_windows(
             let _ = w.set_focus();
         });
     }
+    verify_overlay_geometry(app, monitors.to_vec());
+}
+
+/// show 之后复查覆盖窗口几何：macOS 的 set_inner_size 是异步投递到主线程的，
+/// 预创建 + 隐藏的窗口在个别情况下会停在旧尺寸（表现为覆盖层只盖住屏幕上一条）。
+/// 这里等一拍再读一次，不一致就重设；复查结果一律落盘，用来区分是「窗口不对」
+/// 还是「窗口对了但页面视口不对」。
+fn verify_overlay_geometry(app: &tauri::AppHandle, monitors: Vec<snipaste::MonitorInfo>) {
+    use tauri::{PhysicalPosition, PhysicalSize, Position, Size};
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        for (i, m) in monitors.iter().enumerate() {
+            let label = format!("{OVERLAY_PREFIX}-{i}");
+            let Some(w) = app.get_webview_window(&label) else {
+                geom_log(&format!("verify {label}: window missing"));
+                continue;
+            };
+            let pos = w.outer_position().ok();
+            let size = w.inner_size().ok();
+            let scale = w.scale_factor().ok();
+            geom_log(&format!(
+                "verify {label}: want=({},{} {}x{}) got={pos:?} {size:?} scale={scale:?}",
+                m.x, m.y, m.width, m.height
+            ));
+            if size
+                .map(|s| (s.width, s.height) != (m.width, m.height))
+                .unwrap_or(true)
+            {
+                let _ = w.set_size(Size::Physical(PhysicalSize::new(m.width, m.height)));
+                geom_log(&format!("verify {label}: size re-applied"));
+            }
+            if pos.map(|p| (p.x, p.y) != (m.x, m.y)).unwrap_or(true) {
+                let _ = w.set_position(Position::Physical(PhysicalPosition::new(m.x, m.y)));
+                geom_log(&format!("verify {label}: position re-applied"));
+            }
+        }
+    });
 }
 
 /// 收尾兜底：任何退出路径都要把主窗口还回来（build 失败等异常场景）
@@ -601,8 +640,13 @@ fn build_overlay_window(
         )
         .into(),
     );
+    let logical_w = m.width as f64 / if m.scale > 0.0 { m.scale } else { 1.0 };
+    let logical_h = m.height as f64 / if m.scale > 0.0 { m.scale } else { 1.0 };
     let win = WebviewWindowBuilder::new(app, &label, url)
         .title("截图")
+        // 建窗时就带上真实尺寸：默认 800x600 的窗口即使随后被 set_size 纠正，
+        // macOS 上 set_inner_size 是异步投递的，可能出现「先以小窗出罩」的窗口
+        .inner_size(logical_w, logical_h)
         .visible(false)
         .decorations(false)
         .resizable(false)
@@ -614,6 +658,17 @@ fn build_overlay_window(
         .map_err(|e| e.to_string())?;
     // 落位顺序按平台（见 place_window）：macOS 先 size 后 position，Windows 反过来
     place_window(&win, m.x, m.y, m.width, m.height).map_err(|e| e.to_string())?;
+    geom_log(&format!(
+        "build {label}: want=({},{} {}x{} scale={}) got={:?} {:?} {:?}",
+        m.x,
+        m.y,
+        m.width,
+        m.height,
+        m.scale,
+        win.outer_position().ok(),
+        win.inner_size().ok(),
+        win.scale_factor().ok()
+    ));
     #[cfg(target_os = "macos")]
     mac_overlay_chrome(&win);
     // 显式隐藏：builder 的 visible(false) 在部分 Windows 环境下不生效，
@@ -732,6 +787,20 @@ fn timing_log(t0: std::time::Instant, stage: &str) {
     let _ = writeln!(f, "{:>6} ms  {}", t0.elapsed().as_millis(), stage);
 }
 
+/// 诊断几何：显示器/覆盖窗口/前端视口三者对不上时，只能落盘取证。
+/// 追加到 %TEMP%/momentocr-overlay-geom.log（macOS 上就是 $TMPDIR）。
+fn geom_log(msg: &str) {
+    use std::io::Write;
+    let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(std::env::temp_dir().join("momentocr-overlay-geom.log"))
+    else {
+        return;
+    };
+    let _ = writeln!(f, "{msg}");
+}
+
 /// 抓本次会话的帧（长截图锁光标屏，其余全部屏）。Windows 上走 DXGI，约 40ms。
 fn capture_session_frames(
     app: &tauri::AppHandle,
@@ -750,6 +819,10 @@ fn capture_session_frames(
         }
     };
     timing_log(t0, "capture done");
+    geom_log(&format!(
+        "frames: {:?}",
+        frames.iter().map(|f| (f.width, f.height)).collect::<Vec<_>>()
+    ));
     Some(frames)
 }
 
@@ -792,6 +865,17 @@ fn start_overlay_session_inner(app: &tauri::AppHandle, mode: SnipasteMode) -> Re
     } else {
         snipaste::enumerate_monitors(app).map_err(|e: anyhow::Error| e.to_string())?
     };
+
+    geom_log(&format!(
+        "session start: cursor=({:.0},{:.0}) monitors={:?} screens={:?}",
+        cursor.x,
+        cursor.y,
+        infos
+            .iter()
+            .map(|m| (m.x, m.y, m.width, m.height, m.scale))
+            .collect::<Vec<_>>(),
+        snipaste::screen_infos()
+    ));
 
     let monitors: Vec<snipaste::SessionMonitor> = infos
         .iter()
@@ -841,7 +925,7 @@ fn start_overlay_session_inner(app: &tauri::AppHandle, mode: SnipasteMode) -> Re
         return Err("抓屏失败".to_string());
     };
     snipaste::set_session_frames(frames.clone());
-    show_overlay_windows(app, cursor_index, Some(t0));
+    show_overlay_windows(app, cursor_index, &infos, Some(t0));
     timing_log(t0, "windows shown");
     let _ = app.emit(
         "snipaste-session-reset",
@@ -961,6 +1045,13 @@ fn snipaste_get_monitor_display_base64(index: usize) -> Result<String, String> {
 #[tauri::command]
 fn snipaste_get_monitors() -> Vec<snipaste::SessionMonitor> {
     snipaste::get_session_monitors()
+}
+
+/// overlay 窗口上报自己的视口/图片尺寸（诊断用）：窗口正确但画面只占一角时，
+/// 靠这行区分是 webview 视口没跟上还是前端缩放问题。
+#[tauri::command]
+fn snipaste_report_viewport(payload: String) {
+    geom_log(&format!("viewport: {payload}"));
 }
 
 /// overlay 窗口上报指针事件（全局物理坐标）。Rust 是选区状态的唯一事实源，
@@ -1329,7 +1420,7 @@ pub fn run() {
             snipaste_list_pins, snipaste_set_pin_visible, snipaste_close_pin,
             snipaste_toggle_mouse_through, snipaste_detect_window, snipaste_history_step,
             snipaste_get_monitor_display_base64, snipaste_get_monitors, snipaste_select_event,
-            snipaste_session_snapshot,
+            snipaste_session_snapshot, snipaste_report_viewport,
             snipaste_crop_session, snipaste_cancel
         ])
         .on_window_event(|window, event| {
