@@ -559,6 +559,30 @@ fn restore_main_window(app: &tauri::AppHandle) {
     }
 }
 
+/// 无装饰窗口落位 + 定尺寸。顺序按平台反着来：
+/// - macOS：AppKit 的 setContentSize 以左下角为锚点，先定位再放大，窗口会向上长到屏幕外；
+/// - Windows：先定位会触发 WM_DPICHANGED 让系统按目标屏 DPI 缩放窗口，尺寸必须最后落。
+fn place_window(
+    win: &tauri::WebviewWindow,
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+) -> tauri::Result<()> {
+    use tauri::{PhysicalPosition, PhysicalSize, Position, Size};
+    #[cfg(target_os = "macos")]
+    {
+        win.set_size(Size::Physical(PhysicalSize::new(width, height)))?;
+        win.set_position(Position::Physical(PhysicalPosition::new(x, y)))?;
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        win.set_position(Position::Physical(PhysicalPosition::new(x, y)))?;
+        win.set_size(Size::Physical(PhysicalSize::new(width, height)))?;
+    }
+    Ok(())
+}
+
 /// 单屏 overlay 窗口创建：先隐藏创建、物理坐标落位后再显示。
 /// builder 的逻辑 position 在混合 DPI 多屏下会被 tao 逐屏试探换算而落错显示器，
 /// 所以与贴图窗口一样用 Physical 精确落位。
@@ -567,7 +591,7 @@ fn build_overlay_window(
     index: usize,
     m: &snipaste::MonitorInfo,
 ) -> Result<tauri::WebviewWindow, String> {
-    use tauri::{PhysicalPosition, PhysicalSize, Position, Size, WebviewUrl, WebviewWindowBuilder};
+    use tauri::{WebviewUrl, WebviewWindowBuilder};
     let label = format!("{OVERLAY_PREFIX}-{index}");
     // 只把显示器几何写进 URL（会话模式走事件，窗口因此可跨模式复用）
     let url = WebviewUrl::App(
@@ -588,10 +612,8 @@ fn build_overlay_window(
         .skip_taskbar(true)
         .build()
         .map_err(|e| e.to_string())?;
-    win.set_position(Position::Physical(PhysicalPosition::new(m.x, m.y)))
-        .map_err(|e| e.to_string())?;
-    win.set_size(Size::Physical(PhysicalSize::new(m.width, m.height)))
-        .map_err(|e| e.to_string())?;
+    // 落位顺序按平台（见 place_window）：macOS 先 size 后 position，Windows 反过来
+    place_window(&win, m.x, m.y, m.width, m.height).map_err(|e| e.to_string())?;
     #[cfg(target_os = "macos")]
     mac_overlay_chrome(&win);
     // 显式隐藏：builder 的 visible(false) 在部分 Windows 环境下不生效，
@@ -1175,7 +1197,7 @@ async fn snipaste_create_pin(
     );
 
     // 贴图窗口：无装饰、置顶、不进任务栏；先隐藏创建，物理坐标落位后再显示
-    use tauri::{PhysicalPosition, PhysicalSize, Position, Size, WebviewUrl, WebviewWindowBuilder};
+    use tauri::{WebviewUrl, WebviewWindowBuilder};
     let built = WebviewWindowBuilder::new(&app, &label, WebviewUrl::App("/".into()))
         .title("贴图")
         .visible(false)
@@ -1187,13 +1209,9 @@ async fn snipaste_create_pin(
         .build();
     if let Err(ref e) = built { eprintln!("[create_pin] build failed: {e}"); }
     let win = built.map_err(|e| e.to_string())?;
-    if let Err(e) = win.set_position(Position::Physical(PhysicalPosition::new(px as i32, py as i32))) {
-        eprintln!("[create_pin] set_position failed: {e}");
-        let _ = win.close();
-        return Err(e.to_string());
-    }
-    if let Err(e) = win.set_size(Size::Physical(PhysicalSize::new(pw, ph))) {
-        eprintln!("[create_pin] set_size failed: {e}");
+    // 落位顺序按平台（见 place_window）：macOS 先 size 后 position，Windows 反过来
+    if let Err(e) = place_window(&win, px as i32, py as i32, pw, ph) {
+        eprintln!("[create_pin] place failed: {e}");
         let _ = win.close();
         return Err(e.to_string());
     }
