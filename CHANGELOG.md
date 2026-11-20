@@ -5,6 +5,16 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.4] - 2026-11-21
+
+「检查更新」恢复可用：能正确拉到 GitHub 最新发布、按真实版本号判断，设置页也显示真实版本。另修复 macOS 截图覆盖层只露出屏幕顶部一条、以及关窗隐藏后无法从 Dock 重新打开主窗口的问题。
+
+### Fixed
+
+- 修复 macOS 上截图覆盖层只露出屏幕顶部一条的问题：覆盖层现在会正常铺满屏幕；贴图窗口也不会再上下偏移。
+- macOS 上点关闭按钮隐藏窗口后，再点 Dock 图标、Launchpad 或双击应用图标也能重新调出主窗口；之前必须完全退出重开才行。
+- 「检查更新」此前始终失败：仓库地址写错导致拉不到发布信息，版本号又是写死的，永远误报有更新。现在会读取本机真实版本并与 GitHub 最新发布正确比较，直连失败时自动走镜像。设置页「更新」「关于」显示的版本号改为随构建自动生成（原来一直显示 0.2.0），设置页的检查更新按钮也接通了真实检查（原来只是个假按钮）。
+
 ## [0.3.3] - 2026-11-18
 
 ### Added
