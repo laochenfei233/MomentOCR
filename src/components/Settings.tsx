@@ -1,11 +1,13 @@
 import { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { getVersion } from '@tauri-apps/api/app';
 import { useSettingsStore } from '../stores/settingsStore';
 import { useOcrStore } from '../stores/ocrStore';
 import { builtinPlugins } from '../plugins';
 import { Logo } from './Logo';
 import { DEFAULT_SHORTCUTS, formatShortcut, isMacPlatform, isModifierKeyEvent, shortcutFromKeyboardEvent, validateShortcut } from '../utils/shortcut';
+import { fetchLatestRelease, cmpVersion } from '../utils/updateCheck';
 import { TRANSLATE_TARGETS } from '../utils/languages';
 type SettingsTab = 'general' | 'config' | 'screenshot' | 'api' | 'shortcuts' | 'update' | 'about';
 
@@ -67,7 +69,8 @@ function Settings({ shortcutIssues = {}, autostartIssue = null }: {
   const [clearCacheMsg, setClearCacheMsg] = useState<string | null>(null);
   const [clearCacheOk, setClearCacheOk] = useState(false);
   const [updateChecking, setUpdateChecking] = useState(false);
-  const [updateChecked, setUpdateChecked] = useState(false);
+  const [updateMessage, setUpdateMessage] = useState('');
+  const [appVersion, setAppVersion] = useState('…');
   const [autoStartError, setAutoStartError] = useState<string | null>(null);
   const store = useSettingsStore();
   const { clearHistory } = useOcrStore();
@@ -118,6 +121,32 @@ function Settings({ shortcutIssues = {}, autostartIssue = null }: {
     });
     return () => { unlisten.then((fn) => fn()); };
   }, []);
+
+  // 版本号跟构建走（tauri.conf.json），不再写死在界面上
+  useEffect(() => {
+    getVersion().then(setAppVersion).catch(() => setAppVersion(''));
+  }, []);
+
+  // 设置页与主窗口菜单共用同一套检查逻辑，结果就地显示而不是 alert
+  const handleCheckUpdate = async () => {
+    setUpdateChecking(true);
+    setUpdateMessage('');
+    try {
+      const data = await fetchLatestRelease();
+      const latest = (data.tag_name || '').replace(/^v/, '');
+      const current = await getVersion();
+      if (latest && cmpVersion(latest, current) > 0) {
+        setUpdateMessage(`发现新版本 v${latest}，已打开发布页`);
+        await invoke<string>('plugin:shell|open', { url: data.html_url });
+      } else {
+        setUpdateMessage('已是最新版本');
+      }
+    } catch (err: any) {
+      setUpdateMessage(err?.message || '检查更新失败');
+    } finally {
+      setUpdateChecking(false);
+    }
+  };
 
   const installComponent = async (id: 'ocr' | 'translate', quant?: string) => {
     setEngineBusy(id);
@@ -504,12 +533,12 @@ function Settings({ shortcutIssues = {}, autostartIssue = null }: {
         {activeTab === 'update' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
             <SettingsCard title="版本更新">
-              <p style={{ fontSize: 13, color: '#1c1c1e', marginBottom: 8 }}>当前版本: 0.2.0</p>
-              <button onClick={() => { setUpdateChecking(true); setTimeout(() => { setUpdateChecking(false); setUpdateChecked(true); }, 1500); }} disabled={updateChecking}
+              <p style={{ fontSize: 13, color: '#1c1c1e', marginBottom: 8 }}>当前版本: {appVersion}</p>
+              <button onClick={handleCheckUpdate} disabled={updateChecking}
                 style={{ padding: '8px 16px', background: '#007AFF', color: 'white', border: 'none', borderRadius: 12, fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
                 {updateChecking ? '检查中...' : '检查更新'}
               </button>
-              {updateChecked && <p style={{ fontSize: 12, color: '#8E8E93', marginTop: 8 }}>已是最新版本</p>}
+              {updateMessage && <p style={{ fontSize: 12, color: '#8E8E93', marginTop: 8 }}>{updateMessage}</p>}
             </SettingsCard>
           </div>
         )}
@@ -519,7 +548,7 @@ function Settings({ shortcutIssues = {}, autostartIssue = null }: {
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>
             <Logo size={80} />
             <h2 style={{ fontSize: 20, fontWeight: 700, color: '#1c1c1e' }}>须臾OCR</h2>
-            <p style={{ fontSize: 13, color: '#8E8E93' }}>版本 0.2.0</p>
+            <p style={{ fontSize: 13, color: '#8E8E93' }}>版本 {appVersion}</p>
             <p style={{ fontSize: 12, color: '#AEAEB2', textAlign: 'center', lineHeight: 1.6 }}>
               智能OCR桌面软件<br/>
               支持 PaddleOCR / RapidOCR / OpenAI / 通义千问 / 智谱 / 豆包 / Gemini / MiMo / DeepSeek / Claude / 本地LLM
