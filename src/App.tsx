@@ -6,6 +6,7 @@ import OcrResult from './components/OcrResult';
 import Settings from './components/Settings';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { getVersion } from '@tauri-apps/api/app';
 import { useOcrStore } from './stores/ocrStore';
 import { useSettingsStore } from './stores/settingsStore';
 import { builtinPlugins, findPlugin, runOcr } from './plugins';
@@ -13,6 +14,30 @@ import { GOOGLE_TARGET_CODES } from './utils/languages';
 import { validateShortcut, type ShortcutRegistration } from './utils/shortcut';
 
 type Tab = 'screenshot' | 'file' | 'settings' | 'snipaste';
+
+// 「检查更新」的 release 源。仓库 slug 曾经写错（chenfei-xy），导致 API 永远 404
+const RELEASE_API = 'https://api.github.com/repos/laochenfei233/MomentOCR/releases/latest';
+
+async function fetchLatestRelease() {
+  try {
+    const resp = await fetch(RELEASE_API);
+    if (resp.ok) return await resp.json();
+  } catch { /* 直连失败或被限流，走镜像 */ }
+  const resp = await fetch(`https://gh-proxy.com/${RELEASE_API}`);
+  if (!resp.ok) throw new Error('无可用更新');
+  return resp.json();
+}
+
+// 逐段数值比较，字符串比较会把旧版也判成「有更新」
+function cmpVersion(a: string, b: string) {
+  const pa = a.split('.').map(Number);
+  const pb = b.split('.').map(Number);
+  for (let i = 0; i < 3; i++) {
+    const d = (pa[i] || 0) - (pb[i] || 0);
+    if (d) return d;
+  }
+  return 0;
+}
 
 function App() {
   const [tab, setTab] = useState<Tab>('screenshot');
@@ -288,12 +313,10 @@ function App() {
   const handleCheckUpdate = async () => {
     setShowMenu(false);
     try {
-      const resp = await fetch('https://api.github.com/repos/chenfei-xy/MomentOCR/releases/latest');
-      if (!resp.ok) throw new Error('无可用更新');
-      const data = await resp.json();
+      const data = await fetchLatestRelease();
       const latestVersion = (data.tag_name || '').replace(/^v/, '');
-      const currentVersion = '0.2.0';
-      if (latestVersion && latestVersion !== currentVersion) {
+      const currentVersion = await getVersion();
+      if (latestVersion && cmpVersion(latestVersion, currentVersion) > 0) {
         await invoke<string>('plugin:shell|open', { url: data.html_url });
       } else {
         alert('已是最新版本');
