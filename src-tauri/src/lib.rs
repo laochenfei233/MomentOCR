@@ -592,9 +592,34 @@ fn verify_overlay_geometry(app: &tauri::AppHandle, monitors: Vec<snipaste::Monit
 
 /// 收尾兜底：任何退出路径都要把主窗口还回来（build 失败等异常场景）
 fn restore_main_window(app: &tauri::AppHandle) {
+    #[cfg(windows)]
+    set_main_window_cloaked(app, false);
     if let Some(main_window) = app.get_webview_window("main") {
         let _ = main_window.show();
         let _ = main_window.set_focus();
+    }
+}
+
+/// Windows：对主窗口做 DWM cloak/uncloak。DwmSetWindowAttribute 线程安全，
+/// 任意线程调用都立即生效（不等主线程消息队列）。
+#[cfg(windows)]
+fn set_main_window_cloaked(app: &tauri::AppHandle, cloaked: bool) {
+    use windows::Win32::Foundation::{BOOL, HWND};
+    use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_CLOAK};
+    let Some(main_window) = app.get_webview_window("main") else {
+        return;
+    };
+    let Ok(hwnd) = main_window.hwnd() else {
+        return;
+    };
+    let cloak = BOOL::from(cloaked);
+    unsafe {
+        let _ = DwmSetWindowAttribute(
+            HWND(hwnd.0),
+            DWMWA_CLOAK,
+            &cloak as *const BOOL as *const std::ffi::c_void,
+            std::mem::size_of::<BOOL>() as u32,
+        );
     }
 }
 
@@ -904,9 +929,21 @@ fn start_overlay_session_inner(app: &tauri::AppHandle, mode: SnipasteMode) -> Re
     snipaste::set_session_instant(mode == SnipasteMode::Instant);
     SESSION_MODE.store(mode_code(mode), Ordering::SeqCst);
 
-    // 隐藏主窗口（必须在抓屏前完成，别把自己拍进去）
+    // 隐藏主窗口（必须在抓屏前完成，别把自己拍进去）。
+    // 真机实测两个坑：①托盘入口在 tokio 线程跑本函数，hide() 排队到主线程，
+    // 抓屏先于隐藏执行，主窗口整只入镜；②即使 hide() 同步执行，DWM 也要等
+    // 一至数帧才把窗口从桌面合成里摘掉，紧跟的抓屏拍到半截/淡出中的主窗口。
+    // 因此先 cloak（下一帧合成即不含主窗口，无过渡动画），再 hide 保持状态一致，
+    // 最后 DwmFlush 等合成落地才抓屏。
+    #[cfg(windows)]
+    set_main_window_cloaked(app, true);
     if let Some(main_window) = app.get_webview_window("main") {
         main_window.hide().map_err(|e: tauri::Error| e.to_string())?;
+    }
+    #[cfg(windows)]
+    unsafe {
+        let _ = windows::Win32::Graphics::Dwm::DwmFlush();
+        let _ = windows::Win32::Graphics::Dwm::DwmFlush();
     }
 
     // 2) 对齐窗口：预创建的窗口几何与本次一致就直接复用（页面已加载好），
