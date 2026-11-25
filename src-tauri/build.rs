@@ -1,10 +1,5 @@
 fn main() {
-    tauri_build::try_build(
-        tauri_build::Attributes::new().app_manifest(
-            tauri_build::AppManifest::new().permissions_path_pattern(
-                "C:/Users/chenfei/Documents/GitHub/MomentOCR/.worktrees/security-remediation/src-tauri/permissions/**/*.toml",
-            ),
-        ),
-    )
-    .expect("failed to run tauri-build");
+    // 默认就会解析 src-tauri/permissions/**/* 生成应用命令 ACL（__app-acl__），
+    // 运行时按窗口能力清单鉴权（审计 run-1: app-commands-without-acl-permissions）。
+    tauri_build::build()
 }
