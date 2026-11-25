@@ -15,7 +15,8 @@ use tauri::{
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 use chrono::Local;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::Mutex;
 use once_cell::sync::Lazy;
@@ -33,6 +34,11 @@ struct AppState {
     /// 「缩到托盘」处理，安装器等不到进程结束就强杀，托盘图标来不及注销，
     /// 通知区域里就会留下一个点一下就消失的幽灵图标。
     exe_mtime: Option<std::time::SystemTime>,
+    /// OCR 允许读取的图片路径（canonicalized）：用户从对话框选择的文件 +
+    /// 拖放暂存文件。会话截图走受管临时目录，不进这张表。
+    /// 审计 run-1：WebView 无 fs 能力，OCR 命令是它唯一的任意文件读路径，
+    /// 必须绑定到「用户选过/会话产物」两类来源。
+    allowed_image_paths: Mutex<HashSet<PathBuf>>,
 }
 
 impl Default for AppState {
@@ -44,6 +50,7 @@ impl Default for AppState {
             show_on_tray_click: AtomicBool::new(true),
             quitting: AtomicBool::new(false),
             exe_mtime: current_exe_mtime(),
+            allowed_image_paths: Mutex::new(HashSet::new()),
         }
     }
 }
@@ -167,23 +174,64 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
 }
 
 #[tauri::command]
-fn select_image_files() -> Result<Vec<String>, String> {
+fn select_image_files(app: tauri::AppHandle) -> Result<Vec<String>, String> {
     let paths = rfd::FileDialog::new()
         .add_filter("图片文件", &["png", "jpg", "jpeg", "gif", "webp", "bmp"])
         .set_title("选择图片文件")
         .pick_files()
         .ok_or("用户取消选择")?;
+    {
+        let mut allowed = app.state::<AppState>().allowed_image_paths.lock().unwrap();
+        for p in &paths {
+            if let Ok(canon) = p.canonicalize() {
+                allowed.insert(canon);
+            }
+        }
+    }
     Ok(paths.iter().map(|p| p.to_string_lossy().to_string()).collect())
 }
 
+/// 校验 OCR 目标文件：仅允许「受管临时目录内的会话产物」或「用户显式选择/拖放过的文件」。
+/// 挡住 WebView 指定任意路径读取 → base64 外传的 IPC 原语
+/// （审计 run-1 指纹 ocr-image-path-arbitrary-read-outbound-exfil）。
+fn ensure_image_readable(app: &tauri::AppHandle, image_path: &str) -> Result<(), String> {
+    let canon = std::path::PathBuf::from(image_path)
+        .canonicalize()
+        .map_err(|_| format!("文件不存在或不可读：{image_path}"))?;
+    if let Ok(managed) = snipaste::managed_temp_dir().canonicalize() {
+        if canon.starts_with(&managed) {
+            return Ok(());
+        }
+    }
+    let allowed = app.state::<AppState>().allowed_image_paths.lock().unwrap();
+    if allowed.contains(&canon) {
+        return Ok(());
+    }
+    Err("仅允许识别用户选择的文件或本次会话的截图".to_string())
+}
+
 #[tauri::command]
-fn save_temp_files(file_names: Vec<String>, file_data: Vec<Vec<u8>>) -> Result<Vec<String>, String> {
-    let mut paths = Vec::new();
-    let temp_dir = std::env::temp_dir().join("moment_ocr");
+fn save_temp_files(app: tauri::AppHandle, file_names: Vec<String>, file_data: Vec<Vec<u8>>) -> Result<Vec<String>, String> {
+    // 服务端生成文件名：调用方名字只用来取扩展名，杜绝 ..\ 与绝对路径拼接
+    // （审计 run-1 指纹 save-temp-files-path-join-traversal-write）
+    const ALLOWED_EXT: [&str; 6] = ["png", "jpg", "jpeg", "gif", "webp", "bmp"];
+    let temp_dir = snipaste::managed_temp_dir();
     std::fs::create_dir_all(&temp_dir).map_err(|e| e.to_string())?;
-    for (name, data) in file_names.iter().zip(file_data.iter()) {
-        let path = temp_dir.join(name);
+    let stamp = Local::now().format("%Y%m%d_%H%M%S%3f");
+    let mut allowed = app.state::<AppState>().allowed_image_paths.lock().unwrap();
+    let mut paths = Vec::new();
+    for (i, (name, data)) in file_names.iter().zip(file_data.iter()).enumerate() {
+        let ext = std::path::Path::new(name)
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_ascii_lowercase())
+            .filter(|e| ALLOWED_EXT.contains(&e.as_str()))
+            .unwrap_or_else(|| "png".to_string());
+        let path = temp_dir.join(format!("img_{stamp}_{i}.{ext}"));
         std::fs::write(&path, data).map_err(|e| e.to_string())?;
+        if let Ok(canon) = path.canonicalize() {
+            allowed.insert(canon);
+        }
         paths.push(path.to_string_lossy().to_string());
     }
     Ok(paths)
@@ -191,6 +239,7 @@ fn save_temp_files(file_names: Vec<String>, file_data: Vec<Vec<u8>>) -> Result<V
 
 #[tauri::command]
 async fn ocr_paddleocr(app: tauri::AppHandle, image_path: String) -> Result<String, String> {
+    ensure_image_readable(&app, &image_path)?;
     let r = tokio::task::spawn_blocking(move || {
         recognizer::run_script(&app, "paddleocr_recognize.py", &image_path)
     }).await;
@@ -247,23 +296,27 @@ fn remove_local_component(app: tauri::AppHandle, component: String) -> Result<St
 
 #[tauri::command]
 async fn ocr_rapidocr(app: tauri::AppHandle, image_path: String) -> Result<String, String> {
+    ensure_image_readable(&app, &image_path)?;
     let r = tokio::task::spawn_blocking(move || {
         recognizer::run_script(&app, "rapidocr_recognize.py", &image_path)
     }).await;
     match r { Ok(Ok(t)) => Ok(t), Ok(Err(e)) => Err(e.to_string()), Err(e) => Err(e.to_string()) }
 }
 #[tauri::command]
-async fn ocr_openai(api_key: String, image_path: String, model: String, max_tokens: u32) -> Result<String, String> {
+async fn ocr_openai(app: tauri::AppHandle, api_key: String, image_path: String, model: String, max_tokens: u32) -> Result<String, String> {
+    ensure_image_readable(&app, &image_path)?;
     let b64 = api::image_to_base64(&image_path).map_err(|e| e.to_string())?;
     api::call_openai_vision(&api_key, &b64, &model, max_tokens).await.map_err(|e| e.to_string())
 }
 #[tauri::command]
-async fn ocr_ollama(endpoint: String, model: String, image_path: String) -> Result<String, String> {
+async fn ocr_ollama(app: tauri::AppHandle, endpoint: String, model: String, image_path: String) -> Result<String, String> {
+    ensure_image_readable(&app, &image_path)?;
     let b64 = api::image_to_base64(&image_path).map_err(|e| e.to_string())?;
     api::call_ollama(&endpoint, &model, &b64).await.map_err(|e| e.to_string())
 }
 #[tauri::command]
-async fn ocr_custom_vision(base_url: String, api_key: String, model: String, image_path: String, max_tokens: u32) -> Result<String, String> {
+async fn ocr_custom_vision(app: tauri::AppHandle, base_url: String, api_key: String, model: String, image_path: String, max_tokens: u32) -> Result<String, String> {
+    ensure_image_readable(&app, &image_path)?;
     let b64 = api::image_to_base64(&image_path).map_err(|e| e.to_string())?;
     api::call_custom_vision(&base_url, &api_key, &model, &b64, max_tokens).await.map_err(|e| e.to_string())
 }
@@ -289,7 +342,8 @@ async fn list_models(base_url: String, api_key: String, provider: String) -> Res
     api::list_models(&base_url, &api_key, &provider).await.map_err(|e| e.to_string())
 }
 #[tauri::command]
-async fn ocr_claude(base_url: String, api_key: String, model: String, image_path: String, max_tokens: u32) -> Result<String, String> {
+async fn ocr_claude(app: tauri::AppHandle, base_url: String, api_key: String, model: String, image_path: String, max_tokens: u32) -> Result<String, String> {
+    ensure_image_readable(&app, &image_path)?;
     let b64 = api::image_to_base64(&image_path).map_err(|e| e.to_string())?;
     api::call_claude_vision(&base_url, &api_key, &model, &b64, max_tokens).await.map_err(|e| e.to_string())
 }
@@ -393,7 +447,7 @@ fn register_shortcuts(app: tauri::AppHandle, shortcuts: HashMap<String, String>)
 #[tauri::command]
 fn clear_temp_cache() -> Result<String, String> {
     use std::fs;
-    let t = std::env::temp_dir().join("moment_ocr");
+    let t = snipaste::managed_temp_dir();
     if t.exists() { fs::remove_dir_all(&t).map_err(|e| e.to_string())?; }
     fs::create_dir_all(&t).map_err(|e| e.to_string())?;
     Ok("已清除临时缓存".to_string())
@@ -798,14 +852,18 @@ fn start_overlay_session(app: &tauri::AppHandle, mode: SnipasteMode) -> Result<(
     result
 }
 
-/// 诊断计时：把关键阶段耗时追加到 %TEMP%/momentocr-timing.log。
+/// 诊断计时：把关键阶段耗时追加到受管临时目录的 momentocr-timing.log。
 /// GUI 进程没有 stderr，出罩延迟这类问题只能落盘取证；每轮 4 行，代价可忽略。
 fn timing_log(t0: std::time::Instant, stage: &str) {
     use std::io::Write;
+    let dir = snipaste::managed_temp_dir();
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
     let Ok(mut f) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(std::env::temp_dir().join("momentocr-timing.log"))
+        .open(dir.join("momentocr-timing.log"))
     else {
         return;
     };
@@ -813,13 +871,17 @@ fn timing_log(t0: std::time::Instant, stage: &str) {
 }
 
 /// 诊断几何：显示器/覆盖窗口/前端视口三者对不上时，只能落盘取证。
-/// 追加到 %TEMP%/momentocr-overlay-geom.log（macOS 上就是 $TMPDIR）。
+/// 追加到受管临时目录的 momentocr-overlay-geom.log（macOS 上就是 $TMPDIR）。
 fn geom_log(msg: &str) {
     use std::io::Write;
+    let dir = snipaste::managed_temp_dir();
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
     let Ok(mut f) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(std::env::temp_dir().join("momentocr-overlay-geom.log"))
+        .open(dir.join("momentocr-overlay-geom.log"))
     else {
         return;
     };
@@ -1247,17 +1309,17 @@ async fn snipaste_capture_next(app: tauri::AppHandle) -> Result<String, String> 
 }
 
 #[tauri::command]
-fn snipaste_save_screenshot(data: Vec<u8>, path: Option<String>) -> Result<String, String> {
-    let save_path = if let Some(p) = path {
-        std::path::PathBuf::from(p)
-    } else {
+fn snipaste_save_screenshot(data: Vec<u8>) -> Result<String, String> {
+    // 不接受调用方指定路径：落点恒为桌面默认名（审计 run-1 指纹
+    // snipaste-save-screenshot-caller-path-write；前端两处调用原本就传 null）
+    let save_path = {
         let desktop = dirs::desktop_dir().ok_or("无法获取桌面路径")?;
         desktop.join(format!("screenshot_{}.png", Local::now().format("%Y%m%d_%H%M%S")))
     };
-    
+
     snipaste::SnipasteManager::save_to_file(&data, &save_path)
         .map_err(|e| e.to_string())?;
-    
+
     Ok(save_path.to_string_lossy().to_string())
 }
 

@@ -694,6 +694,12 @@ pub fn detect_window_at(_cx: i32, _cy: i32) -> anyhow::Result<Option<DetectRect>
 
 pub struct SnipasteManager;
 
+/// 应用受管的临时目录：截图/裁剪/贴图/日志全部收拢于此，
+/// clear_temp_cache 一次清空（审计 run-1 指纹 src-tauri.temp-artifacts.outside-clear_temp_cache-scope）。
+pub fn managed_temp_dir() -> PathBuf {
+    std::env::temp_dir().join("moment_ocr")
+}
+
 impl SnipasteManager {
     /// 从全屏截图中裁剪区域
     pub fn crop_region(data: &[u8], x: u32, y: u32, width: u32, height: u32) -> Result<Vec<u8>> {
@@ -717,7 +723,7 @@ impl SnipasteManager {
     /// 生成临时文件路径
     pub fn generate_temp_path(prefix: &str) -> PathBuf {
         let timestamp = Local::now().format("%Y%m%d_%H%M%S%3f");
-        std::env::temp_dir().join(format!("{}_{}.png", prefix, timestamp))
+        managed_temp_dir().join(format!("{}_{}.png", prefix, timestamp))
     }
 
     /// 保存截图路径

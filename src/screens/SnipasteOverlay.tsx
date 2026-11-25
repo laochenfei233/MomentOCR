@@ -778,13 +778,13 @@ export default function SnipasteOverlay() {
     try {
       if (selectionCrosses() && !sourceIsHistoryRef.current) {
         const out = await cropSession();
-        await invoke('snipaste_save_screenshot', { data: Array.from(base64ToBytes(out.base64)), path: null });
+        await invoke('snipaste_save_screenshot', { data: Array.from(base64ToBytes(out.base64)) });
         showToast('跨屏选区已保存（不含标注）');
         await invoke('snipaste_finish');
         return;
       }
       const imageData = await generateAnnotatedImage(selection);
-      await invoke('snipaste_save_screenshot', { data: Array.from(base64ToBytes(imageData)), path: null });
+      await invoke('snipaste_save_screenshot', { data: Array.from(base64ToBytes(imageData)) });
       await invoke('snipaste_finish');
     } catch (err) {
       console.error('Save failed:', err);
