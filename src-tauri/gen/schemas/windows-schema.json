@@ -387,6 +387,24 @@
       "description": "Permission identifier",
       "oneOf": [
         {
+          "description": "主窗口可调用的应用命令（全部命令仅主窗口可得）",
+          "type": "string",
+          "const": "main-commands",
+          "markdownDescription": "主窗口可调用的应用命令（全部命令仅主窗口可得）"
+        },
+        {
+          "description": "截图覆盖层窗口可调用的应用命令（最小集）",
+          "type": "string",
+          "const": "overlay-commands",
+          "markdownDescription": "截图覆盖层窗口可调用的应用命令（最小集）"
+        },
+        {
+          "description": "贴图窗口可调用的应用命令（最小集，窗口操作走自目标命令）",
+          "type": "string",
+          "const": "pin-commands",
+          "markdownDescription": "贴图窗口可调用的应用命令（最小集，窗口操作走自目标命令）"
+        },
+        {
           "description": "This permission set configures if your\napplication can enable or disable auto\nstarting the application on boot.\n\n#### Granted Permissions\n\nIt allows all to check, enable and\ndisable the automatic start on boot.\n\n\n#### This default permission set includes:\n\n- `allow-enable`\n- `allow-disable`\n- `allow-is-enabled`",
           "type": "string",
           "const": "autostart:default",

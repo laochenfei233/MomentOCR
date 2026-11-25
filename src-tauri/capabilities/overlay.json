@@ -1,0 +1,10 @@
+{
+  "identifier": "overlay",
+  "description": "截图覆盖层窗口：只读自身几何 + 会话命令最小集（无任何破坏性窗口操作）",
+  "windows": ["snipaste-overlay-*"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-outer-position",
+    "overlay-commands"
+  ]
+}

@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { getCurrentWindow, PhysicalSize } from '@tauri-apps/api/window';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useSnipasteStore, type Annotation, type AnnotationType, type Point, type PinData } from '../stores/snipasteStore';
 import { drawAnnotation } from '../lib/annotations';
 import { pickColorFromImage, drawLoupe } from '../lib/colorPicker';
@@ -65,7 +65,7 @@ export default function PinWindow() {
     setFlipV(false);
     if (pin) {
       try {
-        await win.setSize(new PhysicalSize(Math.round(pin.width), Math.round(pin.height)));
+        await invoke('snipaste_pin_resize', { width: Math.round(pin.width), height: Math.round(pin.height) });
       } catch (err) {
         console.error('reset size failed:', err);
       }
@@ -81,7 +81,7 @@ export default function PinWindow() {
     const w = next % 2 === 1 ? p.height : p.width;
     const h = next % 2 === 1 ? p.width : p.height;
     try {
-      await win.setSize(new PhysicalSize(Math.round(w), Math.round(h)));
+      await invoke('snipaste_pin_resize', { width: Math.round(w), height: Math.round(h) });
     } catch (err) {
       console.error('rotate resize failed:', err);
     }
@@ -95,7 +95,7 @@ export default function PinWindow() {
           exitModes();
           setActiveTool(null);
         } else {
-          win.close().catch(() => {});
+          invoke('snipaste_pin_close').catch(() => {});
         }
         return;
       }
@@ -152,7 +152,7 @@ export default function PinWindow() {
       return;
     }
     lastPressRef.current = now;
-    win.startDragging().catch((err) => console.error('startDragging failed:', err));
+    invoke('snipaste_pin_start_drag').catch((err) => console.error('startDragging failed:', err));
   }, [win, annotating, picking]);
 
   // ---- 贴图内标注绘制 ----
@@ -346,7 +346,7 @@ export default function PinWindow() {
           <PinBtn title="垂直镜像 (4)" onClick={() => setFlipV((v) => !v)}><IconFlipV size={13} /></PinBtn>
           <PinBtn title="标注 (空格)" onClick={() => { void resetTransform().then(() => setAnnotating(true)); }}><IconPen size={13} /></PinBtn>
           <PinBtn title="取色 (Alt)" onClick={() => { void resetTransform().then(() => setPicking(true)); }}><IconPipette size={13} /></PinBtn>
-          <PinBtn title="关闭 (Esc)" onClick={() => win.close().catch(() => {})}><IconX size={13} /></PinBtn>
+          <PinBtn title="关闭 (Esc)" onClick={() => invoke('snipaste_pin_close').catch(() => {})}><IconX size={13} /></PinBtn>
         </div>
       )}
 

@@ -59,7 +59,7 @@ jobs:
             variant: local-inference
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       # 变体构建：下载 llama.cpp 官方预编译 CPU 包解进资源目录，并生成
       # 带 productName 后缀与额外 resources 的 tauri 配置 override。
@@ -124,7 +124,7 @@ jobs:
             rpm
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 20
           cache: npm
@@ -132,12 +132,12 @@ jobs:
       # 版本固定：screenshots 0.8.10 的 X11 代码在 rustc 1.100 上因类型推断变更
       # 编译失败（rust-lang/rust#148922 相关），1.99.1 是 0.3.1 轮次验证过的版本
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@1.99.1
+        uses: dtolnay/rust-toolchain@263313d2989f864a2b8613f97277288638e7d8f8 # 1.99.1
         with:
           targets: ${{ matrix.target }}
 
       - name: Rust cache
-        uses: swatinem/rust-cache@v2
+        uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           workspaces: src-tauri -> target
           key: ${{ matrix.label }}
@@ -151,7 +151,7 @@ jobs:
         run: npm ci
 
       - name: Build and publish
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # runner 上可能没有 libfuse2，让 linuxdeploy 自解压运行而不是挂载
@@ -222,7 +222,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload installers as run artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: MomentOCR-${{ matrix.label }}
           path: dist-installers/*
@@ -238,10 +238,10 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Download all installers
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: dist-installers
           merge-multiple: true

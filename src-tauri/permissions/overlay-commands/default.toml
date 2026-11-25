@@ -1,0 +1,22 @@
+[[permission]]
+identifier = "overlay-commands"
+description = "截图覆盖层窗口可调用的应用命令（最小集）"
+commands.allow = [
+  "snipaste_cancel",
+  "snipaste_capture_next",
+  "snipaste_copy_to_clipboard",
+  "snipaste_create_pin",
+  "snipaste_crop_region",
+  "snipaste_crop_session",
+  "snipaste_detect_window",
+  "snipaste_finish",
+  "snipaste_get_monitor_display_base64",
+  "snipaste_get_monitors",
+  "snipaste_get_screenshot_base64",
+  "snipaste_history_step",
+  "snipaste_report_viewport",
+  "snipaste_save_screenshot",
+  "snipaste_select_event",
+  "snipaste_session_snapshot",
+  "snipaste_stitch_screenshots",
+]

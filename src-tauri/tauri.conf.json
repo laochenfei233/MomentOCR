@@ -10,7 +10,7 @@
     "frontendDist": "../dist"
   },
   "app": {
-    "withGlobalTauri": true,
+    "withGlobalTauri": false,
     "windows": [
       {
         "label": "main",
@@ -23,12 +23,11 @@
         "transparent": false,
         "alwaysOnTop": false,
         "skipTaskbar": false,
-        "visible": true,
-        "devtools": true
+        "visible": true
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https: ws://localhost:1421 http://localhost:1421"
     }
   },
   "bundle": {

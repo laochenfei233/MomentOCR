@@ -1,0 +1,9 @@
+{
+  "identifier": "pin",
+  "description": "贴图窗口：最小集；窗口尺寸/拖动/关闭走自目标命令，不给 core:window 破坏性授权",
+  "windows": ["pin-*"],
+  "permissions": [
+    "core:default",
+    "pin-commands"
+  ]
+}

@@ -1418,18 +1418,41 @@ async fn snipaste_create_pin(
     Ok(())
 }
 
+/// 贴图相关命令的目标校验：main 可管理任意贴图；pin-* 只能操作自己；
+/// 其他窗口（overlay 等）不允许管理贴图。
+/// （审计 run-1：窗口 label 是调用方自报的字段，不能当作授权依据。）
+fn ensure_pin_target_allowed(caller: &str, label: &str) -> Result<(), String> {
+    let main_manages = caller == "main" && label.starts_with("pin-");
+    let pin_self = caller.starts_with("pin-") && caller == label;
+    if main_manages || pin_self {
+        Ok(())
+    } else {
+        Err(format!("窗口 {caller} 无权操作贴图 {label}"))
+    }
+}
+
 #[tauri::command]
-fn snipaste_get_pin_image(label: String) -> Result<snipaste::PinData, String> {
+fn snipaste_get_pin_image(window: tauri::Window, label: String) -> Result<snipaste::PinData, String> {
+    ensure_pin_target_allowed(window.label(), &label)?;
     snipaste::get_pin(&label).ok_or_else(|| "贴图不存在".to_string())
 }
 
 #[tauri::command]
-fn snipaste_list_pins() -> Vec<(String, snipaste::PinData)> {
+fn snipaste_list_pins(window: tauri::Window) -> Vec<(String, snipaste::PinData)> {
+    if window.label() != "main" {
+        return Vec::new();
+    }
     snipaste::list_pins()
 }
 
 #[tauri::command]
-fn snipaste_set_pin_visible(app: tauri::AppHandle, label: String, visible: bool) -> Result<(), String> {
+fn snipaste_set_pin_visible(
+    window: tauri::Window,
+    app: tauri::AppHandle,
+    label: String,
+    visible: bool,
+) -> Result<(), String> {
+    ensure_pin_target_allowed(window.label(), &label)?;
     let pin = snipaste::set_pin_visible(&label, visible).ok_or_else(|| "贴图不存在".to_string())?;
     if let Some(win) = app.get_webview_window(&label) {
         if visible {
@@ -1445,7 +1468,8 @@ fn snipaste_set_pin_visible(app: tauri::AppHandle, label: String, visible: bool)
 }
 
 #[tauri::command]
-fn snipaste_close_pin(app: tauri::AppHandle, label: String) -> Result<(), String> {
+fn snipaste_close_pin(window: tauri::Window, app: tauri::AppHandle, label: String) -> Result<(), String> {
+    ensure_pin_target_allowed(window.label(), &label)?;
     snipaste::remove_pin(&label).ok_or_else(|| "贴图不存在".to_string())?;
     if let Some(win) = app.get_webview_window(&label) {
         win.close().map_err(|e| e.to_string())?;
@@ -1453,8 +1477,36 @@ fn snipaste_close_pin(app: tauri::AppHandle, label: String) -> Result<(), String
     Ok(())
 }
 
+/// 贴图窗口调整自己的尺寸（注入的 window 就是调用者自身，改不了别的窗口）。
+/// 取代 core:window:allow-set-size 的平铺授权（审计 run-1:
+/// window-plugin-permissions-without-label-scope）。
 #[tauri::command]
-fn snipaste_toggle_mouse_through(app: tauri::AppHandle, label: String, enable: bool) -> Result<(), String> {
+fn snipaste_pin_resize(window: tauri::Window, width: u32, height: u32) -> Result<(), String> {
+    window
+        .set_size(tauri::Size::Physical(tauri::PhysicalSize::new(width, height)))
+        .map_err(|e| e.to_string())
+}
+
+/// 贴图窗口关闭自己
+#[tauri::command]
+fn snipaste_pin_close(window: tauri::Window) -> Result<(), String> {
+    window.close().map_err(|e| e.to_string())
+}
+
+/// 贴图窗口开始拖动（仅自身）
+#[tauri::command]
+fn snipaste_pin_start_drag(window: tauri::Window) -> Result<(), String> {
+    window.start_dragging().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn snipaste_toggle_mouse_through(
+    window: tauri::Window,
+    app: tauri::AppHandle,
+    label: String,
+    enable: bool,
+) -> Result<(), String> {
+    ensure_pin_target_allowed(window.label(), &label)?;
     let win = app.get_webview_window(&label).ok_or("找不到贴图窗口")?;
     win.set_ignore_cursor_events(enable).map_err(|e| e.to_string())?;
     Ok(())
@@ -1520,6 +1572,7 @@ pub fn run() {
             snipaste_copy_to_clipboard, snipaste_get_screenshot_base64,
             snipaste_create_pin, snipaste_finish, snipaste_get_pin_image,
             snipaste_list_pins, snipaste_set_pin_visible, snipaste_close_pin,
+            snipaste_pin_resize, snipaste_pin_close, snipaste_pin_start_drag,
             snipaste_toggle_mouse_through, snipaste_detect_window, snipaste_history_step,
             snipaste_get_monitor_display_base64, snipaste_get_monitors, snipaste_select_event,
             snipaste_session_snapshot, snipaste_report_viewport,

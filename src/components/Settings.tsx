@@ -133,11 +133,10 @@ function Settings({ shortcutIssues = {}, autostartIssue = null }: {
     setUpdateMessage('');
     try {
       const data = await fetchLatestRelease();
-      const latest = (data.tag_name || '').replace(/^v/, '');
       const current = await getVersion();
-      if (latest && cmpVersion(latest, current) > 0) {
-        setUpdateMessage(`发现新版本 v${latest}，已打开发布页`);
-        await invoke<string>('plugin:shell|open', { url: data.html_url });
+      if (cmpVersion(data.tagName, current) > 0) {
+        setUpdateMessage(`发现新版本 v${data.tagName}，已打开发布页`);
+        await invoke<string>('plugin:shell|open', { url: data.url });
       } else {
         setUpdateMessage('已是最新版本');
       }

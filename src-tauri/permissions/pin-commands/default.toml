@@ -1,0 +1,11 @@
+[[permission]]
+identifier = "pin-commands"
+description = "贴图窗口可调用的应用命令（最小集，窗口操作走自目标命令）"
+commands.allow = [
+  "snipaste_get_pin_image",
+  "snipaste_pin_close",
+  "snipaste_pin_resize",
+  "snipaste_pin_start_drag",
+  "snipaste_set_pin_visible",
+  "snipaste_toggle_mouse_through",
+]

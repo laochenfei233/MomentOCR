@@ -291,10 +291,9 @@ function App() {
     setShowMenu(false);
     try {
       const data = await fetchLatestRelease();
-      const latestVersion = (data.tag_name || '').replace(/^v/, '');
       const currentVersion = await getVersion();
-      if (latestVersion && cmpVersion(latestVersion, currentVersion) > 0) {
-        await invoke<string>('plugin:shell|open', { url: data.html_url });
+      if (cmpVersion(data.tagName, currentVersion) > 0) {
+        await invoke<string>('plugin:shell|open', { url: data.url });
       } else {
         alert('已是最新版本');
       }

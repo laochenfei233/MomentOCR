@@ -1,10 +1,9 @@
 {
-  "identifier": "default",
-  "description": "Default capabilities for MomentOCR",
-  "windows": ["main", "snipaste-overlay-*", "pin-*"],
+  "identifier": "main",
+  "description": "主窗口：完整命令面与窗口操作（唯一可信的顶层 UI）",
+  "windows": ["main"],
   "permissions": [
     "core:default",
-    "core:window:default",
     "core:window:allow-hide",
     "core:window:allow-show",
     "core:window:allow-close",
@@ -16,15 +15,9 @@
     "core:window:allow-set-size",
     "core:window:allow-start-dragging",
     "core:window:allow-outer-position",
-    "core:event:default",
     "core:event:allow-emit",
     "core:event:allow-listen",
-    "core:webview:default",
-    "core:webview:allow-create-webview-window",
     "shell:allow-open",
-    "global-shortcut:allow-register",
-    "global-shortcut:allow-unregister-all",
-    "global-shortcut:allow-is-registered",
-    "global-shortcut:allow-unregister"
+    "main-commands"
   ]
 }
