@@ -70,15 +70,19 @@ jobs:
         run: |
           set -euo pipefail
           case "${{ matrix.target }}" in
-            x86_64-pc-windows-msvc)   ASSET=llama-b11932-bin-win-cpu-x64.zip ;;
-            aarch64-apple-darwin)     ASSET=llama-b11932-bin-macos-arm64.tar.gz ;;
-            x86_64-apple-darwin)      ASSET=llama-b11932-bin-macos-x64.tar.gz ;;
-            x86_64-unknown-linux-gnu) ASSET=llama-b11932-bin-ubuntu-x64.tar.gz ;;
+            x86_64-pc-windows-msvc)   ASSET=llama-b11932-bin-win-cpu-x64.zip ; EXPECTED_SHA256=1b57df69f58dc1bfab83c4743a443b1c4973e7f83283ac7a39239e496815d0a3 ;;
+            aarch64-apple-darwin)     ASSET=llama-b11932-bin-macos-arm64.tar.gz ; EXPECTED_SHA256=1466def22e5f6c3f1a8f0d9e4e93daa86992c18447dba1d7de5e4465c088e223 ;;
+            x86_64-apple-darwin)      ASSET=llama-b11932-bin-macos-x64.tar.gz ; EXPECTED_SHA256=94c049c200e54a5f54ec1bb6f77959777dca3492b2f2d20b78a28719ef57cddd ;;
+            x86_64-unknown-linux-gnu) ASSET=llama-b11932-bin-ubuntu-x64.tar.gz ; EXPECTED_SHA256=dd5370127e82d15130f76876615dcca7fe80d5c451297c37ad4029df0abc84ba ;;
             *) echo "::error title=llama.cpp asset::未映射的目标 ${{ matrix.target }}"; exit 1 ;;
           esac
           mkdir -p src-tauri/resources/llama-runtime
           curl -fL --retry 3 -o llama-runtime-archive \
             "https://github.com/ggml-org/llama.cpp/releases/download/b11932/$ASSET"
+          # 下载即校验：摘要不符 fail-closed，绝不把被替换的二进制打进安装包
+          # （审计 run-1: release-ci.llama-runtime.unverified-download；
+          #   摘要与 src-tauri/src/translate_engine.rs 的 llama_asset_sha256 一致）
+          echo "$EXPECTED_SHA256  llama-runtime-archive" | sha256sum -c -
           case "$ASSET" in
             # runner 的 bash tar 是 GNU tar，读不了 zip；zip 一律走 python zipfile
             *.zip)   python -c "import zipfile; zipfile.ZipFile('llama-runtime-archive').extractall('src-tauri/resources/llama-runtime')" ;;
