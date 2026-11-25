@@ -46,6 +46,32 @@ const STANDALONE_SOURCES: [&str; 2] = [
     "https://mirror.nju.edu.cn/github-release/astral-sh/python-build-standalone",
     "https://github.com/astral-sh/python-build-standalone/releases/download",
 ];
+/// Windows embeddable 包的 sha256：python.org 官方下载与 huaweicloud 镜像双通道
+/// 下载比对一致（审计 run-1：下载件必须绑定完整性）
+#[cfg(windows)]
+const EMBED_SHA256: &str =
+    "4acbed6dd1c744b0376e3b1cf57ce906f9dc9e95e68824584c8099a63025a3c3";
+/// python-build-standalone 各目标归档的上游 sha256（取自官方 .sha256 边车，
+/// 并经两个独立代理核对；再用镜像 tarball 实测吻合）
+#[cfg(any(not(windows), test))]
+const STANDALONE_SHA256: [(&str, &str); 4] = [
+    (
+        "aarch64-apple-darwin",
+        "2d6477ecd10191675b7e7979e4b9e811fef36833ef3a7f3aa445eec305ce59a2",
+    ),
+    (
+        "x86_64-apple-darwin",
+        "d0d51fa22c0e99b58de1b1b4baeca467d6fd0a1424c7509ea280c0796306c481",
+    ),
+    (
+        "aarch64-unknown-linux-gnu",
+        "91557c4bc1f65c65c2bf1d0fc7a2816d21b1128f11d2d421af7bd5f6ce07232a",
+    ),
+    (
+        "x86_64-unknown-linux-gnu",
+        "e9cf6f7da499a4400ba30ae1da8f7ef25ce97827bd8c1084717aa05438035186",
+    ),
+];
 /// 运行时归档在临时目录里的落盘名，扩展名决定用哪个解压器
 #[cfg(windows)]
 const RUNTIME_ARCHIVE: &str = "python-embed.zip";
@@ -524,17 +550,24 @@ pub async fn install_into(
     Ok(format!("{}已安装完成（自检：{}）", component.label(), text))
 }
 
-/// 私有运行时的下载源，按优先级排；调用方逐个试。
+/// 私有运行时的下载源，按优先级排；调用方逐个试。每条都带预期 sha256。
 ///
 /// Windows 用 python.org 的 embeddable 包；macOS/Linux 没有 embeddable 发行版，
 /// 用 python-build-standalone 的可重定位构建。
-fn runtime_urls() -> Result<Vec<String>> {
+fn runtime_urls() -> Result<Vec<(String, &'static str)>> {
     #[cfg(windows)]
     {
         Ok(vec![
-            "https://mirrors.huaweicloud.com/python/3.12.10/python-3.12.10-embed-amd64.zip"
-                .to_string(),
-            "https://www.python.org/ftp/python/3.12.10/python-3.12.10-embed-amd64.zip".to_string(),
+            (
+                "https://mirrors.huaweicloud.com/python/3.12.10/python-3.12.10-embed-amd64.zip"
+                    .to_string(),
+                EMBED_SHA256,
+            ),
+            (
+                "https://www.python.org/ftp/python/3.12.10/python-3.12.10-embed-amd64.zip"
+                    .to_string(),
+                EMBED_SHA256,
+            ),
         ])
     }
 
@@ -561,9 +594,18 @@ fn standalone_target(os: &str, arch: &str) -> Result<&'static str> {
 }
 
 #[cfg(any(not(windows), test))]
-fn standalone_urls(target: &str) -> [String; 2] {
+fn standalone_urls(target: &str) -> [(String, &'static str); 2] {
+    let sha256 = STANDALONE_SHA256
+        .iter()
+        .copied()
+        .find(|(t, _)| *t == target)
+        .map(|(_, sha)| sha)
+        .expect("standalone 目标必须有对应 sha256");
     STANDALONE_SOURCES.map(|base| {
-        format!("{base}/{STANDALONE_TAG}/cpython-{PYTHON_VERSION}+{STANDALONE_TAG}-{target}-install_only.tar.gz")
+        (
+            format!("{base}/{STANDALONE_TAG}/cpython-{PYTHON_VERSION}+{STANDALONE_TAG}-{target}-install_only.tar.gz"),
+            sha256,
+        )
     })
 }
 
@@ -576,8 +618,8 @@ async fn install_runtime(
     progress("python", 2, "正在下载 Python 运行时…");
     let archive = layout.scratch().join(RUNTIME_ARCHIVE);
     let mut last_error = None;
-    for url in runtime_urls()? {
-        match download(client, &url, &archive, |done, total| {
+    for (url, sha256) in runtime_urls()? {
+        match download(client, &url, &archive, sha256, |done, total| {
             let percent = if total > 0 { (done * 100 / total).min(100) as u8 } else { 0 };
             progress(
                 "python",
@@ -616,10 +658,10 @@ async fn install_runtime(
 
     progress("bootstrap", 14, "正在准备安装工具…");
     for name in BOOTSTRAP_PACKAGES {
-        let (filename, url) = fetch_latest_wheel(client, name).await?;
+        let (filename, url, sha256) = fetch_latest_wheel(client, name).await?;
         let path = layout.scratch().join(&filename);
         progress("bootstrap", 14, &format!("正在准备安装工具… {filename}"));
-        download(client, &url, &path, |_, _| {}).await?;
+        download(client, &url, &path, &sha256, |_, _| {}).await?;
         let site = layout.site();
         let path_for_extract = path.clone();
         tokio::task::spawn_blocking(move || extract_zip(&path_for_extract, &site)).await??;
@@ -663,8 +705,13 @@ fn list_files(site: &Path) -> HashSet<String> {
     out
 }
 
-/// 从 PyPI 镜像的 PEP 691 接口取最新一个纯 Python wheel：(文件名, 绝对地址)
-async fn fetch_latest_wheel(client: &reqwest::Client, package: &str) -> Result<(String, String)> {
+/// 从 PyPI 镜像的 PEP 691 接口取最新一个纯 Python wheel：
+/// (文件名, 绝对地址, 索引自带的 sha256)。下载后按该摘要校验，
+/// 把「字节 ↔ 索引元数据」绑死，封住下载路径上的替换。
+async fn fetch_latest_wheel(
+    client: &reqwest::Client,
+    package: &str,
+) -> Result<(String, String, String)> {
     let mut last_error = None;
     for index in PIP_INDEXES {
         let base = format!("{}/{}/", index.trim_end_matches('/'), package);
@@ -694,10 +741,14 @@ async fn fetch_latest_wheel(client: &reqwest::Client, package: &str) -> Result<(
         let Some(files) = json["files"].as_array() else {
             continue;
         };
-        let mut best: Option<((u64, u64, u64), String, String)> = None;
+        let mut best: Option<((u64, u64, u64), String, String, String)> = None;
         for file in files {
             let Some(name) = file["filename"].as_str() else { continue };
             let Some(version) = pure_wheel_version(name, package) else { continue };
+            let Some(sha256) = file["digests"]["sha256"].as_str() else {
+                // 没带摘要的条目不可信，直接跳过
+                continue;
+            };
             let url = file["url"].as_str().unwrap_or_default();
             let absolute = if url.starts_with("http") {
                 url.to_string()
@@ -707,12 +758,12 @@ async fn fetch_latest_wheel(client: &reqwest::Client, package: &str) -> Result<(
                     Err(_) => continue,
                 }
             };
-            if best.as_ref().map(|(v, _, _)| *v < version).unwrap_or(true) {
-                best = Some((version, name.to_string(), absolute));
+            if best.as_ref().map(|(v, _, _, _)| *v < version).unwrap_or(true) {
+                best = Some((version, name.to_string(), absolute, sha256.to_string()));
             }
         }
-        if let Some((_, name, url)) = best {
-            return Ok((name, url));
+        if let Some((_, name, url, sha256)) = best {
+            return Ok((name, url, sha256));
         }
     }
     anyhow::bail!(
@@ -865,6 +916,7 @@ pub(crate) async fn download(
     client: &reqwest::Client,
     url: &str,
     dest: &Path,
+    expected_sha256: &str,
     mut on_progress: impl FnMut(u64, u64),
 ) -> Result<()> {
     use tokio::io::AsyncWriteExt;
@@ -889,7 +941,26 @@ pub(crate) async fn download(
         on_progress(done, total);
     }
     file.flush().await?;
-    Ok(())
+    drop(file);
+    // 下载即校验：内容与预期 sha256 不符就删掉并报错，绝不带病使用
+    verify_sha256(dest, expected_sha256)
+        .with_context(|| format!("{url} 的内容与预期 sha256 不符"))
+}
+
+/// 校验已落盘文件的 sha256；不符时删除文件并返回错误
+pub(crate) fn verify_sha256(path: &Path, expected: &str) -> Result<()> {
+    use sha2::Digest;
+    let mut hasher = sha2::Sha256::new();
+    let file = std::fs::File::open(path).with_context(|| format!("打开 {} 失败", path.display()))?;
+    let mut reader = std::io::BufReader::new(file);
+    std::io::copy(&mut reader, &mut hasher)?;
+    let actual = format!("{:x}", hasher.finalize());
+    if actual.eq_ignore_ascii_case(expected) {
+        Ok(())
+    } else {
+        let _ = std::fs::remove_file(path);
+        anyhow::bail!("sha256 不符：期望 {expected}，实际 {actual}（文件已删除）");
+    }
 }
 
 pub(crate) fn extract_zip(archive: &Path, dest: &Path) -> Result<()> {
@@ -1049,8 +1120,9 @@ mod tests {
         assert!(err.contains("MOMENTOCR_PYTHON"), "{err}");
 
         let urls = standalone_urls("aarch64-apple-darwin");
-        for url in &urls {
+        for (url, sha256) in &urls {
             assert!(url.starts_with("https://"), "{url}");
+            assert_eq!(sha256.len(), 64, "{sha256}");
             assert!(
                 url.ends_with(&format!(
                     "/{STANDALONE_TAG}/cpython-{PYTHON_VERSION}+{STANDALONE_TAG}\
@@ -1060,17 +1132,48 @@ mod tests {
             );
         }
         assert!(
-            urls[0].starts_with("https://mirror.nju.edu.cn/github-release/astral-sh/python-build-standalone"),
+            urls[0].0.starts_with("https://mirror.nju.edu.cn/github-release/astral-sh/python-build-standalone"),
             "{}",
-            urls[0]
+            urls[0].0
         );
         assert!(
-            urls[1].starts_with(
+            urls[1].0.starts_with(
                 "https://github.com/astral-sh/python-build-standalone/releases/download"
             ),
             "{}",
-            urls[1]
+            urls[1].0
         );
+        // 两条源必须带同一个上游摘要，否则换源就绕过了校验
+        assert_eq!(urls[0].1, urls[1].1);
+        assert_eq!(
+            urls[0].1,
+            "2d6477ecd10191675b7e7979e4b9e811fef36833ef3a7f3aa445eec305ce59a2"
+        );
+    }
+
+    /// 下载校验：内容与预期摘要不符要报错并删除文件
+    #[test]
+    fn verify_sha256_rejects_mismatch() {
+        let dir = std::env::temp_dir().join("momentocr-sha-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("payload.bin");
+        std::fs::write(&path, b"hello momentocr").unwrap();
+
+        let ok = "b6ed5d25f7d70c0a6b91d8efa9b02ddab4b3e0e0d1b1a9c1e0e1e0e0e0e0e0e0";
+        // 期望值随便填一个错误摘要：必须报错且把文件删掉
+        let err = verify_sha256(&path, ok).unwrap_err().to_string();
+        assert!(err.contains("sha256 不符"), "{err}");
+        assert!(!path.exists(), "不符的文件必须被删除");
+
+        // 正确摘要：先算再验
+        use sha2::Digest;
+        let mut h = sha2::Sha256::new();
+        h.update(b"hello momentocr");
+        let good = format!("{:x}", h.finalize());
+        std::fs::write(&path, b"hello momentocr").unwrap();
+        verify_sha256(&path, &good).expect("正确摘要应通过");
+        assert!(path.exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// 归档条目都带 `python/` 前缀，剥掉后才对齐 `runtime/bin/python3` 的布局

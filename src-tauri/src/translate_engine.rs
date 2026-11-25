@@ -45,15 +45,42 @@ fn llama_asset() -> Result<&'static str> {
     llama_asset_for(std::env::consts::OS, std::env::consts::ARCH)
 }
 
-fn llama_urls() -> Result<Vec<String>> {
+/// 各 release 资产的官方 sha256（取自 GitHub API 的 asset digest 字段）
+fn llama_asset_sha256(asset: &str) -> &'static str {
+    match asset {
+        "llama-b11932-bin-win-cpu-x64.zip" => {
+            "1b57df69f58dc1bfab83c4743a443b1c4973e7f83283ac7a39239e496815d0a3"
+        }
+        "llama-b11932-bin-win-cpu-arm64.zip" => {
+            "2a5300074b0019cc3c8be9af5d2057e28d3d4d403510bee5aab574dbaf72b847"
+        }
+        "llama-b11932-bin-macos-arm64.tar.gz" => {
+            "1466def22e5f6c3f1a8f0d9e4e93daa86992c18447dba1d7de5e4465c088e223"
+        }
+        "llama-b11932-bin-macos-x64.tar.gz" => {
+            "94c049c200e54a5f54ec1bb6f77959777dca3492b2f2d20b78a28719ef57cddd"
+        }
+        "llama-b11932-bin-ubuntu-x64.tar.gz" => {
+            "dd5370127e82d15130f76876615dcca7fe80d5c451297c37ad4029df0abc84ba"
+        }
+        "llama-b11932-bin-ubuntu-arm64.tar.gz" => {
+            "76c7bae8331403d051b43a639367ae07eba26ae153a661b9b56c28ee321f1e81"
+        }
+        other => unreachable!("未登记的 llama.cpp 资产：{other}"),
+    }
+}
+
+/// (下载地址, 预期 sha256) 列表；三条源共用同一个上游摘要
+fn llama_urls() -> Result<Vec<(String, &'static str)>> {
     let asset = llama_asset()?;
+    let sha256 = llama_asset_sha256(asset);
     // release 资产的 CDN 在国内直连不通（api.github.com 通但下载会失败），先走
     // gh 代理（格式：代理域名后面拼完整原始 URL），官方地址保留作回退
     let path = format!("https://github.com/ggml-org/llama.cpp/releases/download/{LLAMA_TAG}/{asset}");
     Ok(vec![
-        format!("https://gh-proxy.com/{path}"),
-        format!("https://ghproxy.net/{path}"),
-        path,
+        (format!("https://gh-proxy.com/{path}"), sha256),
+        (format!("https://ghproxy.net/{path}"), sha256),
+        (path, sha256),
     ])
 }
 
@@ -70,6 +97,8 @@ pub struct Quant {
     pub gguf_name: &'static str,
     /// 装完按字节数校验（下载截断/镜像损坏会直接报错）
     pub bytes: u64,
+    /// 发布方（ModelScope/HuggingFace 元数据）登记的 sha256；本地已下载文件实测吻合
+    pub sha256: &'static str,
     /// ModelScope 国内直连 → HuggingFace 回退
     pub urls: &'static [&'static str],
     pub download_mb: u64,
@@ -80,6 +109,7 @@ const QUANT_LIGHT: Quant = Quant {
     name: "轻量",
     gguf_name: "HY-MT1.5-1.8B-iq3_xxs.gguf",
     bytes: 826_831_648,
+    sha256: "67b68c45555d1d942c8d2ce1996a5af22faf5ae40054ddd91a92af402b3a8d87",
     urls: &[
         "https://modelscope.cn/models/Mungert/HY-MT1.5-1.8B-GGUF/resolve/master/HY-MT1.5-1.8B-iq3_xxs.gguf",
         "https://huggingface.co/Mungert/HY-MT1.5-1.8B-GGUF/resolve/main/HY-MT1.5-1.8B-iq3_xxs.gguf",
@@ -92,6 +122,7 @@ const QUANT_STANDARD: Quant = Quant {
     name: "标准",
     gguf_name: "HY-MT1.5-1.8B-Q4_K_M.gguf",
     bytes: 1_133_080_512,
+    sha256: "4383ac0c3c8e476de98ff979c2a3f069f8c4fb385e7860cf2d28da896cc477c7",
     urls: &[
         "https://modelscope.cn/models/Tencent-Hunyuan/HY-MT1.5-1.8B-GGUF/resolve/master/HY-MT1.5-1.8B-Q4_K_M.gguf",
         "https://huggingface.co/tencent/HY-MT1.5-1.8B-GGUF/resolve/main/HY-MT1.5-1.8B-Q4_K_M.gguf",
@@ -282,7 +313,7 @@ pub async fn install_into(
                 10,
                 &format!("正在下载翻译模型（约 {} MB）…", quant.download_mb),
             );
-            let result = crate::local_engine::download(&client, url, &partial, |done, total| {
+            let result = crate::local_engine::download(&client, url, &partial, quant.sha256, |done, total| {
                 let percent = if total > 0 { done * 100 / total } else { 0 };
                 report(
                     "model",
@@ -341,10 +372,10 @@ pub async fn install_into(
         let archive_name = llama_asset()?.to_string();
         let archive = layout.root.join(&archive_name);
         let mut last_error = None;
-        for url in llama_urls()? {
+        for (url, sha256) in llama_urls()? {
             report("runtime", 85, "正在下载推理器（llama.cpp）…");
             let result =
-                crate::local_engine::download(&client, &url, &archive, |_, _| {}).await;
+                crate::local_engine::download(&client, &url, &archive, sha256, |_, _| {}).await;
             match result {
                 Ok(()) => {
                     last_error = None;
@@ -758,13 +789,19 @@ mod tests {
     /// 档位还要覆盖「两个档都配置了源与字节数」与「缺省档最小（用户最省钱）」。
     #[test]
     fn download_urls_contain_asset_and_gguf_name() {
-        for url in llama_urls().unwrap() {
+        for (url, sha256) in llama_urls().unwrap() {
             assert!(url.contains(LLAMA_TAG));
             assert!(url.contains(llama_asset().unwrap()));
+            assert_eq!(sha256.len(), 64, "{sha256}");
         }
         // 代理源的格式是「代理域名 + 完整原始 URL」，少拼 scheme 就是 404
-        let proxied = &llama_urls().unwrap()[0];
-        assert!(proxied.starts_with("https://gh-proxy.com/https://github.com/"), "{proxied}");
+        let (proxied, proxied_sha) = &llama_urls().unwrap()[0];
+        assert!(
+            proxied.starts_with("https://gh-proxy.com/https://github.com/"),
+            "{proxied}"
+        );
+        // 三条源必须带同一个上游摘要，否则换源就绕过了校验
+        assert_eq!(proxied_sha, llama_asset_sha256(llama_asset().unwrap()));
 
         for quant in QUANTS {
             assert!(!quant.urls.is_empty(), "{} 没有下载源", quant.id);
@@ -772,6 +809,7 @@ mod tests {
                 assert!(url.ends_with(quant.gguf_name), "{url}");
                 assert!(url.starts_with("https://"), "{url}");
             }
+            assert_eq!(quant.sha256.len(), 64, "{} 摘要形状不对", quant.id);
             assert!(quant.bytes > 500 * 1024 * 1024, "{} 字节数不合常理", quant.id);
         }
         assert_eq!(DEFAULT_QUANT.id, "light", "缺省档应是省内存的轻量档");

@@ -181,7 +181,8 @@ fn select_image_files(app: tauri::AppHandle) -> Result<Vec<String>, String> {
         .pick_files()
         .ok_or("用户取消选择")?;
     {
-        let mut allowed = app.state::<AppState>().allowed_image_paths.lock().unwrap();
+        let state = app.state::<AppState>();
+        let mut allowed = state.allowed_image_paths.lock().unwrap();
         for p in &paths {
             if let Ok(canon) = p.canonicalize() {
                 allowed.insert(canon);
@@ -203,7 +204,8 @@ fn ensure_image_readable(app: &tauri::AppHandle, image_path: &str) -> Result<(),
             return Ok(());
         }
     }
-    let allowed = app.state::<AppState>().allowed_image_paths.lock().unwrap();
+    let state = app.state::<AppState>();
+    let allowed = state.allowed_image_paths.lock().unwrap();
     if allowed.contains(&canon) {
         return Ok(());
     }
@@ -218,7 +220,8 @@ fn save_temp_files(app: tauri::AppHandle, file_names: Vec<String>, file_data: Ve
     let temp_dir = snipaste::managed_temp_dir();
     std::fs::create_dir_all(&temp_dir).map_err(|e| e.to_string())?;
     let stamp = Local::now().format("%Y%m%d_%H%M%S%3f");
-    let mut allowed = app.state::<AppState>().allowed_image_paths.lock().unwrap();
+    let state = app.state::<AppState>();
+    let mut allowed = state.allowed_image_paths.lock().unwrap();
     let mut paths = Vec::new();
     for (i, (name, data)) in file_names.iter().zip(file_data.iter()).enumerate() {
         let ext = std::path::Path::new(name)
