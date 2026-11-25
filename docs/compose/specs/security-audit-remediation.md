@@ -1,16 +1,28 @@
 ---
 feature: security-audit-remediation
-status: designed
+status: delivered
 updated: 2026-11-25
 branch: feat/security-remediation
-commits: 2a281d6..(delivery 时回填)
+commits: 2a281d6..e5ba8a4 (以 git log master..HEAD 实际为准)
 ---
 
 # 安全审计修复（run-1 全部 10 条 + 加固包）
 
 ## Report
 
-（交付时回填）
+**What was built** — 审计 run-1 的 10 条 needs_validation 全部修复，外加选定的全部加固项：
+
+- **下载-执行链完整性**（应用内 + CI）：`download()` 落盘即验 sha256；Python embeddable（python.org+huaweicloud 双通道比对）、python-build-standalone 四目标（上游 .sha256 边车+tarball 实测）、llama.cpp 六资产（GitHub API digest）、GGUF 两档（ModelScope 元数据+本地文件实测）全部 pin；bootstrap wheel 按 PEP 691 自带摘要校验；release.yml 四个资产 `sha256sum -c` fail-closed，且与 Rust 侧常量逐字节一致（脚本核对）。
+- **loopback 推理通道**：每次启动 128-bit 随机 token，spawn 带 `--api-key`，复用前经 /v1/models 鉴权探测；无凭据占口者不复用并给可操作错误。
+- **IPC ACL**：build.rs 启用 AppManifest（生成 `__app-acl__`）；48+3 个命令按 main/overlay/pin 三份能力清单授权；overlay/pin 不再有任何破坏性 core:window 授权，也不再持有 create-webview-window 与 global-shortcut；新增 `snipaste_pin_resize/pin_close/pin_start_drag` 自目标命令（注入调用者窗口）；贴图管理命令加调用方 label 规则。
+- **OCR 读绑定 + 任意写封堵**：六个 OCR 命令入口校验"受管临时目录 ∪ 用户选择/拖放过的文件"；`save_temp_files` 服务端命名（扩展名白名单）；`snipaste_save_screenshot` 删除 path 参数。
+- **更新检查**：tag_name 严格 semver 校验，发布页 URL 本地拼接，不消费镜像返回的 html_url（gh-proxy 回退保留，保国内可达）。
+- **临时产物收拢**：截图/裁剪/贴图/长截图/日志全部进 `%TEMP%\moment_ocr`，`clear_temp_cache` 名实相符。
+- **加固包**：CI 七个 action 全部 pin commit SHA（GitHub API 解析）；installer.nsh 改为按安装路径杀进程（PowerShell，不再误杀全机同名进程）；CSP 从 null 改为最小策略；release 关闭 devtools、关闭 withGlobalTauri（前端零引用）；.gitignore 补 .env；调试文件移出索引；删除本地陈旧 tauri.local-inference.conf.json。
+
+**Verification** — `npx tsc --noEmit` 通过；`npm run build`（tsc+vite）通过；`cargo test --lib` 20 通过/0 失败/3 忽略（联网用例沿用 ignore）；`cargo check --lib` 通过（tauri-build 校验能力+权限清单，gen/schemas/acl-manifests.json 含 `__app-acl__` 与三组权限）；能力覆盖脚本核对：main 29/overlay 17/pin 6 个实际 invoke 全部落在各自能力清单内，清单中无未注册命令，overlay/pin 无破坏性 core:window 授权；release.yml 与 Rust 侧四组摘要逐字节一致。独立评审 subagent 逐条核验 12 项验收全 PASS 后提出 2 项必需修复（build.rs 硬编码绝对路径、调试文件未出库），均已修复并复验。
+
+**Journey log** — 调试 build.rs 时三个坑：① 应用权限 toml 的正确格式是 `[[permission]]` 数组表 + `commands.allow`（顶层 `identifier`+`commands` 会被 serde 静默忽略，报"Permission not found"而非格式错误）；② 裸 `tauri_build::build()` 默认就会解析 `permissions/**/*`，无需设置 pattern（最初"glob 找不到"的真因是 toml 格式错，不是 glob）；③ `git rm --cached` 后再 `git add -A` 会把文件重新加回索引——出库文件要同时进 .gitignore。遗留：交互式 GUI 冒烟（截图→OCR→翻译→贴图）未在无头环境执行，以静态 invoke/能力映射核对替代，建议合并前人工跑一轮 dev。
 
 ## [S1] Problem
 
