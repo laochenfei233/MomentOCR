@@ -464,6 +464,18 @@ struct ServerHandle {
 /// 常驻服务句柄。Mutex::new 是 const 的，可以直接放 static。
 static SERVER: Mutex<Option<ServerHandle>> = Mutex::new(None);
 
+/// 每次进程启动随机生成的推理通道 token：spawn 时经 --api-key 交给 llama-server，
+/// 请求侧带上同值。/health 谁都能答 2xx，/v1/* 带 token 才算自己的 server
+/// （审计 run-1 指纹 loopback-llama-server-no-peer-auth）。
+static SERVER_TOKEN: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+fn server_token() -> &'static str {
+    SERVER_TOKEN.get_or_init(|| {
+        let buf: [u8; 16] = rand::random();
+        buf.iter().map(|b| format!("{b:02x}")).collect()
+    })
+}
+
 /// 本机直连，绝不走用户配置的系统代理（不然 localhost 请求会被代理吞掉）
 fn localhost_client() -> reqwest::Client {
     reqwest::Client::builder()
@@ -484,6 +496,19 @@ async fn healthy(client: &reqwest::Client) -> bool {
     )
 }
 
+/// 所有权探测：端口上有应答者不算数，/v1/models 认 token 才是我们的 server。
+async fn owned(client: &reqwest::Client) -> bool {
+    matches!(
+        client
+            .get(format!("http://127.0.0.1:{PORT}/v1/models"))
+            .timeout(std::time::Duration::from_millis(500))
+            .bearer_auth(server_token())
+            .send()
+            .await,
+        Ok(resp) if resp.status().is_success()
+    )
+}
+
 /// 确保服务在跑：探活，没起就 spawn 并轮询到就绪（模型加载可能要几十秒）。
 /// 推理器优先用应用数据里已下载的，其次用安装包内置的。返回请求用的客户端。
 async fn ensure_server(
@@ -493,7 +518,11 @@ async fn ensure_server(
 ) -> Result<reqwest::Client> {
     let client = localhost_client();
     if healthy(&client).await {
-        return Ok(client);
+        // 端口上有应答者还不够：不认我们 token 的一律不复用（可能是残留 server，
+        // 也可能是别的进程占了端口），宁可自己 spawn 失败也不把 OCR 文本发给它
+        if owned(&client).await {
+            return Ok(client);
+        }
     }
 
     let server = find_server(&layout.runtime())
@@ -511,7 +540,7 @@ async fn ensure_server(
             let guard = SERVER.lock().unwrap();
             guard.is_some()
         };
-        if already && healthy(&client).await {
+        if already && healthy(&client).await && owned(&client).await {
             return Ok(client);
         }
         let mut command = std::process::Command::new(&server);
@@ -524,6 +553,9 @@ async fn ensure_server(
             .arg(PORT.to_string())
             .arg("--ctx-size")
             .arg("4096")
+            // loopback 通道认证：见 SERVER_TOKEN
+            .arg("--api-key")
+            .arg(server_token())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .current_dir(server.parent().unwrap_or(Path::new(".")));
@@ -545,7 +577,12 @@ async fn ensure_server(
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
     loop {
         if healthy(&client).await {
-            return Ok(client);
+            if owned(&client).await {
+                return Ok(client);
+            }
+            // 端口活着但不认我们的 token：被别的进程占了，绝不复用
+            let _ = shutdown();
+            anyhow::bail!("端口 {PORT} 被无凭据的进程占用（可能残留了别的 llama-server），请结束该进程后重试");
         }
         if std::time::Instant::now() > deadline {
             let _ = shutdown();
@@ -591,6 +628,7 @@ async fn do_chat(client: &reqwest::Client, text: &str, target_lang: &str) -> Res
     let response = client
         .post(format!("http://127.0.0.1:{PORT}/v1/chat/completions"))
         .header("Content-Type", "application/json")
+        .bearer_auth(server_token())
         .json(&body)
         .send()
         .await?;
