@@ -801,7 +801,7 @@ mod tests {
             "{proxied}"
         );
         // 三条源必须带同一个上游摘要，否则换源就绕过了校验
-        assert_eq!(proxied_sha, llama_asset_sha256(llama_asset().unwrap()));
+        assert_eq!(*proxied_sha, llama_asset_sha256(llama_asset().unwrap()));
 
         for quant in QUANTS {
             assert!(!quant.urls.is_empty(), "{} 没有下载源", quant.id);
